@@ -1,5 +1,10 @@
 # Windows UI style prototype
 
+Historical A/B/C comparison. The user selected B on November 14, 2026 and
+requested fixed-size, non-maximizable windows with one light appearance.
+The current native Slint state study is [Compact native utility UI](../ui-tool/README.md).
+The old dark previews below are historical alternatives, not current scope.
+
 Throwaway visual directions for [Clarify Windows UI requirements after functional agreement](https://github.com/BuddyLabsCo/pin-glide-windows/issues/3).
 No direction has been approved. This does not resolve the UI ticket.
 

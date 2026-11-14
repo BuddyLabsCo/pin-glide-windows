@@ -1,0 +1,329 @@
+// Throwaway B-direction surfaces. No real connection, clipboard, tray, or keys.
+// Fixed logical content sizes; native Windows chrome is outside these renders.
+import { Button, CheckBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+
+component Brand inherits HorizontalLayout {
+    height: 32px;
+    spacing: 10px;
+    Image { source: @image-url("assets/app-icon.png"); width: 32px; height: 32px; }
+    Text { text: "\u{9e4a}\u{4fe1} / Pin Glide"; font-size: 18px; font-weight: 600; color: #22312f; }
+    Rectangle { horizontal-stretch: 1; }
+}
+
+component Heading inherits Text {
+    font-size: 22px;
+    font-weight: 600;
+    color: #22312f;
+    wrap: word-wrap;
+}
+
+component Note inherits Text {
+    font-size: 13px;
+    color: #65716e;
+    wrap: word-wrap;
+}
+
+component Separator inherits Rectangle {
+    height: 1px;
+    background: #dfe5e3;
+}
+
+component Banner inherits Rectangle {
+    in property <string> message;
+    in property <bool> error: false;
+    height: content.preferred-height;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: root.error ? #e5c6c2 : #dfe5e3;
+    background: root.error ? #fff4f2 : #f1f4f2;
+    content := VerticalLayout {
+        padding: 12px;
+        Note { text: root.message; color: root.error ? #903d34 : #315b4e; }
+    }
+}
+
+component PhoneRow inherits VerticalLayout {
+    in property <string> name;
+    in property <bool> attention: false;
+    spacing: 7px;
+    HorizontalLayout {
+        Text { text: root.name; font-size: 14px; color: #25322e; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: root.attention ? "Needs attention" : "Paired"; font-size: 12px; color: root.attention ? #9a6124 : #42645a; }
+    }
+    Note { text: root.attention ? "Remove the old pairing on this phone, then pair again." : "Paired with this receiver"; font-size: 12px; }
+    Separator {}
+}
+
+export component MainWindow inherits Window {
+    title: "Pin Glide";
+    width: 440px; height: 600px;
+    background: #fafcfb;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    in property <string> status: "Ready";
+    in property <string> reason: "Connected. Ready to receive new messages.";
+    in property <string> notice: "";
+    in property <bool> notice-error: false;
+    in property <string> action: "Pair a phone";
+    in property <bool> attention: false;
+    in property <int> phone-count: 2;
+    in property <bool> startup: true;
+    callback open-pairing();
+    callback open-settings();
+    init => { Palette.color-scheme = ColorScheme.light; }
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        Brand {}
+        Separator {}
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                width: parent.width;
+                padding-right: 4px;
+                spacing: 16px;
+                Heading { text: root.status; }
+                Note { text: root.reason; }
+                if root.notice != "" : Banner { message: root.notice; error: root.notice-error || root.attention; }
+                HorizontalLayout {
+                    Text { text: "Paired phones"; font-weight: 600; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Button { text: root.action; clicked => { root.open-pairing(); } }
+                }
+                if root.phone-count > 0 : PhoneRow { name: "Phone ...7C2A"; attention: root.attention; }
+                if root.phone-count > 1 : PhoneRow { name: "Phone ...B193"; }
+                if root.phone-count == 0 : Note { text: "No paired phones. Pair from the Android app to receive messages."; }
+            }
+        }
+        Separator {}
+        HorizontalLayout {
+            CheckBox { text: "Launch at login"; checked: root.startup; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            Note { text: "Copy shortcut"; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "Unassigned"; font-size: 13px; color: #65716e; }
+        }
+        HorizontalLayout {
+            Note { text: "Popup duration"; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "30 seconds"; font-size: 13px; color: #65716e; }
+        }
+        HorizontalLayout {
+            Note { text: "No SMS history"; font-size: 12px; }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Settings"; clicked => { root.open-settings(); } }
+        }
+    }
+}
+
+export component PairingWindow inherits Window {
+    title: "Pin Glide - Pair a phone";
+    width: 440px; height: 560px;
+    background: #fafcfb;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    in property <string> heading: "Pair your phone";
+    in property <string> detail: "Open Pin Glide on Android, scan this code, and confirm on your phone.";
+    in property <string> progress: "Waiting for your phone";
+    in property <string> notice: "";
+    in property <string> action: "";
+    in property <bool> show-qr: true;
+    in property <bool> error: false;
+    in property <bool> complete: false;
+    in property <string> completion-detail: "Ready to receive new messages. No test result is implied.";
+    callback primary();
+    init => { Palette.color-scheme = ColorScheme.light; }
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        Brand {}
+        Heading { text: root.heading; }
+        Note { text: root.detail; }
+        if root.show-qr : HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            Image { source: @image-url("assets/qr-placeholder.svg"); width: 160px; height: 160px; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if root.show-qr : Note { text: "QR PLACEHOLDER / NOT SCANNABLE"; font-size: 10px; horizontal-alignment: center; }
+        Text { text: root.progress; font-size: 14px; color: root.error ? #903d34 : #21736b; wrap: word-wrap; }
+        if root.notice != "" : Banner { message: root.notice; error: root.error; }
+        if root.action != "" : Button { text: root.action; clicked => { root.primary(); } }
+        Rectangle { vertical-stretch: 1; }
+        Separator {}
+        Note {
+            text: root.complete ? root.completion-detail : "Closing this window leaves pairing in progress. Existing phones keep receiving.";
+            font-size: 12px;
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    title: "Pin Glide - Settings";
+    width: 440px; height: 600px;
+    background: #fafcfb;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    in property <string> notice: "";
+    in property <string> shortcut: "Unassigned";
+    in property <string> shortcut-error: "";
+    in property <string> duration-error: "";
+    in property <bool> startup: true;
+    in property <bool> capturing: false;
+    init => { Palette.color-scheme = ColorScheme.light; }
+    VerticalLayout {
+        padding: 24px; spacing: 15px;
+        Heading { text: "Settings"; }
+        Note { text: "Changes apply after they are saved successfully."; }
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                width: parent.width;
+                padding-right: 4px;
+                spacing: 15px;
+                if root.notice != "" : Banner { message: root.notice; error: true; }
+                Separator {}
+                CheckBox { text: "Launch at login"; checked: root.startup; }
+                Note { text: "Start quietly in the system tray."; font-size: 12px; }
+                Separator {}
+                Text { text: "Copy latest code"; font-weight: 600; }
+                HorizontalLayout {
+                    LineEdit { text: root.capturing ? "Press a key combination..." : root.shortcut; read-only: true; }
+                    Button { text: "Change"; }
+                    Button { text: "Clear"; enabled: root.shortcut != "Unassigned"; }
+                }
+                if root.shortcut-error != "" : Note { text: root.shortcut-error; color: #903d34; }
+                if root.capturing : Note { text: "Enter to apply. Escape to cancel. The old shortcut keeps working until the new one succeeds."; }
+                Separator {}
+                Text { text: "Popup duration"; font-weight: 600; }
+                HorizontalLayout {
+                    LineEdit { text: "30"; input-type: number; }
+                    Note { text: "seconds"; }
+                    Button { text: "Apply"; }
+                }
+                if root.duration-error != "" : Note { text: root.duration-error; color: #903d34; }
+                Note { text: "Only new popups use a changed duration. Closing a popup does not clear the latest code."; font-size: 12px; }
+            }
+        }
+        Separator {}
+        Note { text: "SMS and codes stay in memory. No message history.\nVersion: implementation build metadata"; font-size: 12px; }
+        Button { text: "Back"; }
+    }
+}
+
+export component SmsWindow inherits Window {
+    title: "Pin Glide - New message";
+    no-frame: true;
+    width: 380px; height: 320px;
+    background: #ffffff;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    in property <string> otp: "482913";
+    in property <string> sms: "\u{3010}\u{9e4a}\u{4fe1}\u{3011}\u{8fd9}\u{662f}\u{4e00}\u{6761}\u{6d4b}\u{8bd5}\u{77ed}\u{4fe1}\u{ff0c}\u{9a8c}\u{8bc1}\u{7801} 482913\u{3002}\u{8bf7}\u{52ff}\u{7528}\u{4e8e}\u{771f}\u{5b9e}\u{767b}\u{5f55}\u{3002}";
+    in property <string> error: "";
+    in property <bool> closed: false;
+    callback copy();
+    callback close-popup();
+    init => { Palette.color-scheme = ColorScheme.light; }
+    Rectangle {
+        border-width: 1px; border-color: #dfe5e3;
+        VerticalLayout {
+            padding: 20px; spacing: 12px;
+            HorizontalLayout {
+                Image { source: @image-url("assets/app-icon.png"); width: 22px; height: 22px; }
+                Text { text: "Pin Glide"; font-size: 13px; color: #25322e; }
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: "Close"; clicked => { root.close-popup(); } }
+            }
+            if root.closed : Note { text: "Preview: popup closed. Message body released."; }
+            if !root.closed && root.otp != "" : ScrollView {
+                height: 48px;
+                Text { x: 0; y: 0; text: root.otp; font-size: 32px; font-weight: 600; color: #25322e; }
+            }
+            if !root.closed && root.otp != "" : Button { text: "Copy code"; clicked => { root.copy(); } }
+            if !root.closed && root.otp == "" : Text { text: "New message"; font-size: 20px; color: #25322e; }
+            if !root.closed : ScrollView {
+                vertical-stretch: 1;
+                Text { x: 0; y: 0; width: parent.width; text: root.sms; font-size: 14px; color: #25322e; wrap: word-wrap; }
+            }
+            if !root.closed && root.error != "" : Note { text: root.error; color: #903d34; font-size: 12px; }
+            Separator {}
+            Note { text: root.otp == "" ? "Phone ...7C2A / No verification code" : "Phone ...7C2A / 30-second popup"; font-size: 11px; }
+        }
+    }
+}
+
+export component FeedbackWindow inherits Window {
+    title: "Pin Glide";
+    no-frame: true;
+    width: 340px; height: 144px;
+    background: #ffffff;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    in property <string> heading: "No code available";
+    in property <string> detail: "There is no verification code in memory. Your clipboard has not changed.";
+    init => { Palette.color-scheme = ColorScheme.light; }
+    Rectangle {
+        border-width: 1px; border-color: #dfe5e3;
+        VerticalLayout {
+            padding: 16px; spacing: 10px;
+            HorizontalLayout {
+                Text { text: root.heading; font-weight: 600; color: #25322e; }
+                Rectangle { horizontal-stretch: 1; }
+                Button { text: "Close"; }
+            }
+            Note { text: root.detail; }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}
+
+export component ConfirmationWindow inherits Window {
+    title: "Pin Glide - New registration";
+    width: 440px; height: 280px;
+    background: #fafcfb;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        Heading { text: "Register as a new receiver?"; }
+        Note { text: "The old receiver identity cannot be restored. On every Android phone, remove its old pairing and scan the new code."; }
+        Note { text: "A failed new registration preserves remaining old local data."; }
+        Rectangle { vertical-stretch: 1; }
+        HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: "Cancel"; }
+            Button { text: "New registration"; }
+        }
+    }
+}
+
+// Content sketch only: production tray menus are Win32 menus, not Slint buttons.
+export component TrayContentPreview inherits Window {
+    title: "Native tray menu - content sketch";
+    width: 360px; height: 392px;
+    background: #f7f9f8;
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    in property <bool> ready: true;
+    in property <bool> has-code: true;
+    in property <bool> can-pair: true;
+    in property <bool> can-configure: true;
+    init => { Palette.color-scheme = ColorScheme.light; }
+    VerticalLayout {
+        padding: 20px; spacing: 10px;
+        Brand {}
+        Note { text: root.ready ? "Pin Glide - Ready" : "Pin Glide - Not Ready"; }
+        Note { text: "NATIVE MENU CONTENT PREVIEW"; font-size: 10px; }
+        Separator {}
+        Button { text: "Open Pin Glide"; }
+        Button { text: "Copy latest code"; enabled: root.has-code; }
+        Button { text: "Pair a phone"; enabled: root.can-pair; }
+        Button { text: "Settings"; enabled: root.can-configure; }
+        Separator {}
+        Button { text: "Exit"; }
+        Note { text: "Actual menu appearance follows Windows.\nThe logo stays unchanged; no flashing or badge."; font-size: 11px; }
+    }
+}

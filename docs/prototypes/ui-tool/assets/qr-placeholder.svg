@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+  <rect width="160" height="160" rx="4" fill="white"/>
+  <g fill="#233630">
+    <path fill-rule="evenodd" d="M12 12h40v40H12z M18 18v28h28V18z M24 24h16v16H24z M108 12h40v40h-40z M114 18v28h28V18z M120 24h16v16h-16z M12 108h40v40H12z M18 114v28h28v-28z M24 120h16v16H24z"/>
+    <path d="M66 14h10v20H66z M82 28h10v22H82z M62 44h12v12H62z M12 66h22v10H12z M42 62h14v30H42z M20 86h24v10H20z M64 68h12v12H64z M84 62h10v18H84z M108 64h24v12h-24z M138 64h10v28h-10z M66 92h26v10H66z M104 86h16v10h-16z M128 102h20v10h-20z M66 116h12v30H66z M88 108h10v24H88z M86 140h32v8H86z M112 116h12v12h-12z M136 124h12v24h-12z"/>
+  </g>
+</svg>
