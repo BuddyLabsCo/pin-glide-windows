@@ -1,6 +1,6 @@
 
 *{box-sizing:border-box}
-body{margin:0;background:#eef2f0;color:#26322e;font:14px "Segoe UI",sans-serif}
+body{margin:0;background:#eef2f0;color:#26322e;font:14px "Microsoft YaHei UI","Segoe UI",sans-serif}
 button,input,select{font:inherit}
 button,a{cursor:pointer}
 button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #16796d;outline-offset:2px}

@@ -1,43 +1,43 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pin Glide / Pairing</title>
+<title>鹊信／配对流程</title>
 <link rel="stylesheet" href="assets/preview.css">
 </head>
 <body data-feature="pairing">
 <header>
 <div class="brand">
-<img src="assets/app-icon.png" alt="Pin Glide logo">
+<img src="assets/app-icon.png" alt="鹊信图标">
 <div>
-<h1>Pairing</h1>
-<div class="subtitle">B / Fixed-size / Light only / Native Slint Fluent study</div>
+<h1>配对流程</h1>
+<div class="subtitle">方案 B／固定尺寸／单一浅色外观／原生 Slint Fluent 预览</div>
 </div>
 </div>
 <div class="actions">
-<a class="button" href="index.html">All features</a>
-<a class="button small-action" href="ui-inventory.md">Full UI inventory</a>
+<a class="button" href="index.html">全部功能</a>
+<a class="button small-action" href="ui-inventory.md">完整 UI 场景清单</a>
 <span class="count" id="count">
 </span>
 </div>
 </header>
-<nav class="feature-links" aria-label="Prototype feature pages">
-<a href="index.html">Overview</a>
-<a href="main.html">Main window</a>
-<a href="pairing.html">Pairing</a>
-<a href="settings.html">Settings</a>
-<a href="messages.html">SMS and copying</a>
-<a href="tray.html">System tray</a>
-<a href="lifecycle.html">Lifecycle</a>
-<a href="installation.html">Installation</a>
+<nav class="feature-links" aria-label="UI 原型功能页">
+<a href="index.html">功能总览</a>
+<a href="main.html">主窗口</a>
+<a href="pairing.html">配对流程</a>
+<a href="settings.html">设置</a>
+<a href="messages.html">短信与复制</a>
+<a href="tray.html">系统托盘</a>
+<a href="lifecycle.html">运行与生命周期</a>
+<a href="installation.html">安装与卸载</a>
 </nav>
 <div class="layout">
-<nav aria-label="Feature state catalogue">
-<input id="search" aria-label="Find a state" placeholder="Find a state...">
+<nav aria-label="本功能状态目录">
+<input id="search" aria-label="搜索状态" placeholder="搜索当前功能的状态…">
 <div id="list">
 </div>
-<footer>States on this page belong only to this functional boundary.</footer>
+<footer>本页仅浏览当前功能的状态；不影响其他功能页。</footer>
 </nav>
 <main class="stage">
 <div class="kicker" id="kicker">
@@ -51,26 +51,26 @@
 <p class="annotation" id="annotation">
 </p>
 <div class="controls">
-<button id="previous">Previous state</button>
-<button id="next">Next state</button>
+<button id="previous">上一个状态</button>
+<button id="next">下一个状态</button>
 </div>
 </main>
 <aside>
 <div class="section">
-<h3>This feature</h3>
-<p>QR, enrollment progress, failures and explicit new registration.</p>
+<h3>本页功能</h3>
+<p>二维码、注册进度、配对失败与主动重新注册。</p>
 </div>
 <div class="section">
-<h3>Trigger / visible result</h3>
+<h3>触发条件与可见结果</h3>
 <p id="behavior">
 </p>
 </div>
 <div class="section">
-<h3>Functional boundary</h3>
-<p>Only authoritative progress advances the UI. Closing pairing UI does not cancel the operation. Existing receiver reception is independent of adding a phone.</p>
+<h3>功能边界</h3>
+<p>按实际进度更新界面，关闭窗口不取消配对；添加手机不影响现有接收。</p>
 </div>
-<h3>Technical boundary</h3>
-<p>App screenshots are actual Slint Fluent renders. Native caption buttons are schematic; OS focus, tray and system integration have not been validated.</p>
+<h3>技术边界</h3>
+<p>应用界面来自真实 Slint Fluent 渲染。标题栏按钮仅作示意，焦点、托盘及系统集成尚未验证。</p>
 </aside>
 </div>
 <script src="data/pairing.js">

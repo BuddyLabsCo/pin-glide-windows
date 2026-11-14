@@ -1,10 +1,10 @@
 window.UI_CASES = [
   {
     "key": "sms-otp",
-    "group": "Messages",
-    "title": "SMS with an OTP",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u542b\u9a8c\u8bc1\u7801\u7684\u77ed\u4fe1",
     "component": "SmsWindow",
-    "behavior": "Full unchanged fixed test SMS; Copy uses this popup's exact OTP.",
+    "behavior": "\u5b8c\u6574\u4fdd\u7559\u56fa\u5b9a\u6d4b\u8bd5\u77ed\u4fe1\u539f\u6587\uff1b\u6309\u94ae\u53ea\u590d\u5236\u5f53\u524d\u5f39\u7a97\u7684\u539f\u59cb\u9a8c\u8bc1\u7801\u3002",
     "properties": {},
     "image": "shots/sms-otp.png",
     "size": [
@@ -15,13 +15,13 @@ window.UI_CASES = [
   },
   {
     "key": "sms-no-otp",
-    "group": "Messages",
-    "title": "SMS without an OTP",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u4e0d\u542b\u9a8c\u8bc1\u7801\u7684\u77ed\u4fe1",
     "component": "SmsWindow",
-    "behavior": "Full SMS. Copy action hidden as a proposal; previous latest OTP is not cleared.",
+    "behavior": "\u663e\u793a\u5b8c\u6574\u539f\u6587\uff1b\u63d0\u6848\u662f\u9690\u85cf\u590d\u5236\u6309\u94ae\uff1b\u4fdd\u7559\u4e4b\u524d\u7684\u6700\u65b0\u6709\u6548\u9a8c\u8bc1\u7801\u3002",
     "properties": {
       "otp": "",
-      "sms": "[Pin Glide] Your parcel is ready at the front desk.\nPlease collect it before 20:00."
+      "sms": "\u3010\u9e4a\u4fe1\u3011\u60a8\u7684\u5305\u88f9\u5df2\u9001\u8fbe\u524d\u53f0\u3002\n\u8bf7\u4e8e 20:00 \u524d\u9886\u53d6\u3002"
     },
     "image": "shots/sms-no-otp.png",
     "size": [
@@ -32,12 +32,12 @@ window.UI_CASES = [
   },
   {
     "key": "sms-long",
-    "group": "Messages",
-    "title": "Long original SMS",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u8f83\u957f\u7684\u77ed\u4fe1\u539f\u6587",
     "component": "SmsWindow",
-    "behavior": "Fixed window; wrapped, scrollable body. Copy/Close remain reachable.",
+    "behavior": "\u7a97\u53e3\u5c3a\u5bf8\u56fa\u5b9a\uff0c\u77ed\u4fe1\u6362\u884c\u5e76\u53ef\u6eda\u52a8\uff0c\u590d\u5236\u548c\u5173\u95ed\u6309\u94ae\u59cb\u7ec8\u53ef\u7528\u3002",
     "properties": {
-      "sms": "[Pin Glide] Verification code: 482913.\n\nOriginal message paragraph 1. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 2. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 3. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 4. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 5. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 6. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 7. Keep this text exactly as received; do not shorten or rewrite it.\n\nOriginal message paragraph 8. Keep this text exactly as received; do not shorten or rewrite it."
+      "sms": "\u3010\u9e4a\u4fe1\u3011\u9a8c\u8bc1\u7801 482913\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 1 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 2 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 3 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 4 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 5 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 6 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 7 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002\n\n\u77ed\u4fe1\u539f\u6587\u7b2c 8 \u6bb5\u3002\u8fd9\u91cc\u7528\u4e8e\u5c55\u793a\u8f83\u957f\u77ed\u4fe1\uff0c\u6240\u6709\u5185\u5bb9\u6309\u6536\u5230\u7684\u539f\u6587\u663e\u793a\uff0c\u4e0d\u7701\u7565\u3001\u4e0d\u6539\u5199\u3002"
     },
     "image": "shots/sms-long.png",
     "size": [
@@ -48,13 +48,13 @@ window.UI_CASES = [
   },
   {
     "key": "sms-long-code",
-    "group": "Messages",
-    "title": "Non-numeric / long OTP",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u8f83\u957f\u6216\u975e\u6570\u5b57\u9a8c\u8bc1\u7801",
     "component": "SmsWindow",
-    "behavior": "Code area scrolls horizontally; never normalize or trim the original copy value.",
+    "behavior": "\u9a8c\u8bc1\u7801\u533a\u57df\u53ef\u6a2a\u5411\u6eda\u52a8\uff1b\u590d\u5236\u539f\u59cb\u503c\uff0c\u4e0d\u89c4\u8303\u5316\u6216\u622a\u77ed\u3002",
     "properties": {
       "otp": "ABC-482913-xyz-LONG-ORIGINAL-VALUE",
-      "sms": "Your original code is ABC-482913-xyz-LONG-ORIGINAL-VALUE."
+      "sms": "\u60a8\u7684\u539f\u59cb\u9a8c\u8bc1\u7801\u4e3a ABC-482913-xyz-LONG-ORIGINAL-VALUE\u3002"
     },
     "image": "shots/sms-long-code.png",
     "size": [
@@ -65,12 +65,12 @@ window.UI_CASES = [
   },
   {
     "key": "sms-copy-failed",
-    "group": "Messages",
-    "title": "Popup clipboard failure",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u5f39\u7a97\u590d\u5236\u5931\u8d25",
     "component": "SmsWindow",
-    "behavior": "Keep popup/code/body for retry. No success UI.",
+    "behavior": "\u4fdd\u7559\u5f39\u7a97\u3001\u539f\u6587\u548c\u9a8c\u8bc1\u7801\uff0c\u5141\u8bb8\u91cd\u8bd5\uff0c\u4e0d\u663e\u793a\u6210\u529f\u63d0\u793a\u3002",
     "properties": {
-      "error": "Could not copy. Try again."
+      "error": "\u590d\u5236\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002"
     },
     "image": "shots/sms-copy-failed.png",
     "size": [
@@ -81,10 +81,10 @@ window.UI_CASES = [
   },
   {
     "key": "feedback-no-code",
-    "group": "Messages",
-    "title": "Shortcut / no code",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u5feb\u6377\u590d\u5236\uff0f\u6682\u65e0\u9a8c\u8bc1\u7801",
     "component": "FeedbackWindow",
-    "behavior": "Brief non-activating feedback. Clipboard unchanged. No main-window activation.",
+    "behavior": "\u663e\u793a\u77ed\u6682\u4e14\u4e0d\u62a2\u7126\u70b9\u7684\u63d0\u793a\uff0c\u526a\u8d34\u677f\u4e0d\u53d8\uff0c\u4e0d\u6253\u5f00\u4e3b\u7a97\u53e3\u3002",
     "properties": {},
     "image": "shots/feedback-no-code.png",
     "size": [
@@ -95,13 +95,13 @@ window.UI_CASES = [
   },
   {
     "key": "feedback-copy-failed",
-    "group": "Messages",
-    "title": "Latest-code clipboard failure",
+    "group": "\u77ed\u4fe1\u4e0e\u590d\u5236",
+    "title": "\u6700\u65b0\u9a8c\u8bc1\u7801\u590d\u5236\u5931\u8d25",
     "component": "FeedbackWindow",
-    "behavior": "Retain cache. Retry by invoking latest-code copy again; coalesce repeated feedback.",
+    "behavior": "\u4fdd\u7559\u7f13\u5b58\uff0c\u53ef\u518d\u6b21\u89e6\u53d1\u590d\u5236\uff1b\u8fde\u7eed\u5931\u8d25\u5408\u5e76\u63d0\u793a\uff0c\u4e0d\u5806\u53e0\u62a5\u9519\u3002",
     "properties": {
-      "heading": "Could not copy",
-      "detail": "The clipboard could not be updated. Your code is still in memory. Try the shortcut again."
+      "heading": "\u590d\u5236\u5931\u8d25",
+      "detail": "\u65e0\u6cd5\u5199\u5165\u526a\u8d34\u677f\uff0c\u9a8c\u8bc1\u7801\u4ecd\u7136\u4fdd\u7559\uff0c\u53ef\u518d\u6b21\u6309\u5feb\u6377\u952e\u91cd\u8bd5\u3002"
     },
     "image": "shots/feedback-copy-failed.png",
     "size": [
@@ -112,19 +112,19 @@ window.UI_CASES = [
   },
   {
     "key": "quiet-copy-success",
-    "group": "Quiet outcomes",
-    "title": "Copy succeeded",
+    "group": "\u5b89\u9759\u5904\u7406",
+    "title": "\u590d\u5236\u6210\u529f",
     "component": null,
-    "behavior": "No success prompt. The clicked SMS popup closes; latest-code shortcut copying remains silent.",
+    "behavior": "\u4e0d\u5f39\u6210\u529f\u63d0\u793a\uff1b\u5f53\u524d\u77ed\u4fe1\u5f39\u7a97\u5173\u95ed\uff0c\u5feb\u6377\u952e\u590d\u5236\u4fdd\u6301\u5b89\u9759\u3002",
     "properties": {},
     "feature": "messages"
   },
   {
     "key": "quiet-ack",
-    "group": "Quiet outcomes",
-    "title": "Arrival receipt / ACK",
+    "group": "\u5b89\u9759\u5904\u7406",
+    "title": "\u6536\u5230\u6d88\u606f\uff0f\u5230\u8fbe\u56de\u6267",
     "component": null,
-    "behavior": "No UI. ACK is not successful decryption, popup display or copy.",
+    "behavior": "\u4e0d\u663e\u793a\u754c\u9762\uff1b\u5230\u8fbe\u56de\u6267\u4e0d\u4ee3\u8868\u89e3\u5bc6\u3001\u663e\u793a\u6216\u590d\u5236\u6210\u529f\u3002",
     "properties": {},
     "feature": "messages"
   }

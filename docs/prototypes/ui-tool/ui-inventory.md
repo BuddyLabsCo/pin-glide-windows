@@ -1,8 +1,9 @@
 # Windows UI inventory — compact utility direction
 
-Status: discussion draft. Only the user's B direction, fixed non-maximizable
-windows, reuse of the Android logo, and one light appearance are approved by
-the November 14, 2026 UI checkpoint. The presentation policies below are
+Status: discussion draft. The user's B direction, fixed non-maximizable
+windows, reuse of the Android logo, one light appearance, and Chinese/English
+selection defaulting to system language are approved by the November 14, 2026
+UI checkpoints. The demo is Chinese only. The other presentation policies below are
 proposals for review, not a resolved UI specification.
 
 Authority: [Windows functional resolution](https://github.com/BuddyLabsCo/pin-glide-windows/issues/2#issuecomment-6875824783).
@@ -41,8 +42,18 @@ UI decision: [Clarify Windows UI requirements after functional agreement](https:
 - Content overflow uses ScrollView/ListView and wrapped text, not a growing
   window. Native screenshots omit OS-drawn titlebars; gallery frames show
   the proposed minimize/close-only contract.
-- The preview uses English UI copy, the product name Pin Glide / 鹊信, and
-  unchanged Chinese fixed-test SMS. Final UI language is not decided here.
+- The application supports Chinese and English. Settings offers Follow system
+  (default), Chinese and English. The saved preference represents system/zh/en;
+  do not persist a guessed resolved system language as the user's override.
+- The demo uses Chinese UI copy, state descriptions, tray text and errors.
+  It previews all language choices with Chinese chrome; no English demo
+  screens are required. Keep the original fixed-test SMS unchanged.
+- Language selection applies to app-owned controls, status/error text and
+  native tray strings. Never translate received SMS, OTPs or device identifiers.
+  A failed preference save retains the prior saved language choice.
+  Product runtime OS-locale resolution and switching are not implemented by
+  this snapshot-based demo. Unsupported-system-language fallback remains a
+  detail to specify; Chinese and English system languages have their matching UI.
 
 ## Surface catalogue
 
@@ -249,11 +260,14 @@ work area remains a UI decision.
 | S13 | Startup config/system registration disagree | Show actual integration state and safe repair/retry explanation; no repeated notification loop. |
 | S14 | Native tray registration/re-registration fails | Integration warning in explicitly opened utility UI; no new connection readiness state or automatic window. |
 | S15 | Settings/persistent-data read or version-upgrade failure | Safe error inside the available utility surface; preserve existing files rather than offer a blind reset. Exact compatibility/recovery actions belong to the open architecture decision. |
+| S16 | Default UI language | Follow system selected; resolve Chinese/English from the Windows UI language. The demo remains Chinese. |
+| S17 | Manual Chinese / English choice | Override the system-language preference. Only the preference selection is shown for English in the demo; no English screen set is added. |
+| S18 | Language preference save fails | Inline failure; retain the previously saved selection and existing reception/Pairing state. |
 
 Settings use explicit Change/Clear for shortcuts and Apply for duration.
 Startup changes on checkbox interaction after a confirmed OS/save outcome.
 No app-wide Save/Cancel transaction is introduced. There are no password,
-Account profile, language, theme, endpoint, proxy, automatic OTP expiry,
+Account profile, theme, endpoint, proxy, automatic OTP expiry,
 clipboard-clearing, history or test settings in this proposal.
 
 ## Installation, upgrade, uninstall and OS-owned UI
@@ -306,7 +320,8 @@ access/activation policy for individual SMS windows is still to be agreed.
 ## Confirmed versus remaining decisions
 
 Already decided by the user: B, simple utility, fixed sizes/no maximize or
-fullscreen, no theme/dark, reuse actual Android logo.
+fullscreen, no theme/dark, reuse actual Android logo, Chinese/English choice
+defaulting to system language, and Chinese-only demo screens.
 
 Proposed here: exact dimensions; native tray menu commands and activation;
 no-OTP Copy hidden; status/inline/transient feedback hierarchy; brief-feedback

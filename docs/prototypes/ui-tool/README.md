@@ -2,7 +2,10 @@
 
 This continues the B direction selected by the user on November 14, 2026.
 The user also selected fixed-size, non-maximizable windows and no theme/dark
-appearance in the current scope. The other presentation details remain draft.
+appearance in the current scope. UI supports Chinese and English, defaulting
+to the system language with an explicit override in Settings. The demo itself
+shows Chinese only, including previews of the English preference selection.
+The other presentation details remain draft.
 
 Open [index.html](index.html) directly in a browser. It contains overview and
 navigation only. Each functional boundary has its own independently editable
@@ -12,7 +15,7 @@ HTML page; each page searches and cycles only its own states:
 | --- | --- |
 | [main.html](main.html) | Receiver readiness, phones, credential/key errors |
 | [pairing.html](pairing.html) | QR, enrollment progress/errors, new registration |
-| [settings.html](settings.html) | Startup, shortcut, popup duration, save errors |
+| [settings.html](settings.html) | Language, startup, shortcut, popup duration, save errors |
 | [messages.html](messages.html) | Full SMS, OTP/no-OTP, clipboard and latest-code feedback |
 | [tray.html](tray.html) | System-tray icon/tooltip/menu proposals |
 | [lifecycle.html](lifecycle.html) | Automatic launch, lock, suspend, Exit |
@@ -24,7 +27,7 @@ Slint renders, not a proposed browser-based application.
 
 Read [ui-inventory.md](ui-inventory.md) for the complete trigger/action/error
 inventory, including tray, installer and deliberately invisible outcomes.
-There are 62 catalogue states, of which 51 have native Slint screenshots.
+There are 65 catalogue states, of which 54 have native Slint screenshots.
 The inventory also enumerates subcases not requiring distinct artwork.
 
 ## Native source and regeneration
@@ -79,12 +82,14 @@ must be implemented with Windows APIs, and the OS controls their appearance.
 
 Some screenshots deliberately show progress text rather than a fabricated
 percentage. Quiet states render no invented application dialog. The original
-fixed test SMS remains unchanged; UI chrome is English pending a language
-decision.
+fixed test SMS remains unchanged. Demo UI, state descriptions and errors are
+Chinese. The Settings language choices are Follow system (default), Chinese
+and English; the latter does not introduce English demo screens. Real SMS/OTP
+must never be translated when the application language changes.
 
 Compilation, native render dimensions and browser-catalogue navigation were
-checked across the separate feature pages (263 assertions across all seven
-pages; this is not a product test suite).
+checked across the separate feature pages (413 assertions, including Chinese
+labels and language-choice previews; this is not a product test suite).
 Focus/maximize/tray/clipboard/hotkeys, real pairing/crypto/reception,
 installer behavior, accessibility automation, product E2E, resource measurement
 and acceptance were not validated. The user has excluded the last three

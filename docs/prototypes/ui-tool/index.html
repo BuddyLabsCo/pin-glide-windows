@@ -1,120 +1,120 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pin Glide / UI overview</title>
+<title>鹊信／UI 总览</title>
 <link rel="stylesheet" href="assets/preview.css">
 </head>
 <body class="home">
 <header>
 <div class="brand">
-<img src="assets/app-icon.png" alt="Pin Glide logo">
+<img src="assets/app-icon.png" alt="鹊信图标">
 <div>
-<h1>Pin Glide / B / UI overview</h1>
-<div class="subtitle">B / Fixed-size / Light only / Native Slint Fluent study</div>
+<h1>鹊信／方案 B／UI 总览</h1>
+<div class="subtitle">方案 B／固定尺寸／单一浅色外观／原生 Slint Fluent 预览</div>
 </div>
 </div>
 <div class="actions">
-<a class="button" href="index.html">All features</a>
-<a class="button small-action" href="ui-inventory.md">Full UI inventory</a>
+<a class="button" href="index.html">全部功能</a>
+<a class="button small-action" href="ui-inventory.md">完整 UI 场景清单</a>
 <span class="count" id="count">
 </span>
 </div>
 </header>
-<nav class="feature-links" aria-label="Prototype feature pages">
-<a href="index.html">Overview</a>
-<a href="main.html">Main window</a>
-<a href="pairing.html">Pairing</a>
-<a href="settings.html">Settings</a>
-<a href="messages.html">SMS and copying</a>
-<a href="tray.html">System tray</a>
-<a href="lifecycle.html">Lifecycle</a>
-<a href="installation.html">Installation</a>
+<nav class="feature-links" aria-label="UI 原型功能页">
+<a href="index.html">功能总览</a>
+<a href="main.html">主窗口</a>
+<a href="pairing.html">配对流程</a>
+<a href="settings.html">设置</a>
+<a href="messages.html">短信与复制</a>
+<a href="tray.html">系统托盘</a>
+<a href="lifecycle.html">运行与生命周期</a>
+<a href="installation.html">安装与卸载</a>
 </nav>
 <main class="feature-home">
-<p>Choose a functional boundary. Each page has its own states and discussion notes.</p>
+<p>按功能分别查看，每页有独立的状态与讨论说明。</p>
 <div class="feature-grid">
 <a href="main.html">
-<strong>Main window</strong>
-<span>Receiver readiness, phone rows and local-data errors.</span>
+<strong>主窗口</strong>
+<span>接收状态、已配对手机与本地数据异常。</span>
 </a>
 <a href="pairing.html">
-<strong>Pairing</strong>
-<span>QR, enrollment progress, failures and explicit new registration.</span>
+<strong>配对流程</strong>
+<span>二维码、注册进度、配对失败与主动重新注册。</span>
 </a>
 <a href="settings.html">
-<strong>Settings</strong>
-<span>Startup, shortcut capture and popup-duration changes.</span>
+<strong>设置</strong>
+<span>开机启动、界面语言、快捷键与弹窗时长。</span>
 </a>
 <a href="messages.html">
-<strong>SMS and copying</strong>
-<span>Original message popups and latest-code feedback.</span>
+<strong>短信与复制</strong>
+<span>完整短信弹窗、验证码复制及快捷复制反馈。</span>
 </a>
 <a href="tray.html">
-<strong>System tray</strong>
-<span>Icon, tooltip, menu commands and disabled states.</span>
+<strong>系统托盘</strong>
+<span>托盘图标、悬停提示、右键菜单与禁用状态。</span>
 </a>
 <a href="lifecycle.html">
-<strong>Lifecycle</strong>
-<span>Automatic launch, lock, suspend and explicit Exit.</span>
+<strong>运行与生命周期</strong>
+<span>自动启动、锁定与解锁、休眠与恢复、主动退出。</span>
 </a>
 <a href="installation.html">
-<strong>Installation</strong>
-<span>Install, upgrade, uninstall and Windows trust surfaces.</span>
+<strong>安装与卸载</strong>
+<span>安装、升级、卸载及 Windows 信任与权限提示。</span>
 </a>
 </div>
 </main>
 <section class="overview">
-<div class="kicker">Native Slint / selected direction B</div>
-<h2>One small utility. A few ordinary windows.</h2>
-<p class="meta">Actual Slint Fluent screenshots · no resize/maximize/fullscreen · Android logo reused</p>
+<div class="kicker">原生 Slint／已选方案 B</div>
+<h2>一个简洁的小工具，几个普通的窗口。</h2>
+<p class="meta">真实 Slint Fluent 渲染图 · 固定尺寸、不支持最大化或全屏 · 使用 Android 正式图标</p>
 <div class="overview-grid">
 <div>
-<h3>Main / 440 × 600 content</h3>
-<img src="shots/main-ready.png" alt="Main utility window">
-<p class="annotation">Native caption: minimize and close only.<br>Close hides to tray; explicit Exit ends reception.</p>
-<h3 style="margin-top:25px">Tray icon + tooltip / schematic</h3>
-<div class="tooltip">Pin Glide — Ready</div>
+<h3>主窗口／内容区 440 × 600</h3>
+<img src="shots/main-ready.png" alt="主工具窗口">
+<p class="annotation">原生标题栏仅保留最小化与关闭。<br>关闭窗口仅隐藏到托盘；选择退出才结束接收。</p>
+<h3 style="margin-top:25px">托盘图标与悬停提示／示意</h3>
+<div class="tooltip">鹊信 — 就绪</div>
 <div class="tray-strip">
 <span>⌃</span>
-<img src="assets/app-icon.png" alt="Unchanged logo at tray scale">
-<span>Network</span>
-<span>Volume</span>
+<img src="assets/app-icon.png" alt="托盘尺寸的原始图标">
+<span>网络</span>
+<span>音量</span>
 <span>22:15</span>
 </div>
-<p class="annotation">Same logo in every state; safe status text in the tooltip.<br>Windows controls the actual taskbar and menu appearance.</p>
+<p class="annotation">所有状态使用同一图标，悬停时显示不含敏感内容的状态。<br>实际任务栏与菜单外观由 Windows 决定。</p>
 </div>
 <div>
-<h3>Pairing / 440 × 560 content</h3>
-<img src="shots/pair-waiting.png" alt="Pairing window">
-<p class="annotation">No early Ready claim. Closing only hides the UI.</p>
+<h3>配对窗口／内容区 440 × 560</h3>
+<img src="shots/pair-waiting.png" alt="配对窗口">
+<p class="annotation">实际接收连接成功后才显示就绪；关闭仅隐藏配对界面。</p>
 </div>
 <div class="stack">
 <section>
-<h3>SMS / 380 × 320</h3>
-<img src="shots/sms-otp.png" alt="Independent SMS popup">
+<h3>短信弹窗／380 × 320</h3>
+<img src="shots/sms-otp.png" alt="独立短信弹窗">
 </section>
 <section>
-<h3>Latest-code feedback / 340 × 144</h3>
-<img src="shots/feedback-no-code.png" alt="No code available feedback">
+<h3>快捷复制提示／340 × 144</h3>
+<img src="shots/feedback-no-code.png" alt="暂无验证码提示">
 </section>
 <section>
-<h3>Tray menu / OS-owned</h3>
+<h3>托盘右键菜单／由系统绘制</h3>
 <div class="tray-content">
-<div class="disabled">Pin Glide — Ready</div>
+<div class="disabled">鹊信 — 就绪</div>
 <hr>
-<div>Open Pin Glide</div>
-<div>Copy latest code</div>
-<div>Pair a phone</div>
-<div>Settings</div>
+<div>打开鹊信</div>
+<div>复制最新验证码</div>
+<div>配对手机</div>
+<div>设置</div>
 <hr>
-<div>Exit</div>
+<div>退出</div>
 </div>
 </section>
 </div>
 </div>
-<p class="overview-note">Preview, not product implementation. The complete catalogue includes settings, pairing milestones, expiry, reconnect, key loss, revocation, clipboard failures, quiet outcomes and OS-owned UI.</p>
+<p class="overview-note">本页为 UI 讨论预览，尚未接入产品逻辑。完整目录覆盖设置、配对进度、二维码过期、重连、密钥丢失、撤销、复制失败、不弹窗的情况以及系统界面。</p>
 </section>
 </body>
 </html>

@@ -1,12 +1,12 @@
 // Throwaway B-direction surfaces. No real connection, clipboard, tray, or keys.
 // Fixed logical content sizes; native Windows chrome is outside these renders.
-import { Button, CheckBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
 
 component Brand inherits HorizontalLayout {
     height: 32px;
     spacing: 10px;
     Image { source: @image-url("assets/app-icon.png"); width: 32px; height: 32px; }
-    Text { text: "\u{9e4a}\u{4fe1} / Pin Glide"; font-size: 18px; font-weight: 600; color: #22312f; }
+    Text { text: "鹊信"; font-size: 18px; font-weight: 600; color: #22312f; }
     Rectangle { horizontal-stretch: 1; }
 }
 
@@ -49,23 +49,23 @@ component PhoneRow inherits VerticalLayout {
     HorizontalLayout {
         Text { text: root.name; font-size: 14px; color: #25322e; }
         Rectangle { horizontal-stretch: 1; }
-        Text { text: root.attention ? "Needs attention" : "Paired"; font-size: 12px; color: root.attention ? #9a6124 : #42645a; }
+        Text { text: root.attention ? "需要处理" : "已配对"; font-size: 12px; color: root.attention ? #9a6124 : #42645a; }
     }
-    Note { text: root.attention ? "Remove the old pairing on this phone, then pair again." : "Paired with this receiver"; font-size: 12px; }
+    Note { text: root.attention ? "请先在此手机移除旧配对，再重新配对。" : "已与此接收端配对"; font-size: 12px; }
     Separator {}
 }
 
 export component MainWindow inherits Window {
-    title: "Pin Glide";
+    title: "鹊信";
     width: 440px; height: 600px;
     background: #fafcfb;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
-    in property <string> status: "Ready";
-    in property <string> reason: "Connected. Ready to receive new messages.";
+    in property <string> status: "就绪";
+    in property <string> reason: "连接正常，可以接收新短信。";
     in property <string> notice: "";
     in property <bool> notice-error: false;
-    in property <string> action: "Pair a phone";
+    in property <string> action: "配对手机";
     in property <bool> attention: false;
     in property <int> phone-count: 2;
     in property <bool> startup: true;
@@ -87,53 +87,53 @@ export component MainWindow inherits Window {
                 Note { text: root.reason; }
                 if root.notice != "" : Banner { message: root.notice; error: root.notice-error || root.attention; }
                 HorizontalLayout {
-                    Text { text: "Paired phones"; font-weight: 600; }
+                    Text { text: "已配对手机"; font-weight: 600; }
                     Rectangle { horizontal-stretch: 1; }
                     Button { text: root.action; clicked => { root.open-pairing(); } }
                 }
-                if root.phone-count > 0 : PhoneRow { name: "Phone ...7C2A"; attention: root.attention; }
-                if root.phone-count > 1 : PhoneRow { name: "Phone ...B193"; }
-                if root.phone-count == 0 : Note { text: "No paired phones. Pair from the Android app to receive messages."; }
+                if root.phone-count > 0 : PhoneRow { name: "手机 · 7C2A"; attention: root.attention; }
+                if root.phone-count > 1 : PhoneRow { name: "手机 · B193"; }
+                if root.phone-count == 0 : Note { text: "还没有已配对的手机，请使用 Android 应用扫码配对。"; }
             }
         }
         Separator {}
         HorizontalLayout {
-            CheckBox { text: "Launch at login"; checked: root.startup; }
+            CheckBox { text: "开机启动"; checked: root.startup; }
             Rectangle { horizontal-stretch: 1; }
         }
         HorizontalLayout {
-            Note { text: "Copy shortcut"; }
+            Note { text: "复制快捷键"; }
             Rectangle { horizontal-stretch: 1; }
-            Text { text: "Unassigned"; font-size: 13px; color: #65716e; }
+            Text { text: "未设置"; font-size: 13px; color: #65716e; }
         }
         HorizontalLayout {
-            Note { text: "Popup duration"; }
+            Note { text: "弹窗显示时长"; }
             Rectangle { horizontal-stretch: 1; }
-            Text { text: "30 seconds"; font-size: 13px; color: #65716e; }
+            Text { text: "30 秒"; font-size: 13px; color: #65716e; }
         }
         HorizontalLayout {
-            Note { text: "No SMS history"; font-size: 12px; }
+            Note { text: "不保留短信历史"; font-size: 12px; }
             Rectangle { horizontal-stretch: 1; }
-            Button { text: "Settings"; clicked => { root.open-settings(); } }
+            Button { text: "设置"; clicked => { root.open-settings(); } }
         }
     }
 }
 
 export component PairingWindow inherits Window {
-    title: "Pin Glide - Pair a phone";
+    title: "鹊信 · 配对手机";
     width: 440px; height: 560px;
     background: #fafcfb;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
-    in property <string> heading: "Pair your phone";
-    in property <string> detail: "Open Pin Glide on Android, scan this code, and confirm on your phone.";
-    in property <string> progress: "Waiting for your phone";
+    in property <string> heading: "配对手机";
+    in property <string> detail: "打开 Android 手机上的鹊信，扫描二维码并在手机上确认。";
+    in property <string> progress: "等待手机扫码";
     in property <string> notice: "";
     in property <string> action: "";
     in property <bool> show-qr: true;
     in property <bool> error: false;
     in property <bool> complete: false;
-    in property <string> completion-detail: "Ready to receive new messages. No test result is implied.";
+    in property <string> completion-detail: "已可接收新短信，测试短信结果请以实际显示为准。";
     callback primary();
     init => { Palette.color-scheme = ColorScheme.light; }
     VerticalLayout {
@@ -146,36 +146,37 @@ export component PairingWindow inherits Window {
             Image { source: @image-url("assets/qr-placeholder.svg"); width: 160px; height: 160px; }
             Rectangle { horizontal-stretch: 1; }
         }
-        if root.show-qr : Note { text: "QR PLACEHOLDER / NOT SCANNABLE"; font-size: 10px; horizontal-alignment: center; }
+        if root.show-qr : Note { text: "演示二维码 · 不可扫描"; font-size: 10px; horizontal-alignment: center; }
         Text { text: root.progress; font-size: 14px; color: root.error ? #903d34 : #21736b; wrap: word-wrap; }
         if root.notice != "" : Banner { message: root.notice; error: root.error; }
         if root.action != "" : Button { text: root.action; clicked => { root.primary(); } }
         Rectangle { vertical-stretch: 1; }
         Separator {}
         Note {
-            text: root.complete ? root.completion-detail : "Closing this window leaves pairing in progress. Existing phones keep receiving.";
+            text: root.complete ? root.completion-detail : "关闭窗口不会取消配对，已有手机仍可继续接收。";
             font-size: 12px;
         }
     }
 }
 
 export component SettingsWindow inherits Window {
-    title: "Pin Glide - Settings";
+    title: "鹊信 · 设置";
     width: 440px; height: 600px;
     background: #fafcfb;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
     in property <string> notice: "";
-    in property <string> shortcut: "Unassigned";
+    in property <string> shortcut: "未设置";
     in property <string> shortcut-error: "";
     in property <string> duration-error: "";
     in property <bool> startup: true;
     in property <bool> capturing: false;
+    in property <int> language-index: 0;
     init => { Palette.color-scheme = ColorScheme.light; }
     VerticalLayout {
         padding: 24px; spacing: 15px;
-        Heading { text: "Settings"; }
-        Note { text: "Changes apply after they are saved successfully."; }
+        Heading { text: "设置"; }
+        Note { text: "更改保存成功后生效。"; }
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
@@ -183,41 +184,47 @@ export component SettingsWindow inherits Window {
                 padding-right: 4px;
                 spacing: 15px;
                 if root.notice != "" : Banner { message: root.notice; error: true; }
+                Text { text: "界面语言"; font-weight: 600; }
+                ComboBox {
+                    model: ["跟随系统", "中文", "English"];
+                    current-index: root.language-index;
+                }
+                Note { text: "默认跟随系统语言，也可手动选择中文或英文。"; font-size: 12px; }
                 Separator {}
-                CheckBox { text: "Launch at login"; checked: root.startup; }
-                Note { text: "Start quietly in the system tray."; font-size: 12px; }
+                CheckBox { text: "开机启动"; checked: root.startup; }
+                Note { text: "启动后仅驻留系统托盘。"; font-size: 12px; }
                 Separator {}
-                Text { text: "Copy latest code"; font-weight: 600; }
+                Text { text: "复制最新验证码"; font-weight: 600; }
                 HorizontalLayout {
-                    LineEdit { text: root.capturing ? "Press a key combination..." : root.shortcut; read-only: true; }
-                    Button { text: "Change"; }
-                    Button { text: "Clear"; enabled: root.shortcut != "Unassigned"; }
+                    LineEdit { text: root.capturing ? "请按下快捷键组合…" : root.shortcut; read-only: true; }
+                    Button { text: "修改"; }
+                    Button { text: "清除"; enabled: root.shortcut != "未设置"; }
                 }
                 if root.shortcut-error != "" : Note { text: root.shortcut-error; color: #903d34; }
-                if root.capturing : Note { text: "Enter to apply. Escape to cancel. The old shortcut keeps working until the new one succeeds."; }
+                if root.capturing : Note { text: "按 Enter 应用，Esc 取消；新快捷键注册成功前保留旧设置。"; }
                 Separator {}
-                Text { text: "Popup duration"; font-weight: 600; }
+                Text { text: "弹窗显示时长"; font-weight: 600; }
                 HorizontalLayout {
                     LineEdit { text: "30"; input-type: number; }
-                    Note { text: "seconds"; }
-                    Button { text: "Apply"; }
+                    Note { text: "秒"; vertical-stretch: 1; vertical-alignment: center; }
+                    Button { text: "应用"; }
                 }
                 if root.duration-error != "" : Note { text: root.duration-error; color: #903d34; }
-                Note { text: "Only new popups use a changed duration. Closing a popup does not clear the latest code."; font-size: 12px; }
+                Note { text: "新时长仅影响之后的弹窗，关闭弹窗不会清除最新验证码。"; font-size: 12px; }
             }
         }
         Separator {}
-        Note { text: "SMS and codes stay in memory. No message history.\nVersion: implementation build metadata"; font-size: 12px; }
-        Button { text: "Back"; }
+        Note { text: "短信和验证码仅保存在内存中，不保留历史。\n版本：由正式构建提供"; font-size: 12px; }
+        Button { text: "返回"; }
     }
 }
 
 export component SmsWindow inherits Window {
-    title: "Pin Glide - New message";
+    title: "鹊信 · 新短信";
     no-frame: true;
     width: 380px; height: 320px;
     background: #ffffff;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
     in property <string> otp: "482913";
     in property <string> sms: "\u{3010}\u{9e4a}\u{4fe1}\u{3011}\u{8fd9}\u{662f}\u{4e00}\u{6761}\u{6d4b}\u{8bd5}\u{77ed}\u{4fe1}\u{ff0c}\u{9a8c}\u{8bc1}\u{7801} 482913\u{3002}\u{8bf7}\u{52ff}\u{7528}\u{4e8e}\u{771f}\u{5b9e}\u{767b}\u{5f55}\u{3002}";
@@ -232,37 +239,37 @@ export component SmsWindow inherits Window {
             padding: 20px; spacing: 12px;
             HorizontalLayout {
                 Image { source: @image-url("assets/app-icon.png"); width: 22px; height: 22px; }
-                Text { text: "Pin Glide"; font-size: 13px; color: #25322e; }
+                Text { text: "鹊信"; font-size: 13px; color: #25322e; }
                 Rectangle { horizontal-stretch: 1; }
-                Button { text: "Close"; clicked => { root.close-popup(); } }
+                Button { text: "关闭"; clicked => { root.close-popup(); } }
             }
-            if root.closed : Note { text: "Preview: popup closed. Message body released."; }
+            if root.closed : Note { text: "演示：弹窗已关闭，短信原文已释放。"; }
             if !root.closed && root.otp != "" : ScrollView {
                 height: 48px;
                 Text { x: 0; y: 0; text: root.otp; font-size: 32px; font-weight: 600; color: #25322e; }
             }
-            if !root.closed && root.otp != "" : Button { text: "Copy code"; clicked => { root.copy(); } }
-            if !root.closed && root.otp == "" : Text { text: "New message"; font-size: 20px; color: #25322e; }
+            if !root.closed && root.otp != "" : Button { text: "复制验证码"; clicked => { root.copy(); } }
+            if !root.closed && root.otp == "" : Text { text: "新短信"; font-size: 20px; color: #25322e; }
             if !root.closed : ScrollView {
                 vertical-stretch: 1;
                 Text { x: 0; y: 0; width: parent.width; text: root.sms; font-size: 14px; color: #25322e; wrap: word-wrap; }
             }
             if !root.closed && root.error != "" : Note { text: root.error; color: #903d34; font-size: 12px; }
             Separator {}
-            Note { text: root.otp == "" ? "Phone ...7C2A / No verification code" : "Phone ...7C2A / 30-second popup"; font-size: 11px; }
+            Note { text: root.otp == "" ? "手机 · 7C2A／此短信无验证码" : "手机 · 7C2A／默认显示 30 秒"; font-size: 11px; }
         }
     }
 }
 
 export component FeedbackWindow inherits Window {
-    title: "Pin Glide";
+    title: "鹊信";
     no-frame: true;
     width: 340px; height: 144px;
     background: #ffffff;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
-    in property <string> heading: "No code available";
-    in property <string> detail: "There is no verification code in memory. Your clipboard has not changed.";
+    in property <string> heading: "暂无可用验证码";
+    in property <string> detail: "当前没有可用验证码，剪贴板内容未改变。";
     init => { Palette.color-scheme = ColorScheme.light; }
     Rectangle {
         border-width: 1px; border-color: #dfe5e3;
@@ -271,7 +278,7 @@ export component FeedbackWindow inherits Window {
             HorizontalLayout {
                 Text { text: root.heading; font-weight: 600; color: #25322e; }
                 Rectangle { horizontal-stretch: 1; }
-                Button { text: "Close"; }
+                Button { text: "关闭"; }
             }
             Note { text: root.detail; }
             Rectangle { vertical-stretch: 1; }
@@ -280,32 +287,32 @@ export component FeedbackWindow inherits Window {
 }
 
 export component ConfirmationWindow inherits Window {
-    title: "Pin Glide - New registration";
+    title: "鹊信 · 重新注册";
     width: 440px; height: 280px;
     background: #fafcfb;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
     init => { Palette.color-scheme = ColorScheme.light; }
     VerticalLayout {
         padding: 24px; spacing: 16px;
-        Heading { text: "Register as a new receiver?"; }
-        Note { text: "The old receiver identity cannot be restored. On every Android phone, remove its old pairing and scan the new code."; }
-        Note { text: "A failed new registration preserves remaining old local data."; }
+        Heading { text: "重新注册为新的接收端？"; }
+        Note { text: "无法恢复旧接收端身份。请在每台 Android 手机上移除旧配对，再扫描新二维码。"; }
+        Note { text: "重新注册失败时，会保留原有本地数据。"; }
         Rectangle { vertical-stretch: 1; }
         HorizontalLayout {
             Rectangle { horizontal-stretch: 1; }
-            Button { text: "Cancel"; }
-            Button { text: "New registration"; }
+            Button { text: "取消"; }
+            Button { text: "重新注册"; }
         }
     }
 }
 
 // Content sketch only: production tray menus are Win32 menus, not Slint buttons.
 export component TrayContentPreview inherits Window {
-    title: "Native tray menu - content sketch";
+    title: "托盘菜单 · 内容示意";
     width: 360px; height: 392px;
     background: #f7f9f8;
-    default-font-family: "Segoe UI";
+    default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
     in property <bool> ready: true;
     in property <bool> has-code: true;
@@ -315,15 +322,15 @@ export component TrayContentPreview inherits Window {
     VerticalLayout {
         padding: 20px; spacing: 10px;
         Brand {}
-        Note { text: root.ready ? "Pin Glide - Ready" : "Pin Glide - Not Ready"; }
-        Note { text: "NATIVE MENU CONTENT PREVIEW"; font-size: 10px; }
+        Note { text: root.ready ? "鹊信 · 就绪" : "鹊信 · 未就绪"; }
+        Note { text: "系统托盘菜单 · 内容示意"; font-size: 10px; }
         Separator {}
-        Button { text: "Open Pin Glide"; }
-        Button { text: "Copy latest code"; enabled: root.has-code; }
-        Button { text: "Pair a phone"; enabled: root.can-pair; }
-        Button { text: "Settings"; enabled: root.can-configure; }
+        Button { text: "打开鹊信"; }
+        Button { text: "复制最新验证码"; enabled: root.has-code; }
+        Button { text: "配对手机"; enabled: root.can-pair; }
+        Button { text: "设置"; enabled: root.can-configure; }
         Separator {}
-        Button { text: "Exit"; }
-        Note { text: "Actual menu appearance follows Windows.\nThe logo stays unchanged; no flashing or badge."; font-size: 11px; }
+        Button { text: "退出"; }
+        Note { text: "实际菜单外观由 Windows 决定。\n图标保持原样，不闪烁、不加角标。"; font-size: 11px; }
     }
 }

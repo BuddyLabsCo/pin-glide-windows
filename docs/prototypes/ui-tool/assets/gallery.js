@@ -5,7 +5,12 @@ const query = new URLSearchParams(location.search);
 let current = cases.some(item => item.key === query.get("state"))
   ? query.get("state") : cases[0].key;
 
-document.querySelector("#count").textContent = `${cases.length} states`;
+document.querySelector("#count").textContent = `${cases.length} 个状态`;
+const surfaceNames = {
+  MainWindow: "主窗口", PairingWindow: "配对窗口", SettingsWindow: "设置",
+  SmsWindow: "短信弹窗", FeedbackWindow: "快捷复制提示",
+  ConfirmationWindow: "重新注册确认", TrayContentPreview: "托盘菜单内容示意"
+};
 document.querySelectorAll(".feature-links a").forEach(link => {
   if (link.getAttribute("href") === `${feature}.html`) {
     link.setAttribute("aria-current", "page");
@@ -47,8 +52,8 @@ function show(key) {
   document.querySelector("#title").textContent = item.title;
   document.querySelector("#behavior").textContent = item.behavior;
   document.querySelector("#meta").textContent = item.image
-    ? `${item.component} / ${item.size[0]} x ${item.size[1]} logical content px / Slint Fluent`
-    : "No app-designed surface is shown for this outcome";
+    ? `${surfaceNames[item.component]}／内容区 ${item.size[0]} × ${item.size[1]} 逻辑像素／Slint Fluent`
+    : "此情况不显示应用界面，或由系统呈现";
 
   const target = document.querySelector("#render");
   target.replaceChildren();
@@ -59,7 +64,7 @@ function show(key) {
       const caption = document.createElement("div");
       caption.className = "caption";
       const title = document.createElement("span");
-      title.textContent = "Pin Glide";
+      title.textContent = "鹊信";
       const commands = document.createElement("span");
       commands.textContent = item.component === "MainWindow" ? "− ×" : "×";
       caption.append(title, commands);
@@ -75,8 +80,8 @@ function show(key) {
     const box = document.createElement("div");
     box.className = "no-surface";
     const title = document.createElement("strong");
-    title.textContent = item.group === "OS / installer"
-      ? "Windows / NSIS owns this UI" : "No application popup";
+    title.textContent = item.group === "安装与系统"
+      ? "由 Windows 或 NSIS 呈现" : "不显示应用弹窗";
     const detail = document.createElement("p");
     detail.textContent = item.behavior;
     box.append(title, detail);
@@ -84,10 +89,10 @@ function show(key) {
   }
   document.querySelector("#annotation").textContent =
     item.component === "TrayContentPreview"
-      ? "Content sketch only. Production tray icons and menus use native Windows APIs."
+      ? "仅示意菜单内容，正式应用使用 Windows 原生托盘图标与菜单。"
       : item.image
-        ? "Actual compiled Slint output. Windows system integration is not implemented by this prototype."
-        : "This outcome does not introduce a new application notification or force the main window open.";
+        ? "此图由真实 Slint 源码编译渲染，原型尚未接入 Windows 系统能力。"
+        : "不为此新增通知，也不强制打开主窗口。";
   const url = new URL(location.href);
   url.searchParams.set("state", key);
   url.searchParams.delete("view");

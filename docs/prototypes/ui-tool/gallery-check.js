@@ -9,7 +9,10 @@
   check(new Set(cases.map(c => c.key)).size === cases.length, "Unique states");
   check(cases.every(c => c.feature === feature), "No states from another functional boundary");
   check(location.pathname.endsWith(`/${feature}.html`), "Separate functional HTML file");
+  check(document.documentElement.lang === "zh-CN", "Chinese demo language");
   for (const item of cases) {
+    check(/\p{Script=Han}/u.test(item.title), `${item.key}: Chinese state title`);
+    check(/\p{Script=Han}/u.test(item.behavior), `${item.key}: Chinese description`);
     show(item.key);
     check(document.querySelector("#title").textContent === item.title, `${item.key}: title`);
     check(new URL(location.href).searchParams.get("state") === item.key, `${item.key}: URL`);
@@ -41,6 +44,15 @@
   check(logo.naturalWidth > 0, "Android logo loads");
   check(!document.querySelector('[id="theme"]'), "No theme control");
   check(document.querySelectorAll(".feature-links a").length === 8, "Overview and seven feature links");
+  if (feature === "settings") {
+    check(cases.find(c => c.key === "settings-language-zh").properties["language-index"] === 1,
+      "Manual Chinese preference");
+    check(cases.find(c => c.key === "settings-language-en").properties["language-index"] === 2,
+      "English preference without English screens");
+    check(!cases.find(c => c.key === "settings-default").properties["language-index"],
+      "Follow-system default");
+    check(cases.some(c => c.key === "settings-language-save-failed"), "Language save failure");
+  }
   return { feature, states: cases.length, nativeRenders: cases.filter(c => c.image).length,
     passed: checks, scope: "Static feature pages only; no native integration claim." };
 })();
