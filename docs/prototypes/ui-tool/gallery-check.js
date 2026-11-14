@@ -5,9 +5,10 @@
     if (!condition) throw new Error(label);
     checks++;
   };
-  check(cases.length === 62, "Catalogue count");
+  check(cases.length > 0, "Feature has states");
   check(new Set(cases.map(c => c.key)).size === cases.length, "Unique states");
-  check(cases.filter(c => c.image).length === 51, "Native render count");
+  check(cases.every(c => c.feature === feature), "No states from another functional boundary");
+  check(location.pathname.endsWith(`/${feature}.html`), "Separate functional HTML file");
   for (const item of cases) {
     show(item.key);
     check(document.querySelector("#title").textContent === item.title, `${item.key}: title`);
@@ -21,25 +22,25 @@
       check(!document.querySelector("#render img"), `${item.key}: no invented surface`);
     }
   }
-  const filter = document.querySelector("#group");
-  filter.value = "Tray";
-  filter.dispatchEvent(new Event("change"));
-  check(document.querySelectorAll("#list button").length === 4, "Tray filter");
-  filter.value = "";
-  filter.dispatchEvent(new Event("change"));
   const search = document.querySelector("#search");
-  search.value = "credential";
+  search.value = cases[0].key;
   search.dispatchEvent(new Event("input"));
-  check([...document.querySelectorAll("#list button")].some(b => b.dataset.state === "pair-issued"),
-    "Progress-state search");
+  check([...document.querySelectorAll("#list button")].some(b => b.dataset.state === cases[0].key),
+    "Feature-local search");
   search.value = "";
   search.dispatchEvent(new Event("input"));
-  show("main-ready");
-  check(document.querySelector("#render .caption").textContent.includes("− ×"), "No maximize caption");
-  check(!document.querySelector("#render .caption").textContent.includes("□"), "No maximize affordance");
+  show(cases[0].key);
+  move(-1);
+  check(current === cases.at(-1).key, "Previous stays in this feature and wraps");
+  move(1);
+  check(current === cases[0].key, "Next stays in this feature and wraps");
+  const caption = document.querySelector("#render .caption");
+  check(!caption || !caption.textContent.includes("□"), "No maximize affordance");
   const logo = document.querySelector("header .brand img");
   await logo.decode();
   check(logo.naturalWidth > 0, "Android logo loads");
   check(!document.querySelector('[id="theme"]'), "No theme control");
-  return { passed: checks, scope: "Static state gallery only; no native integration claim." };
+  check(document.querySelectorAll(".feature-links a").length === 8, "Overview and seven feature links");
+  return { feature, states: cases.length, nativeRenders: cases.filter(c => c.image).length,
+    passed: checks, scope: "Static feature pages only; no native integration claim." };
 })();

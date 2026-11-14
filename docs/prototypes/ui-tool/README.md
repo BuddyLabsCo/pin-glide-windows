@@ -4,10 +4,23 @@ This continues the B direction selected by the user on November 14, 2026.
 The user also selected fixed-size, non-maximizable windows and no theme/dark
 appearance in the current scope. The other presentation details remain draft.
 
-Open [index.html](index.html) directly in a browser. It is a static catalogue
-of actual Slint-rendered UI states, not a proposed browser-based application.
-Use the state list, search, group filter, arrow keys or Surface overview.
-Each state has a shareable `?state=` key. `?view=overview` shows major surfaces.
+Open [index.html](index.html) directly in a browser. It contains overview and
+navigation only. Each functional boundary has its own independently editable
+HTML page; each page searches and cycles only its own states:
+
+| Page | Boundary |
+| --- | --- |
+| [main.html](main.html) | Receiver readiness, phones, credential/key errors |
+| [pairing.html](pairing.html) | QR, enrollment progress/errors, new registration |
+| [settings.html](settings.html) | Startup, shortcut, popup duration, save errors |
+| [messages.html](messages.html) | Full SMS, OTP/no-OTP, clipboard and latest-code feedback |
+| [tray.html](tray.html) | System-tray icon/tooltip/menu proposals |
+| [lifecycle.html](lifecycle.html) | Automatic launch, lock, suspend, Exit |
+| [installation.html](installation.html) | NSIS and Windows-owned installation/trust UI |
+
+Use the page's state list, search or arrow keys. A state is shareable as
+`pairing.html?state=pair-issued`, for example. Native screenshots are static
+Slint renders, not a proposed browser-based application.
 
 Read [ui-inventory.md](ui-inventory.md) for the complete trigger/action/error
 inventory, including tray, installer and deliberately invisible outcomes.
@@ -25,7 +38,14 @@ python docs/prototypes/ui-tool/build-preview.py
 
 The command compiles the source with `--style fluent`, renders every state and
 asserts each output has the proposed fixed logical dimensions. It writes
-`shots/`, `states.json` and `index.html` from `gallery-template.html`.
+`shots/` and a separate state-data file for each feature under `data/`.
+It does not overwrite the feature HTML pages or overview.
+
+Edit each feature's HTML for its layout and discussion notes. Shared preview
+styles live in `assets/preview.css`; shared state navigation/rendering lives
+in `assets/gallery.js`. Product-surface artwork comes from `ui.slint`, with
+scenario inputs defined in `build-preview.py`. No file-loader server, bundler
+or frontend dependency is required; all eight HTML files work via `file://`.
 
 To inspect a real fixed-size Slint window interactively:
 
@@ -63,7 +83,8 @@ fixed test SMS remains unchanged; UI chrome is English pending a language
 decision.
 
 Compilation, native render dimensions and browser-catalogue navigation were
-checked (195 catalogue assertions; this is not a product test suite).
+checked across the separate feature pages (263 assertions across all seven
+pages; this is not a product test suite).
 Focus/maximize/tray/clipboard/hotkeys, real pairing/crypto/reception,
 installer behavior, accessibility automation, product E2E, resource measurement
 and acceptance were not validated. The user has excluded the last three

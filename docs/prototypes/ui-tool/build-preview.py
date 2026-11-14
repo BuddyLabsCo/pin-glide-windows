@@ -236,15 +236,29 @@ def build():
             assert struct.unpack(">II", header[16:24]) == dimensions[item["component"]], output
             item["image"] = f"shots/{item['key']}.png"
             item["size"] = dimensions[item["component"]]
-    data = json.dumps(CASES, ensure_ascii=True)
-    template = (ROOT / "gallery-template.html").read_text(encoding="utf-8")
-    assert template.count("/*STATE_DATA*/[]") == 1
-    (ROOT / "index.html").write_text(template.replace("/*STATE_DATA*/[]", data), encoding="utf-8")
-    (ROOT / "states.json").write_text(json.dumps(CASES, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    features = {"Main": "main", "Pairing": "pairing", "Settings": "settings",
+                "Messages": "messages", "Tray": "tray",
+                "Quiet outcomes": "lifecycle", "OS / installer": "installation"}
+    overrides = {"quiet-copy-success": "messages", "quiet-ack": "messages",
+                 "quiet-hidden-pair": "pairing", "quiet-scanned": "pairing",
+                 "quiet-removed": "main"}
+    data_dir = ROOT / "data"
+    data_dir.mkdir(exist_ok=True)
+    for item in CASES:
+        item["feature"] = overrides.get(item["key"], features[item["group"]])
+    for feature in features.values():
+        assert (ROOT / f"{feature}.html").is_file(), feature
+        subset = [item for item in CASES if item["feature"] == feature]
+        assert subset, feature
+        data = json.dumps(subset, indent=2, ensure_ascii=True)
+        (data_dir / f"{feature}.js").write_text(f"window.UI_CASES = {data};\n", encoding="utf-8")
+    assert sum(len([item for item in CASES if item["feature"] == feature])
+               for feature in features.values()) == len(CASES)
     version = subprocess.check_output(["slint-viewer", "--version"], text=True).strip()
     rendered = sum(bool(item["component"]) for item in CASES)
     print(json.dumps(dict(renderer=version, states=len(CASES), native_renders=rendered,
-                          output=str(ROOT / "index.html"))))
+                          pages={feature: sum(item["feature"] == feature for item in CASES)
+                                 for feature in features.values()})))
 
 
 if __name__ == "__main__":

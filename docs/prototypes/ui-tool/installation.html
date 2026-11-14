@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pin Glide / Installation</title>
+<link rel="stylesheet" href="assets/preview.css">
+</head>
+<body data-feature="installation">
+<header>
+<div class="brand">
+<img src="assets/app-icon.png" alt="Pin Glide logo">
+<div>
+<h1>Installation</h1>
+<div class="subtitle">B / Fixed-size / Light only / Native Slint Fluent study</div>
+</div>
+</div>
+<div class="actions">
+<a class="button" href="index.html">All features</a>
+<a class="button small-action" href="ui-inventory.md">Full UI inventory</a>
+<span class="count" id="count">
+</span>
+</div>
+</header>
+<nav class="feature-links" aria-label="Prototype feature pages">
+<a href="index.html">Overview</a>
+<a href="main.html">Main window</a>
+<a href="pairing.html">Pairing</a>
+<a href="settings.html">Settings</a>
+<a href="messages.html">SMS and copying</a>
+<a href="tray.html">System tray</a>
+<a href="lifecycle.html">Lifecycle</a>
+<a href="installation.html">Installation</a>
+</nav>
+<div class="layout">
+<nav aria-label="Feature state catalogue">
+<input id="search" aria-label="Find a state" placeholder="Find a state...">
+<div id="list">
+</div>
+<footer>States on this page belong only to this functional boundary.</footer>
+</nav>
+<main class="stage">
+<div class="kicker" id="kicker">
+</div>
+<h2 id="title">
+</h2>
+<div class="meta" id="meta">
+</div>
+<div id="render">
+</div>
+<p class="annotation" id="annotation">
+</p>
+<div class="controls">
+<button id="previous">Previous state</button>
+<button id="next">Next state</button>
+</div>
+</main>
+<aside>
+<div class="section">
+<h3>This feature</h3>
+<p>Install, upgrade, uninstall and Windows trust surfaces.</p>
+</div>
+<div class="section">
+<h3>Trigger / visible result</h3>
+<p id="behavior">
+</p>
+</div>
+<div class="section">
+<h3>Functional boundary</h3>
+<p>NSIS and Windows own these surfaces. Preserve existing data during a failed upgrade; uninstallation does not remotely revoke a receiver or clear the OS clipboard.</p>
+</div>
+<h3>Technical boundary</h3>
+<p>App screenshots are actual Slint Fluent renders. Native caption buttons are schematic; OS focus, tray and system integration have not been validated.</p>
+</aside>
+</div>
+<script src="data/installation.js">
+</script>
+<script src="assets/gallery.js">
+</script>
+</body>
+</html>

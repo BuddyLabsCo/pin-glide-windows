@@ -46,6 +46,13 @@ UI decision: [Clarify Windows UI requirements after functional agreement](https:
 
 ## Surface catalogue
 
+The discussion demo uses separate HTML files by functional boundary.
+`index.html` is only the overview/navigation entry. Use `main.html`,
+`pairing.html`, `settings.html`, `messages.html`, `tray.html`, `lifecycle.html`
+and `installation.html` for the corresponding states. State search/cycling
+does not cross these page boundaries. Shared preview CSS and scripts are
+separate assets; the HTML files can be edited independently.
+
 | Surface | Contents and entry | Closing / lifetime |
 | --- | --- | --- |
 | Main utility window | Logo/name; Ready or Not Ready; one concise reason; paired-phone rows; Pair a phone; startup state; shortcut summary; popup-duration summary; Settings | Close hides to tray; reception continues. Explicit launch/tray Open reuses it. |
