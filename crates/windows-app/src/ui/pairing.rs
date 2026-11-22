@@ -1,6 +1,8 @@
 use std::{cell::RefCell, sync::Arc};
 
-use crate::service::{PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service};
+use crate::service::{
+    DeliveryStatus, PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service,
+};
 use crate::storage::SenderNameError;
 use crate::{NamePaste, PairingStage, PairingWindow, platform};
 use i_slint_core::{
@@ -32,9 +34,7 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
 }
 
 pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
-    if PairingOperation::has_pending_enrollment() {
-        create_view(chinese, start_operation, false)?;
-    }
+    create_view(chinese, start_operation, false)?;
     Ok(())
 }
 
@@ -152,18 +152,25 @@ fn start_operation(notify: fn(), start: PairingStart) -> PairingOperation {
             super::sms::receive,
         );
     }
-    let connect =
-        || option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok());
-    PairingOperation::start_receiving(connect, notify, start, super::sms::receive)
+    PairingOperation::start_receiving(connect_service, notify, start, super::sms::receive)
 }
 
-fn notify_progress() {
+pub(super) fn connect_service() -> Option<Service> {
+    option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok())
+}
+
+pub(super) fn delivery_status() -> Option<DeliveryStatus> {
+    PAIRING.with_borrow(|view| view.as_ref().map(|view| view.operation.delivery_status()))
+}
+
+pub(super) fn notify_progress() {
     let _ = slint::invoke_from_event_loop(|| {
         PAIRING.with_borrow_mut(|pairing| {
             if let Some(view) = pairing {
                 view.render();
             }
         });
+        super::update_delivery_status();
     });
 }
 

@@ -461,8 +461,8 @@ fn issue_credential(
         );
         write_response(
             upgrade.get_mut(),
-            "409 Conflict",
-            &json!({"code":"receiver_already_connected"}),
+            "401 Unauthorized",
+            &json!({"code":"credential_invalid"}),
         );
         return;
     }

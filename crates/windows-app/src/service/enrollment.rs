@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use pin_glide_http::{
     apis::urlencode,
@@ -6,12 +6,12 @@ use pin_glide_http::{
 };
 use receiver_core::pairing::{EnrollmentAction, EnrollmentEvent};
 use reqwest::StatusCode;
-use tokio::{sync::oneshot, time::timeout};
+use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
 use super::{
-    NewReceiverSession, PairingOutcome, PairingProgress, Service, delivery::DeliveryConnection,
-    pairing_events::PairingEventError, pairing_operation::ProgressUpdates,
+    NewReceiverSession, PairingOutcome, PairingProgress, Service,
+    pairing_events::PairingEventError, pairing_operation::ProgressUpdates, reconnect::Reconnect,
 };
 use crate::storage::{Enrollment, RegistrationStore};
 
@@ -25,27 +25,26 @@ pub(super) async fn finish_enrollment(
     let outcome = tokio::select! {
         biased;
         _ = &mut stopping => return,
-        outcome = enroll(service, store, updates, session) => outcome,
+        outcome = issue_credential(service, store, updates, session) => outcome,
     };
     match outcome {
-        Ok((connection, pairing_id)) => {
-            updates.publish(PairingProgress::Completed { pairing_id });
+        Ok(pending) => {
             tokio::select! {
                 biased;
                 _ = stopping => {}
-                () = connection.run(store, &updates.inbox, updates.notify_sms) => {}
+                () = connect_and_promote(service, store, updates, pending) => {}
             }
         }
         Err(outcome) => updates.publish(PairingProgress::Finished(outcome)),
     }
 }
 
-async fn enroll(
+async fn issue_credential(
     service: &Service,
     store: &RegistrationStore,
     updates: &ProgressUpdates,
     session: Option<&NewReceiverSession>,
-) -> Result<(DeliveryConnection, String), PairingOutcome> {
+) -> Result<Enrollment, PairingOutcome> {
     let mut pending = match session {
         Some(session) => {
             updates.publish(PairingProgress::CredentialReady);
@@ -97,27 +96,36 @@ async fn enroll(
             EnrollmentAction::Fail => return reject(store, &pending.operation_id),
         }
     }
+    Ok(pending)
+}
+
+async fn connect_and_promote(
+    service: &Service,
+    store: &RegistrationStore,
+    updates: &ProgressUpdates,
+    pending: Enrollment,
+) {
     updates.publish(PairingProgress::Connecting);
-    let token = pending.token().map_err(|_| PairingOutcome::Failed)?;
-    let result = timeout(
-        Duration::from_secs(15),
-        DeliveryConnection::open(service, &token, &pending.receiver_id),
-    )
+    let result = async {
+        let token = pending.token().map_err(|_| PairingOutcome::Failed)?;
+        let mut receiver = Reconnect::new(service, &token, &pending.receiver_id, updates);
+        let connection = match receiver.open(true).await {
+            Ok(connection) => connection,
+            Err(PairingEventError::Rejected { .. }) => return reject(store, &pending.operation_id),
+            Err(_) => return Err(PairingOutcome::Failed),
+        };
+        let pairing_id = store
+            .finish_enrollment(&pending.operation_id, true)
+            .map_err(|_| PairingOutcome::Failed)?
+            .ok_or(PairingOutcome::Failed)?;
+        updates.publish(PairingProgress::Completed { pairing_id });
+        receiver.receive(store, connection).await;
+        Ok(())
+    }
     .await;
-    let connection = match result {
-        Ok(Ok(connection)) => connection,
-        Ok(Err(PairingEventError::Rejected { status, .. }))
-            if status.is_client_error() && status != StatusCode::CONFLICT =>
-        {
-            return reject(store, &pending.operation_id);
-        }
-        _ => return Err(PairingOutcome::Failed),
-    };
-    let pairing_id = store
-        .finish_enrollment(&pending.operation_id, true)
-        .map_err(|_| PairingOutcome::Failed)?
-        .ok_or(PairingOutcome::Failed)?;
-    Ok((connection, pairing_id))
+    if let Err(outcome) = result {
+        updates.publish(PairingProgress::Finished(outcome));
+    }
 }
 
 fn start(service: &Service, session: &NewReceiverSession) -> Result<Enrollment, PairingOutcome> {

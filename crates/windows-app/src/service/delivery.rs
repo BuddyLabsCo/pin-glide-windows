@@ -1,29 +1,49 @@
-use std::{sync::Mutex, time::SystemTime};
+use std::time::Duration;
 
-use futures_util::{Sink, SinkExt, StreamExt};
 use pin_glide_wss::{Delivery, Receipt};
-use receiver_core::delivery::{Arrival, Envelope, Inbox, Sms};
+use receiver_core::delivery::{Arrival, Envelope, Sms};
 use serde::Deserialize;
-use tokio_tungstenite::tungstenite::{
-    Error as SocketError, Message,
-    protocol::{CloseFrame, frame::coding::CloseCode},
-};
+use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 
 use super::{
-    Service,
+    DeliveryStatus, Service,
     pairing_events::{PairingEventError, Socket},
+    pairing_operation::ProgressUpdates,
+    reconnect::Connectivity,
 };
 
 use crate::storage::{DeliveryRejection, RegistrationStore};
 
 #[cfg(test)]
 mod tests;
+mod transport;
+use transport::Transport;
 
 pub(crate) struct ReceivedSms {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub sms: Sms,
     #[cfg_attr(not(windows), allow(dead_code))]
     pub sender_name: String,
+    #[cfg(windows)]
+    pub epoch: u64,
+}
+
+const WRITE_LIMIT: Duration = Duration::from_secs(5);
+const HEARTBEAT_LIMIT: Duration = Duration::from_secs(20);
+const MAX_PENDING_DELIVERIES: usize = 32;
+
+#[derive(Debug)]
+pub(super) struct ConnectionLoss {
+    pub status: DeliveryStatus,
+    pub resume_failed: bool,
+}
+
+pub(super) struct IncomingDelivery {
+    text: Utf8Bytes,
+    arrival: Arrival,
+    #[cfg(windows)]
+    epoch: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -71,88 +91,71 @@ fn delivery_resolves_the_latest_name_for_the_pairing_id() {
 
 pub(super) struct DeliveryConnection {
     socket: Socket,
-    receiver_id: String,
 }
 
 impl DeliveryConnection {
-    pub(super) async fn open(
-        service: &Service,
-        token: &str,
-        receiver_id: &str,
-    ) -> Result<Self, PairingEventError> {
+    pub(super) async fn open(service: &Service, token: &str) -> Result<Self, PairingEventError> {
         service
             .websocket("/v1/receiver/events", token)
             .await
-            .map(|socket| Self {
-                socket,
-                receiver_id: receiver_id.into(),
-            })
+            .map(|socket| Self { socket })
     }
 
     pub(super) async fn run(
-        mut self,
+        self,
         store: &RegistrationStore,
-        inbox: &Mutex<Inbox>,
-        notify: fn(ReceivedSms),
-    ) {
-        let mut order = 0;
-        while let Some(Ok(frame)) = self.socket.next().await {
-            let time = SystemTime::now();
-            let result = match frame {
-                Message::Text(text) => {
-                    order += 1;
-                    handle_text(
-                        &mut self.socket,
-                        &text,
-                        &self.receiver_id,
-                        store,
-                        |delivery| {
-                            authenticate(
-                                &self.receiver_id,
-                                delivery,
-                                Arrival { time, order },
-                                store,
-                                inbox,
-                                notify,
-                            )
-                        },
-                    )
-                    .await
-                }
-                Message::Ping(_) | Message::Pong(_) => self
-                    .socket
-                    .flush()
-                    .await
-                    .map_err(|_| PairingEventError::Transport),
-                Message::Close(_) => {
-                    let _ = self.socket.flush().await;
-                    break;
-                }
-                _ => Err(PairingEventError::Protocol),
-            };
-            if let Err(error) = result {
-                if matches!(error, PairingEventError::Protocol) {
-                    let _ = self
-                        .socket
-                        .close(Some(CloseFrame {
-                            code: CloseCode::Protocol,
-                            reason: "invalid_delivery_event".into(),
-                        }))
-                        .await;
-                }
-                break;
-            }
-        }
+        updates: &ProgressUpdates,
+        state: &mut watch::Receiver<Connectivity>,
+        order: &mut u64,
+        authenticate: &mpsc::Sender<IncomingDelivery>,
+    ) -> ConnectionLoss {
+        Transport::new(self.socket, store, updates)
+            .run(state, order, authenticate)
+            .await
     }
 }
 
-async fn handle_text(
-    socket: &mut (impl Sink<Message, Error = SocketError> + Unpin),
-    text: &str,
-    receiver_id: &str,
+pub(super) fn start_processing(
     store: &RegistrationStore,
-    authenticate: impl FnOnce(Delivery) -> Result<(), DeliveryRejection>,
-) -> Result<(), PairingEventError> {
+    updates: &ProgressUpdates,
+    receiver_id: String,
+) -> mpsc::Sender<IncomingDelivery> {
+    let (send, mut receive) = mpsc::channel::<IncomingDelivery>(MAX_PENDING_DELIVERIES);
+    let store = store.clone();
+    let inbox = updates.inbox.clone();
+    let notify = updates.notify_sms;
+    tokio::task::spawn_blocking(move || {
+        while let Some(incoming) = receive.blocking_recv() {
+            let result = match serde_json::from_str::<Delivery>(&incoming.text) {
+                Ok(delivery) if delivery.receiver_id == receiver_id => {
+                    authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
+                }
+                Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
+                Err(_) => Err(DeliveryRejection::InvalidEnvelope),
+            };
+            match result {
+                Ok((sms, sender_name)) => {
+                    #[cfg(windows)]
+                    let Some(epoch) = incoming.epoch else {
+                        continue;
+                    };
+                    notify(ReceivedSms {
+                        sms,
+                        sender_name,
+                        #[cfg(windows)]
+                        epoch,
+                    });
+                }
+                Err(category) => {
+                    let _ = store.record_delivery_rejection(category);
+                }
+            }
+        }
+    });
+    send
+}
+
+fn receipt(text: &str) -> Result<Option<String>, PairingEventError> {
     let header: EventHeader =
         serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
     if header.version != 1 {
@@ -160,7 +163,7 @@ async fn handle_text(
     }
     match header.kind.as_str() {
         "delivery" => {}
-        "error" | "pairing_removed" | "device_revoked" => return Ok(()),
+        "error" | "pairing_removed" | "device_revoked" => return Ok(None),
         _ => return Err(PairingEventError::Protocol),
     }
     let receipt = Receipt {
@@ -169,17 +172,9 @@ async fn handle_text(
         reserved_type: "receipt".into(),
         version: 1,
     };
-    let receipt = serde_json::to_string(&receipt).map_err(|_| PairingEventError::Protocol)?;
-    let sent = socket.send(Message::text(receipt)).await;
-    let authenticated = match serde_json::from_str::<Delivery>(text) {
-        Ok(delivery) if delivery.receiver_id == receiver_id => authenticate(delivery),
-        Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
-        Err(_) => Err(DeliveryRejection::InvalidEnvelope),
-    };
-    if let Err(category) = authenticated {
-        let _ = store.record_delivery_rejection(category);
-    }
-    sent.map_err(|_| PairingEventError::Transport)
+    serde_json::to_string(&receipt)
+        .map(Some)
+        .map_err(|_| PairingEventError::Protocol)
 }
 
 fn authenticate(
@@ -187,9 +182,8 @@ fn authenticate(
     delivery: Delivery,
     arrival: Arrival,
     store: &RegistrationStore,
-    inbox: &Mutex<Inbox>,
-    notify: fn(ReceivedSms),
-) -> Result<(), DeliveryRejection> {
+    inbox: &std::sync::Mutex<receiver_core::delivery::Inbox>,
+) -> Result<(Sms, String), DeliveryRejection> {
     let mut sender_name = String::new();
     let mut inbox = inbox
         .lock()
@@ -208,10 +202,8 @@ fn authenticate(
             Some(target.key)
         },
     );
-    drop(inbox);
     let sms = result.map_err(DeliveryRejection::Receive)?;
-    notify(ReceivedSms { sms, sender_name });
-    Ok(())
+    Ok((sms, sender_name))
 }
 
 fn correlation(value: Option<String>) -> Result<String, PairingEventError> {

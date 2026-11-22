@@ -3,21 +3,40 @@ use std::cell::RefCell;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{CloseRequestResponse, ComponentHandle, PlatformError, VecModel, Window};
 
+use crate::service::{DeliveryStatus, PairingOperation};
 use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
 
 mod pairing;
 mod sms;
+#[cfg(test)]
+pub(crate) use sms::{popup_count, receive as receive_sms};
 
 pub use pairing::open_pairing;
 pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
-    pairing::resume(platform::chinese())
+    if PairingOperation::has_pending_enrollment() {
+        return pairing::resume(platform::chinese());
+    }
+    if let Ok(store) = RegistrationStore::for_current_user()
+        && store.has_registration()
+    {
+        let operation = PairingOperation::start_registered(
+            pairing::connect_service,
+            pairing::notify_progress,
+            store,
+            sms::receive,
+        );
+        REGISTERED.set(Some(operation));
+        update_delivery_status();
+    }
+    Ok(())
 }
 
 thread_local! {
     static WELCOME: RefCell<Option<WelcomeWindow>> = const { RefCell::new(None) };
     static MAIN: RefCell<Option<MainWindow>> = const { RefCell::new(None) };
+    static REGISTERED: RefCell<Option<PairingOperation>> = const { RefCell::new(None) };
 }
 
 pub fn open() {
@@ -45,9 +64,24 @@ pub fn open_settings() {
 
 pub fn close() {
     pairing::shutdown();
-    sms::close_all();
+    if let Some(operation) = REGISTERED.take() {
+        operation.shutdown();
+    }
+    close_sms();
     WELCOME.with_borrow_mut(|welcome| *welcome = None);
     MAIN.with_borrow_mut(|main| *main = None);
+}
+
+pub(crate) fn close_sms() {
+    sms::close_all();
+}
+
+fn update_delivery_status() {
+    let status = REGISTERED
+        .with_borrow(|operation| operation.as_ref().map(PairingOperation::delivery_status))
+        .or_else(pairing::delivery_status)
+        .unwrap_or(DeliveryStatus::Unregistered);
+    platform::set_delivery_status(status);
 }
 
 pub fn update_motion() {
@@ -83,7 +117,7 @@ fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, Pla
     let Ok(names) = store.sender_names() else {
         return Ok(false);
     };
-    if names.is_empty() {
+    if names.is_empty() && !store.has_registration() {
         return Ok(false);
     }
     let window = MAIN.with_borrow_mut(|main| {

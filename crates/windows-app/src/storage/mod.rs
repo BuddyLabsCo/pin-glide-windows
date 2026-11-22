@@ -143,6 +143,31 @@ impl RegistrationStore {
         })
     }
 
+    pub(crate) fn receiver_credential(&self) -> io::Result<(String, Zeroizing<String>)> {
+        let stored = self.read()?;
+        let id = stored.receiver_id.filter(|id| !id.is_empty());
+        let protected = stored.protected_receiver_token;
+        let (Some(id), Some(protected)) = (id, protected) else {
+            return Err(io::ErrorKind::NotFound.into());
+        };
+        let bytes = unprotect(&protected)?;
+        let token = std::str::from_utf8(&bytes).map_err(io::Error::other)?;
+        if token.is_empty() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        Ok((id, Zeroizing::new(token.to_owned())))
+    }
+
+    pub(crate) fn has_pairings(&self) -> io::Result<bool> {
+        self.read().map(|stored| !stored.active_pairings.is_empty())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn has_registration(&self) -> bool {
+        self.read()
+            .is_ok_and(|stored| stored.receiver_id.is_some() || !stored.active_pairings.is_empty())
+    }
+
     fn update<Value, Error>(
         &self,
         change: impl FnOnce(&mut Registration) -> Result<Value, Error>,

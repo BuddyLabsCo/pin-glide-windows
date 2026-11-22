@@ -14,7 +14,10 @@ pub fn listen(host: &str) -> (TcpListener, String) {
 }
 
 pub fn accept_loopback(listener: &TcpListener) -> TcpStream {
-    let timeout = Duration::from_secs(5);
+    accept_loopback_with_timeout(listener, Duration::from_secs(5))
+}
+
+pub fn accept_loopback_with_timeout(listener: &TcpListener, timeout: Duration) -> TcpStream {
     let deadline = Instant::now() + timeout;
     listener.set_nonblocking(true).unwrap();
     let stream = loop {

@@ -8,7 +8,7 @@ use std::{
 use qrcode::QrCode;
 use receiver_core::{
     delivery::Inbox,
-    pairing::{PairingMaterial, PairingOutcome, pairing_lifetime},
+    pairing::{PairingMaterial, PairingOutcome},
 };
 use reqwest::StatusCode;
 use tokio::{
@@ -18,9 +18,8 @@ use tokio::{
 use zeroize::Zeroizing;
 
 use super::{
-    CompletionError, NewReceiverSession, Service, SessionState,
+    CompletionError, DeliveryStatus, NewReceiverSession, Service, SessionState,
     delivery::ReceivedSms,
-    enrollment::finish_enrollment,
     pairing_events::{PairingEvent, PairingEventError, PairingEvents},
     pairing_snapshot::{Claim, Snapshot},
 };
@@ -28,6 +27,8 @@ use crate::storage::{PairingReference, RegistrationStore};
 
 #[cfg(test)]
 pub(crate) mod tests;
+mod worker;
+use worker::drive;
 
 #[derive(Clone)]
 pub enum PairingProgress {
@@ -43,6 +44,7 @@ pub enum PairingProgress {
 
 pub struct PairingOperation {
     progress: watch::Receiver<PairingProgress>,
+    delivery: watch::Receiver<DeliveryStatus>,
     worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
     inbox: Arc<Mutex<Inbox>>,
     #[cfg(windows)]
@@ -53,16 +55,30 @@ pub struct PairingOperation {
 pub enum PairingStart {
     ResumePending,
     Fresh,
+    Registered,
 }
 
 pub(super) struct ProgressUpdates {
     snapshot: watch::Sender<PairingProgress>,
+    pub(super) delivery: watch::Sender<DeliveryStatus>,
     notify: fn(),
     pub(super) inbox: Arc<Mutex<Inbox>>,
     pub(super) notify_sms: fn(ReceivedSms),
 }
 
 impl ProgressUpdates {
+    pub(super) fn delivery_status(&self, status: DeliveryStatus) {
+        if self.delivery.send_if_modified(|previous| {
+            if *previous == status {
+                return false;
+            }
+            *previous = status;
+            true
+        }) {
+            (self.notify)();
+        }
+    }
+
     pub(super) fn publish(&self, progress: PairingProgress) {
         if self.snapshot.send_if_modified(|snapshot| {
             let unchanged = match (&*snapshot, &progress) {
@@ -123,6 +139,22 @@ impl PairingOperation {
         Self::spawn(connect, notify, Some(store), start, drop)
     }
 
+    #[cfg(windows)]
+    pub(crate) fn start_registered(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        store: RegistrationStore,
+        notify_sms: fn(ReceivedSms),
+    ) -> Self {
+        Self::spawn(
+            connect,
+            notify,
+            Some(store),
+            PairingStart::Registered,
+            notify_sms,
+        )
+    }
+
     fn spawn(
         connect: impl FnOnce() -> Option<Service> + Send + 'static,
         notify: fn(),
@@ -131,10 +163,12 @@ impl PairingOperation {
         notify_sms: fn(ReceivedSms),
     ) -> Self {
         let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
+        let (delivery_updates, delivery) = watch::channel(DeliveryStatus::Unregistered);
         let (stop, stopping) = oneshot::channel();
         let inbox = Arc::new(Mutex::new(Inbox::default()));
         let updates = ProgressUpdates {
             snapshot: snapshot.clone(),
+            delivery: delivery_updates,
             notify,
             inbox: Arc::clone(&inbox),
             notify_sms,
@@ -161,6 +195,7 @@ impl PairingOperation {
                         ));
                     }
                     _ => {
+                        updates.delivery_status(DeliveryStatus::Unconfigured);
                         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
                     }
                 }
@@ -172,6 +207,7 @@ impl PairingOperation {
         }
         Self {
             progress,
+            delivery,
             worker,
             inbox,
             #[cfg(windows)]
@@ -196,6 +232,10 @@ impl PairingOperation {
         self.progress.borrow().clone()
     }
 
+    pub fn delivery_status(&self) -> DeliveryStatus {
+        *self.delivery.borrow()
+    }
+
     pub fn latest_otp(&self) -> Option<Zeroizing<String>> {
         Some(Zeroizing::new(self.inbox.lock().ok()?.latest()?.to_owned()))
     }
@@ -205,88 +245,6 @@ impl PairingOperation {
             let _ = stop.send(());
             let _ = worker.join();
         }
-    }
-}
-
-async fn drive(
-    service: &Service,
-    updates: &ProgressUpdates,
-    stopping: oneshot::Receiver<()>,
-    now: impl FnOnce() -> SystemTime,
-    store: Option<&RegistrationStore>,
-    start: PairingStart,
-) {
-    if let Some(store) = store {
-        match (store.enrollment(), start) {
-            (Ok(Some(_)), PairingStart::ResumePending) => {
-                finish_enrollment(service, store, updates, stopping, None).await;
-                return;
-            }
-            (Ok(Some(pending)), PairingStart::Fresh)
-                if store
-                    .finish_enrollment(&pending.operation_id, false)
-                    .is_err() =>
-            {
-                updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
-                return;
-            }
-            _ => {}
-        }
-    }
-    let Ok(material) = PairingMaterial::generate() else {
-        updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
-        return;
-    };
-    drive_session(service, updates, stopping, now, material, store).await;
-}
-
-async fn drive_session(
-    service: &Service,
-    updates: &ProgressUpdates,
-    mut stopping: oneshot::Receiver<()>,
-    now: impl FnOnce() -> SystemTime,
-    material: PairingMaterial,
-    store: Option<&RegistrationStore>,
-) {
-    let created = tokio::select! {
-        result = service.new_receiver() => result,
-        _ = &mut stopping => {
-            updates.publish(PairingProgress::Finished(PairingOutcome::Canceled));
-            return;
-        }
-    };
-    let Ok(session) = created else {
-        updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
-        return;
-    };
-    let lifetime = pairing_lifetime(
-        now(),
-        session.expires_at.into(),
-        session.pairing_token_expires_at.into(),
-    );
-    let deadline = Instant::now() + lifetime;
-    let (outcome, exiting) = tokio::select! {
-        biased;
-        _ = &mut stopping => (PairingOutcome::Canceled, true),
-        outcome = watch_session(service, &session, &material, deadline, updates, store) => (outcome, false),
-        _ = sleep_until(deadline) => (PairingOutcome::Expired, false),
-    };
-    if outcome == PairingOutcome::KeyConfirmed(SessionState::CredentialReady) {
-        if let Some(store) = store {
-            finish_enrollment(service, store, updates, stopping, Some(&session)).await;
-        } else {
-            updates.publish(PairingProgress::Finished(PairingOutcome::Failed));
-        }
-        return;
-    }
-    updates.publish(PairingProgress::Finished(outcome));
-    if exiting
-        || matches!(
-            outcome,
-            PairingOutcome::CreateFailed | PairingOutcome::Failed
-        )
-    {
-        let _ = timeout(Duration::from_secs(2), service.cancel_receiver(&session)).await;
     }
 }
 
