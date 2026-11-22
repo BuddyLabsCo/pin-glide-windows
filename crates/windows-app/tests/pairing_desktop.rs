@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_app::{PairingStage, PairingWindow, service::PairingOperation, ui};
+#[path = "support/main_capture.rs"]
+mod main_capture;
 
 use fixture::*;
 
@@ -38,7 +40,7 @@ enum Step {
 fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     const CHILD: &str = "PIN_GLIDE_PAIRING_EVIDENCE_CHILD";
     let Ok(mode) = std::env::var(CHILD) else {
-        for mode in ["visible", "hidden", "reduced"] {
+        for mode in ["visible", "hidden", "reduced", "duplicate"] {
             let child = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -55,6 +57,8 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     };
     let hidden = mode == "hidden";
     let reduced = mode == "reduced";
+    let duplicate = mode == "duplicate";
+    let saved_name_evidence = mode == "name-saved";
     let mut builder = EventLoop::with_user_event();
     builder.with_any_thread(true);
     slint::BackendSelector::new()
@@ -70,6 +74,8 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     let fixture = issue_sessions(listener, release, cancelled, scanned);
     let directory = tempfile::tempdir().unwrap();
     let registration = directory.path().join("registration.json");
+    main_capture::seed_sender_names(&registration, duplicate, hidden);
+    let stored = registration.clone();
     let window = ui::open_pairing(true, move |notify, start| {
         let service = service.clone();
         PairingOperation::start_with_registration(
@@ -81,9 +87,14 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     })
     .unwrap();
     window.set_motion_enabled(false);
-    let evidence = (mode == "visible")
+    let evidence = (mode == "visible" || duplicate || saved_name_evidence)
         .then(|| std::env::var_os("PIN_GLIDE_PAIRING_EVIDENCE"))
         .flatten();
+    let final_name = if saved_name_evidence {
+        "办公室手机"
+    } else {
+        "我的设备"
+    };
     let mut states = [
         (PairingStage::Waiting, Step::Advance, None),
         (
@@ -123,9 +134,17 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     let started = Instant::now();
     let mut frame = None;
     let mut completed_at = None;
+    let mut main_expected_at: Option<Instant> = None;
     let mut completion_frames = CompletionFrames::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(20), move || {
         assert!(started.elapsed() < Duration::from_secs(18));
+        if let Some(opened_at) = main_expected_at {
+            if opened_at.elapsed() >= Duration::from_millis(250) {
+                main_capture::verify_main(evidence.as_deref().map(Path::new));
+                slint::quit_event_loop().unwrap();
+            }
+            return;
+        }
         let Some(&(stage, step, capture_name)) = states.peek() else {
             return;
         };
@@ -136,20 +155,24 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             return;
         }
         if matches!(step, Step::Finish) {
+            if hidden {
+                assert!(!window.window().is_visible());
+                ui::open();
+                assert!(!window.window().is_visible());
+                assert_eq!(saved_name(&stored), "未命名设备-3");
+                main_expected_at = Some(Instant::now());
+                return;
+            }
             let completed_at = completed_at.get_or_insert_with(|| {
-                assert_eq!(window.window().is_visible(), !hidden);
-                if hidden {
-                    ui::open();
-                    assert!(window.window().is_visible());
-                    assert_eq!(window.get_stage(), PairingStage::Completed);
-                }
+                assert!(window.window().is_visible());
+                window.set_sender_name("我的设备".into());
                 Instant::now()
             });
             if !completion_frames.observe(
                 &window,
                 completed_at.elapsed(),
-                !hidden && !reduced,
-                evidence.as_deref().map(Path::new),
+                !reduced,
+                evidence.as_deref().filter(|_| !duplicate).map(Path::new),
             ) {
                 return;
             }
@@ -193,7 +216,9 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             } else {
                 return;
             }
-        } else if let Some(path) = &evidence_path {
+        } else if let Some(path) = &evidence_path
+            && !duplicate
+        {
             capture(&window, path);
         }
         states.next();
@@ -206,7 +231,20 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
                 }
                 advance.send(()).unwrap();
             }
-            Step::Finish => slint::quit_event_loop().unwrap(),
+            Step::Finish => {
+                verify_naming(
+                    &window,
+                    &stored,
+                    duplicate,
+                    final_name,
+                    evidence.as_deref().map(Path::new),
+                );
+                if duplicate {
+                    slint::quit_event_loop().unwrap();
+                } else {
+                    main_expected_at = Some(Instant::now());
+                }
+            }
             Step::WaitForCancellation | Step::Refresh => window.invoke_refresh(),
             Step::Scan => unreachable!(),
         }
@@ -215,6 +253,70 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     timer.stop();
     ui::close();
     fixture.join().unwrap();
+}
+
+fn saved_name(path: &Path) -> String {
+    let stored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    stored["active_pairings"]["pairing-1"]["name"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn verify_naming(
+    window: &PairingWindow,
+    store: &Path,
+    duplicate: bool,
+    final_name: &str,
+    evidence: Option<&Path>,
+) {
+    let too_long = "我的备用设备".repeat(7);
+    let cases = [
+        ("empty", "", "请填写设备名称。"),
+        ("too-long", &too_long, "设备名称最多 40 个字符。"),
+        ("duplicate", "我的设备", "已有一台同名设备，请换一个名称。"),
+    ];
+    for (state, input, error) in cases {
+        if (state == "duplicate") != duplicate {
+            continue;
+        }
+        window.set_sender_name(input.into());
+        window.set_name_error("".into());
+        if let Some(directory) = evidence {
+            capture(
+                window,
+                &directory.join(format!("pair-done-input-{state}.ppm")),
+            );
+        }
+        window.invoke_finish_naming();
+        assert_eq!(window.get_name_error(), error);
+        assert!(window.window().is_visible());
+        assert_eq!(saved_name(store), "未命名设备");
+        if let Some(directory) = evidence {
+            capture(
+                window,
+                &directory.join(format!("pair-done-error-{state}.ppm")),
+            );
+        }
+    }
+    if !duplicate {
+        window.set_sender_name("".into());
+        window.set_invalid_paste(true);
+        window.invoke_finish_naming();
+        assert_eq!(window.get_name_error(), "名称包含无效字符，请重新输入。");
+        assert_eq!(saved_name(store), "未命名设备");
+        if let Some(directory) = evidence {
+            capture(
+                window,
+                &directory.join("pair-done-error-invalid-character.ppm"),
+            );
+        }
+        window.set_invalid_paste(false);
+        window.set_sender_name(format!("　{final_name}\t").into());
+        window.invoke_finish_naming();
+        assert!(!window.window().is_visible());
+        assert_eq!(saved_name(store), final_name);
+    }
 }
 
 #[derive(Default)]

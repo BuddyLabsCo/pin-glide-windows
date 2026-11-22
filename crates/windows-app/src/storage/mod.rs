@@ -10,15 +10,19 @@ use serde::{Deserialize, Serialize};
 
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
+mod sender_names;
+#[cfg(windows)]
+pub(crate) use sender_names::SenderNameError;
 
 #[cfg(all(test, windows))]
 mod tests;
 #[cfg(windows)]
 mod windows;
 
-const CURRENT_VERSION: u32 = 3;
+const CURRENT_VERSION: u32 = 4;
 static WRITER: Mutex<()> = Mutex::new(());
 
+#[derive(Clone)]
 pub(crate) struct RegistrationStore {
     path: PathBuf,
 }
@@ -35,6 +39,8 @@ pub(crate) struct PairingReference<'a> {
 struct ProtectedPairing {
     sender_id: String,
     protected_key: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -105,20 +111,29 @@ impl RegistrationStore {
         })
     }
 
-    fn update(&self, change: impl FnOnce(&mut Registration) -> io::Result<()>) -> io::Result<()> {
+    fn update<Value, Error>(
+        &self,
+        change: impl FnOnce(&mut Registration) -> Result<Value, Error>,
+    ) -> Result<Value, Error>
+    where
+        Error: From<io::Error>,
+    {
         let _writer = WRITER
             .lock()
             .map_err(|_| io::Error::other("registration writer is unavailable"))?;
         let mut next = self.read()?;
-        change(&mut next)?;
+        let value = change(&mut next)?;
         next.version = CURRENT_VERSION;
-        let directory = self.path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+        let directory = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         fs::create_dir_all(directory)?;
         let mut stage = tempfile::NamedTempFile::new_in(directory)?;
-        serde_json::to_writer(stage.as_file_mut(), &next)?;
+        serde_json::to_writer(stage.as_file_mut(), &next).map_err(io::Error::from)?;
         stage.as_file().sync_all()?;
         stage.persist(&self.path).map_err(|error| error.error)?;
-        Ok(())
+        Ok(value)
     }
 
     fn read(&self) -> io::Result<Registration> {
@@ -158,7 +173,7 @@ impl RegistrationStore {
                     enrollment: None,
                 })
             }
-            2 | CURRENT_VERSION => {
+            2..=CURRENT_VERSION => {
                 let stored: Registration = serde_json::from_reader(BufReader::new(file))?;
                 if stored.version != version || (version == 2 && stored.enrollment.is_some()) {
                     return Err(io::ErrorKind::InvalidData.into());

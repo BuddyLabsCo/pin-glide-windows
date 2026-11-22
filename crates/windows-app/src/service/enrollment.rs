@@ -20,7 +20,7 @@ pub(super) async fn enroll(
     store: &RegistrationStore,
     updates: &ProgressUpdates,
     session: Option<&NewReceiverSession>,
-) -> Result<DeliveryConnection, PairingOutcome> {
+) -> Result<(DeliveryConnection, String), PairingOutcome> {
     let mut pending = match session {
         Some(session) => {
             updates.publish(PairingProgress::CredentialReady);
@@ -88,10 +88,11 @@ pub(super) async fn enroll(
         }
         _ => return Err(PairingOutcome::Failed),
     };
-    store
+    let pairing_id = store
         .finish_enrollment(&pending.operation_id, true)
-        .map_err(|_| PairingOutcome::Failed)?;
-    Ok(connection)
+        .map_err(|_| PairingOutcome::Failed)?
+        .ok_or(PairingOutcome::Failed)?;
+    Ok((connection, pairing_id))
 }
 
 fn start(service: &Service, session: &NewReceiverSession) -> Result<Enrollment, PairingOutcome> {

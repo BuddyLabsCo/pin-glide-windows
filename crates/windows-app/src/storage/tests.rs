@@ -11,8 +11,50 @@ mod dpapi;
 use super::{PairingReference, RegistrationStore};
 
 #[test]
+fn saves_only_a_valid_unique_sender_name_and_preserves_it_on_failure() {
+    use super::SenderNameError::{Duplicate, Empty, InvalidCharacter, TooLong};
+
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("registration.json");
+    fs::write(
+        &path,
+        json!({
+            "version": 4,
+            "receiver_id": "receiver",
+            "active_pairings": {
+                "first": {"sender_id": "sender-1", "protected_key": [], "name": "Σender"},
+                "second": {"sender_id": "sender-2", "protected_key": [], "name": "未命名设备-2"}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let store = RegistrationStore::new(path.clone());
+    for (input, expected) in [
+        ("\u{3000}\t".encode_utf16().collect::<Vec<_>>(), Empty),
+        ("ςENDER".encode_utf16().collect(), Duplicate),
+        ("🚀".repeat(41).encode_utf16().collect(), TooLong),
+        (vec![0xd800], InvalidCharacter),
+    ] {
+        assert!(matches!(store.name_sender("second", &input), Err(error) if error == expected));
+        assert_eq!(store.sender_names().unwrap()["second"], "未命名设备-2");
+    }
+    let name = "🚀".repeat(40);
+    store
+        .name_sender(
+            "second",
+            &format!("　{name}\t").encode_utf16().collect::<Vec<_>>(),
+        )
+        .unwrap();
+    assert_eq!(
+        RegistrationStore::new(path).sender_names().unwrap()["second"],
+        name
+    );
+}
+
+#[test]
 fn migrates_an_older_registration_and_preserves_it_if_replacement_fails() {
-    for version in [1, 2] {
+    for version in [1, 2, 3] {
         verify_migration(version);
     }
 }
@@ -58,7 +100,7 @@ fn verify_migration(version: u32) {
         .commit_provisional(&reference("first"), &[42; 32])
         .unwrap();
     let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(current["version"], 3);
+    assert_eq!(current["version"], 4);
     for field in ["receiver_id", "protected_receiver_token", "active_pairings"] {
         assert_eq!(current[field], legacy[field]);
     }
@@ -77,7 +119,7 @@ fn refuses_unreadable_and_newer_registration_files_without_overwriting_them() {
     let store = RegistrationStore::new(path.clone());
     for content in [
         "broken JSON",
-        r#"{"version":4,"active_pairings":{}}"#,
+        r#"{"version":5,"active_pairings":{}}"#,
         r#"{"version":2,"active_pairings":{"unknown":{"protected_key":"invalid"}}}"#,
     ] {
         fs::write(&path, content).unwrap();

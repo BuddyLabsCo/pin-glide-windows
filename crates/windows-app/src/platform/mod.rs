@@ -1,6 +1,8 @@
+mod clipboard;
 mod instance;
 mod tray;
 
+pub(crate) use clipboard::unicode_clipboard_is_valid;
 pub use instance::{ActivationListener, Instance};
 pub use tray::Tray;
 

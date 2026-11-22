@@ -78,8 +78,10 @@ within 500 lines.
   adds the in-flight enrollment with its Service origin, expiry and operation
   ID. Protect B until redemption finishes and protect R before opening
   delivery. Promote R and the provisional Pairing together after the
-  authenticated delivery upgrade. Read versions 1 and 2 and migrate them on
-  the next successful write.
+  authenticated delivery upgrade. Version 4 adds the local Sender name to
+  each active Pairing. Commit the first available default name on promotion
+  so reception and crash recovery do not depend on the naming window. Read
+  versions 1 through 3 and migrate them on the next successful write.
 - Scope key loss and Pairing removal to the affected Pairing. Receiver
   revocation clears registration and Pairing state while keeping settings.
   Missing R requires explicit new registration. Installation upgrades

@@ -221,6 +221,8 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
         let operation = PairingOperation {
             progress,
             worker: None,
+            #[cfg(windows)]
+            store: None,
         };
         let worker = tokio::spawn(async move {
             drive(
@@ -304,6 +306,8 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
     let operation = PairingOperation {
         progress,
         worker: None,
+        #[cfg(windows)]
+        store: None,
     };
     let worker = tokio::spawn(async move {
         drive(

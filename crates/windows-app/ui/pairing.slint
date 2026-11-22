@@ -1,5 +1,183 @@
 import { Button, Palette } from "std-widgets.slint";
 
+component SenderNameForm inherits Rectangle {
+    in property <bool> chinese;
+    in-out property <string> name;
+    in-out property <string> error;
+    in-out property <bool> invalid-paste;
+    callback validate-paste() -> bool;
+    callback done();
+    public function focus-name() {
+        field.focus();
+    }
+    function paste-name() {
+        root.invalid-paste = !root.validate-paste();
+        root.error = "";
+        if !root.invalid-paste {
+            field.paste();
+        }
+    }
+
+    Text {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 20px;
+        text: root.chinese ? "设备名称" : "Device name";
+        color: #22312f;
+        horizontal-alignment: left;
+    }
+
+    Rectangle {
+        x: 0px;
+        y: 24px;
+        width: parent.width;
+        height: 36px;
+        background: white;
+        border-width: root.error != "" ? 1px : field.has-focus ? 2px : 1px;
+        border-radius: 4px;
+        border-color: root.error != "" ? #903d34 : field.has-focus ? #284e79 : #d1d1d1;
+
+        Rectangle {
+            clip: true;
+            x: 11px;
+            width: parent.width - 22px;
+            ContextMenuArea {
+                Menu {
+                    MenuItem {
+                        title: root.chinese ? "撤消" : "Undo";
+                        activated => { field.undo(); }
+                    }
+
+                    MenuItem {
+                        title: root.chinese ? "重做" : "Redo";
+                        activated => { field.redo(); }
+                    }
+
+                    MenuSeparator { }
+
+                    MenuItem {
+                        title: root.chinese ? "剪切" : "Cut";
+                        enabled: field.has-selection;
+                        activated => { field.cut(); }
+                    }
+
+                    MenuItem {
+                        title: root.chinese ? "复制" : "Copy";
+                        enabled: field.has-selection;
+                        activated => { field.copy(); }
+                    }
+
+                    MenuItem {
+                        title: root.chinese ? "粘贴" : "Paste";
+                        activated => { root.paste-name(); }
+                    }
+
+                    MenuItem {
+                        title: root.chinese ? "全选" : "Select All";
+                        enabled: root.name != "";
+                        activated => { field.select-all(); }
+                    }
+                }
+
+                Text {
+                    width: parent.width;
+                    text: root.invalid-paste ? "�" : root.chinese ? "输入设备名称" : "Enter device name";
+                    visible: root.name == "" && field.preedit-text == "";
+                    color: root.invalid-paste ? #242424 : #757575;
+                    horizontal-alignment: left;
+                    vertical-alignment: center;
+                }
+
+                field := TextInput {
+                    property <length> offset;
+                    x: offset;
+                    width: max(parent.width - 1px, self.preferred-width);
+                    height: 100%;
+                    color: #242424;
+                    vertical-alignment: center;
+                    single-line: true;
+                    text <=> root.name;
+                    accessible-label: root.chinese ? "设备名称" : "Device name";
+                    accessible-description: root.error;
+                    cursor-position-changed(position) => {
+                        if position.x + self.offset > parent.width - 1px {
+                            self.offset = parent.width - 1px - position.x;
+                        } else if position.x + self.offset < 0px {
+                            self.offset = -position.x;
+                        }
+                    }
+                    key-pressed(event) => {
+                        if (event.modifiers.control && (event.text == "v" || event.text == "V"))
+                            || (event.modifiers.shift && event.text == Key.Insert) {
+                            root.paste-name();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                    edited => { root.error = ""; root.invalid-paste = false; }
+                    accepted => { root.done(); }
+                }
+            }
+        }
+    }
+
+    Text {
+        x: 0px;
+        y: 65px;
+        width: parent.width;
+        height: 20px;
+        text: root.error;
+        color: #903d34;
+        font-size: 13px;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        x: parent.width - 112px;
+        y: 101px;
+        width: 112px;
+        height: 36px;
+        property <string> label: root.chinese ? "完成" : "Done";
+        border-radius: 4px;
+        background: done-touch.pressed ? #004a8e : done-touch.has-hover ? #165fa4 : #005fb8;
+        accessible-role: button;
+        accessible-label: self.label;
+        accessible-action-default => { root.done(); }
+        forward-focus: done-focus;
+
+        Text {
+            text: parent.label;
+            color: white;
+            font-weight: 600;
+        }
+
+        if done-focus.has-focus: Rectangle {
+            x: -4px;
+            y: -4px;
+            width: parent.width + 8px;
+            height: parent.height + 8px;
+            border-width: 2px;
+            border-radius: 6px;
+            border-color: #284e79;
+        }
+        done-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Return || event.text == Key.Space {
+                    root.done();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+
+        done-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.done(); }
+        }
+    }
+}
+
 component QrLoading inherits Rectangle {
     in property <float> seconds;
     pure function pulse(offset: float) -> float {
@@ -92,7 +270,15 @@ export component PairingWindow inherits Window {
     in property <PairingStage> stage;
     in property <image> qr;
     in property <string> remaining;
+    in-out property <string> sender-name;
+    in-out property <string> name-error;
+    in-out property <bool> invalid-paste;
     callback refresh();
+    callback finish-naming();
+    callback validate-name-paste() -> bool;
+    public function focus-name() {
+        name-form.focus-name();
+    }
     private property <bool> loading: stage == PairingStage.preparing || stage == PairingStage.confirming
         || stage == PairingStage.credential-ready || stage == PairingStage.checking
         || stage == PairingStage.connecting;
@@ -111,7 +297,7 @@ export component PairingWindow inherits Window {
         : stage == PairingStage.canceled ? (chinese ? "配对已取消。" : "Pairing was canceled.")
         : (chinese ? "配对失败，请重试。" : "Pairing failed. Please try again.");
 
-    title: chinese ? "鹊信 · 配对" : "Pin Glide · Pairing";
+    title: chinese ? "鹊信" : "Pin Glide";
     icon: @image-url("assets/app-icon.png");
     min-width: 440px;
     max-width: 440px;
@@ -151,29 +337,30 @@ export component PairingWindow inherits Window {
                 border-radius: 12px;
                 border-width: 1px;
                 border-color: #dbe8e2;
-                if root.completed: Rectangle {
-                    width: 64px;
-                    height: 64px;
-                    border-radius: 32px;
-                    background: #e3f3ec;
-                    Path {
-                        width: 28px;
-                        height: 28px;
-                        commands: "M 4 14 L 11 21 L 24 8";
-                        stroke: #177761;
-                        stroke-width: 2.5px;
-                    }
-                }
                 if root.loading || (root.completed && root.motion-enabled && root.completion-motion): Rectangle {
                     width: 160px;
                     height: 160px;
-                    background: white;
                     opacity: root.loading ? 1 : 0;
                     animate opacity { duration: root.motion-enabled && root.completed ? 180ms : 0ms; }
                     QrLoading {
                         width: 160px;
                         height: 160px;
                         seconds: root.motion-enabled && parent.opacity > 0 ? mod(animation-tick(), 1.8s) / 1s : 0.68;
+                    }
+                }
+                if root.completed || root.loading: Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 32px;
+                    background: #e3f3ec;
+                    opacity: root.completed ? 1 : 0;
+                    animate opacity { duration: root.motion-enabled && root.completion-motion ? 180ms : 0ms; }
+                    Path {
+                        width: 28px;
+                        height: 28px;
+                        commands: "M 4 14 L 11 21 L 24 8";
+                        stroke: #177761;
+                        stroke-width: 2.5px;
                     }
                 }
                 if root.waiting: Image {
@@ -236,5 +423,19 @@ export component PairingWindow inherits Window {
         Rectangle {
             vertical-stretch: 1;
         }
+    }
+
+    name-form := SenderNameForm {
+        visible: root.completed;
+        x: 68px;
+        y: 320px;
+        width: 304px;
+        height: 137px;
+        chinese: root.chinese;
+        name <=> root.sender-name;
+        error <=> root.name-error;
+        invalid-paste <=> root.invalid-paste;
+        validate-paste => { root.validate-name-paste() }
+        done => { root.finish-naming(); }
     }
 }

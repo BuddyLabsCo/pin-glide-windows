@@ -1,6 +1,7 @@
 use std::{cell::RefCell, sync::Arc};
 
 use crate::service::{PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service};
+use crate::storage::SenderNameError;
 use crate::{PairingStage, PairingWindow, platform};
 use qrcode::{Color, QrCode};
 use slint::{
@@ -19,6 +20,7 @@ struct View {
     operation: PairingOperation,
     rendered_code: Option<Arc<QrCode>>,
     start: Box<dyn Fn() -> PairingOperation>,
+    named: bool,
 }
 
 pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
@@ -55,6 +57,8 @@ fn create_view(
         .window()
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     window.on_refresh(refresh);
+    window.on_finish_naming(finish_naming);
+    window.on_validate_name_paste(platform::unicode_clipboard_is_valid);
     if visible {
         window.show()?;
         super::focus(window.window());
@@ -65,6 +69,7 @@ fn create_view(
             operation: start(notify_progress, PairingStart::ResumePending),
             rendered_code: None,
             start: Box::new(move || start(notify_progress, PairingStart::Fresh)),
+            named: false,
         };
         view.render();
         *pairing = Some(view);
@@ -78,6 +83,12 @@ pub(super) fn reopen() -> Result<bool, PlatformError> {
             return Ok(false);
         };
         view.render();
+        if view.named {
+            if let Some(store) = view.operation.registration() {
+                return super::show_registered(store, view.window.get_chinese());
+            }
+            return Ok(false);
+        }
         view.window
             .set_motion_enabled(platform::animations_enabled());
         if !view.window.window().is_visible() {
@@ -133,28 +144,78 @@ fn notify_progress() {
 fn refresh() {
     PAIRING.with_borrow_mut(|pairing| {
         let Some(view) = pairing else { return };
-        if matches!(
-            view.operation.current(),
-            PairingProgress::Finished(outcome) if !matches!(outcome, PairingOutcome::KeyConfirmed(_))
-        ) {
+        if matches!(view.operation.current(), PairingProgress::Finished(_)) {
             view.operation = (view.start)();
             view.render();
         }
     });
 }
 
+fn finish_naming() {
+    PAIRING.with_borrow_mut(|pairing| {
+        let Some(view) = pairing else { return };
+        if view.named {
+            return;
+        }
+        let PairingProgress::Completed { pairing_id } = view.operation.current() else {
+            return;
+        };
+        let Some(store) = view.operation.registration() else {
+            return;
+        };
+        let input = view.window.get_sender_name();
+        let result = if view.window.get_invalid_paste() {
+            Err(SenderNameError::InvalidCharacter)
+        } else {
+            store.name_sender(&pairing_id, &input.encode_utf16().collect::<Vec<_>>())
+        };
+        let error = match result {
+            Ok(()) => match super::show_registered(store, view.window.get_chinese()) {
+                Ok(true) => {
+                    view.named = true;
+                    let _ = view.window.hide();
+                    return;
+                }
+                _ => SenderNameError::Storage,
+            },
+            Err(error) => error,
+        };
+        view.window.set_name_error(
+            match (view.window.get_chinese(), error) {
+                (true, SenderNameError::Empty) => "请填写设备名称。",
+                (true, SenderNameError::TooLong) => "设备名称最多 40 个字符。",
+                (true, SenderNameError::InvalidCharacter) => "名称包含无效字符，请重新输入。",
+                (true, SenderNameError::Duplicate) => "已有一台同名设备，请换一个名称。",
+                (true, SenderNameError::Storage) => "无法保存设备名称，请重试。",
+                (false, SenderNameError::Empty) => "Enter a device name.",
+                (false, SenderNameError::TooLong) => "Use at most 40 characters.",
+                (false, SenderNameError::InvalidCharacter) => {
+                    "The name contains an invalid character."
+                }
+                (false, SenderNameError::Duplicate) => {
+                    "A device already uses this name. Choose another."
+                }
+                (false, SenderNameError::Storage) => "Could not save the device name. Try again.",
+            }
+            .into(),
+        );
+        view.window.invoke_focus_name();
+    });
+}
+
 impl View {
     fn render(&mut self) {
-        let stage = match self.operation.current() {
+        let progress = self.operation.current();
+        let stage = match &progress {
             PairingProgress::Preparing => PairingStage::Preparing,
             PairingProgress::Waiting { code, seconds } => {
                 if !self
                     .rendered_code
                     .as_ref()
-                    .is_some_and(|previous| Arc::ptr_eq(previous, &code))
+                    .is_some_and(|previous| Arc::ptr_eq(previous, code))
                 {
-                    self.window.set_qr(qr_image(&code));
-                    self.rendered_code = Some(code);
+                    self.window.set_qr(qr_image(code));
+                    self.rendered_code = Some(Arc::clone(code));
                 }
                 self.window
                     .set_remaining(format!("{:02}:{:02}", seconds / 60, seconds % 60).into());
@@ -164,20 +225,30 @@ impl View {
             PairingProgress::CredentialReady => PairingStage::CredentialReady,
             PairingProgress::Checking => PairingStage::Checking,
             PairingProgress::Connecting => PairingStage::Connecting,
+            PairingProgress::Completed { .. } => PairingStage::Completed,
             PairingProgress::Finished(outcome) => match outcome {
                 PairingOutcome::CreateFailed => PairingStage::CreateFailed,
                 PairingOutcome::Failed => PairingStage::Failed,
                 PairingOutcome::Expired => PairingStage::Expired,
                 PairingOutcome::Canceled => PairingStage::Canceled,
-                PairingOutcome::KeyConfirmed(_) => PairingStage::Completed,
+                PairingOutcome::KeyConfirmed(_) => PairingStage::Failed,
             },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {
             self.window.set_qr(Image::default());
         }
         if stage == PairingStage::Completed && self.window.get_stage() != stage {
-            self.window
-                .set_completion_motion(self.window.window().is_visible());
+            let visible = self.window.window().is_visible();
+            self.named = !visible;
+            self.window.set_completion_motion(visible);
+            if visible
+                && let PairingProgress::Completed { pairing_id } = progress
+                && let Some(store) = self.operation.registration()
+                && let Ok(names) = store.sender_names()
+                && let Some(name) = names.get(&pairing_id)
+            {
+                self.window.set_sender_name(name.as_str().into());
+            }
         }
         self.window.set_stage(stage);
     }
