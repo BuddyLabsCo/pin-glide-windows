@@ -1,9 +1,10 @@
 use std::{io, time::SystemTime};
 
+use receiver_core::pairing::EnrollmentPhase;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use super::{ProtectedPairing, RegistrationStore, protect, unprotect};
+use super::{ProtectedPairing, ProvisionalPairing, RegistrationStore, protect, unprotect};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -13,14 +14,7 @@ pub(crate) struct Enrollment {
     pub receiver_id: String,
     pub operation_id: String,
     pub expires_at: SystemTime,
-    pub phase: EnrollmentPhase,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub(crate) enum EnrollmentPhase {
-    Attempt0(Vec<u8>),
-    Attempt1(Vec<u8>),
-    Issued(Vec<u8>),
+    pub phase: EnrollmentPhase<Vec<u8>>,
 }
 
 impl Enrollment {
@@ -51,17 +45,12 @@ impl Enrollment {
         Ok(Zeroizing::new(token.to_owned()))
     }
 
-    pub(crate) fn retry(&mut self) -> io::Result<()> {
-        let EnrollmentPhase::Attempt0(blob) = &mut self.phase else {
-            return Err(io::ErrorKind::InvalidData.into());
-        };
-        self.phase = EnrollmentPhase::Attempt1(std::mem::take(blob));
-        Ok(())
+    pub(crate) fn protect_token(token: &str) -> io::Result<Vec<u8>> {
+        protect(token.as_bytes())
     }
 
-    pub(crate) fn issue(&mut self, token: &str) -> io::Result<()> {
-        self.phase = EnrollmentPhase::Issued(protect(token.as_bytes())?);
-        Ok(())
+    fn matches(&self, pairing: &ProvisionalPairing) -> bool {
+        pairing.session_id == self.session_id && pairing.receiver_id == self.receiver_id
     }
 }
 
@@ -72,10 +61,7 @@ impl RegistrationStore {
             && !registration
                 .provisional_pairing
                 .as_ref()
-                .is_some_and(|pairing| {
-                    pairing.session_id == enrollment.session_id
-                        && pairing.receiver_id == enrollment.receiver_id
-                })
+                .is_some_and(|pairing| enrollment.matches(pairing))
         {
             return Err(io::ErrorKind::InvalidData.into());
         }
@@ -84,13 +70,14 @@ impl RegistrationStore {
 
     pub(crate) fn save_enrollment(&self, enrollment: &Enrollment) -> io::Result<()> {
         self.update(|next| {
-            if !next.provisional_pairing.as_ref().is_some_and(|pairing| {
-                pairing.session_id == enrollment.session_id
-                    && pairing.receiver_id == enrollment.receiver_id
-            }) || next
-                .enrollment
+            if !next
+                .provisional_pairing
                 .as_ref()
-                .is_some_and(|stored| stored.operation_id != enrollment.operation_id)
+                .is_some_and(|pairing| enrollment.matches(pairing))
+                || next
+                    .enrollment
+                    .as_ref()
+                    .is_some_and(|stored| stored.operation_id != enrollment.operation_id)
             {
                 return Err(io::ErrorKind::InvalidData.into());
             }
@@ -106,18 +93,15 @@ impl RegistrationStore {
                 .take()
                 .filter(|pending| pending.operation_id == operation_id)
                 .ok_or(io::ErrorKind::InvalidData)?;
+            let pairing = next
+                .provisional_pairing
+                .take()
+                .filter(|pairing| enrollment.matches(pairing))
+                .ok_or(io::ErrorKind::InvalidData)?;
             if completed {
                 let EnrollmentPhase::Issued(token) = enrollment.phase else {
                     return Err(io::ErrorKind::InvalidData.into());
                 };
-                let pairing = next
-                    .provisional_pairing
-                    .take()
-                    .filter(|pairing| {
-                        pairing.session_id == enrollment.session_id
-                            && pairing.receiver_id == enrollment.receiver_id
-                    })
-                    .ok_or(io::ErrorKind::InvalidData)?;
                 if next.receiver_id.as_ref() != Some(&enrollment.receiver_id) {
                     next.active_pairings.clear();
                 }
@@ -130,8 +114,6 @@ impl RegistrationStore {
                         protected_key: pairing.protected_key,
                     },
                 );
-            } else {
-                next.provisional_pairing = None;
             }
             Ok(())
         })

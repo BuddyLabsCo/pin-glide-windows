@@ -1,6 +1,6 @@
 use std::{cell::RefCell, sync::Arc};
 
-use crate::service::{PairingOperation, PairingOutcome, PairingProgress, Service};
+use crate::service::{PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service};
 use crate::{PairingStage, PairingWindow, platform};
 use qrcode::{Color, QrCode};
 use slint::{
@@ -34,7 +34,7 @@ pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
 
 pub fn open_pairing(
     chinese: bool,
-    start: impl Fn(fn()) -> PairingOperation + 'static,
+    start: impl Fn(fn(), PairingStart) -> PairingOperation + 'static,
 ) -> Result<PairingWindow, PlatformError> {
     if reopen()? {
         return Ok(PAIRING.with_borrow(|pairing| pairing.as_ref().unwrap().window.clone_strong()));
@@ -44,7 +44,7 @@ pub fn open_pairing(
 
 fn create_view(
     chinese: bool,
-    start: impl Fn(fn()) -> PairingOperation + 'static,
+    start: impl Fn(fn(), PairingStart) -> PairingOperation + 'static,
     visible: bool,
 ) -> Result<PairingWindow, PlatformError> {
     let window = PairingWindow::new()?;
@@ -62,9 +62,9 @@ fn create_view(
     PAIRING.with_borrow_mut(|pairing| {
         let mut view = View {
             window: window.clone_strong(),
-            operation: start(notify_progress),
+            operation: start(notify_progress, PairingStart::ResumePending),
             rendered_code: None,
-            start: Box::new(move || start(notify_progress)),
+            start: Box::new(move || start(notify_progress, PairingStart::Fresh)),
         };
         view.render();
         *pairing = Some(view);
@@ -110,14 +110,14 @@ pub(super) fn shutdown() {
     }
 }
 
-fn start_operation(notify: fn()) -> PairingOperation {
+fn start_operation(notify: fn(), start: PairingStart) -> PairingOperation {
     #[cfg(test)]
     if let Some(service) = tests::connect() {
-        return PairingOperation::start(move || Some(service), notify);
+        return PairingOperation::start(move || Some(service), notify, start);
     }
     let connect =
         || option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok());
-    PairingOperation::start(connect, notify)
+    PairingOperation::start(connect, notify, start)
 }
 
 fn notify_progress() {
@@ -174,6 +174,10 @@ impl View {
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {
             self.window.set_qr(Image::default());
+        }
+        if stage == PairingStage::Completed && self.window.get_stage() != stage {
+            self.window
+                .set_completion_motion(self.window.window().is_visible());
         }
         self.window.set_stage(stage);
     }

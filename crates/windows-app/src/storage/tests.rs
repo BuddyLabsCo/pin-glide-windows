@@ -12,16 +12,31 @@ use super::{PairingReference, RegistrationStore};
 
 #[test]
 fn migrates_an_older_registration_and_preserves_it_if_replacement_fails() {
+    for version in [1, 2] {
+        verify_migration(version);
+    }
+}
+
+fn verify_migration(version: u32) {
     let directory = tempdir().unwrap();
     let path = directory.path().join("registration.json");
-    let legacy = json!({
-        "version": 1,
+    let mut legacy = json!({
+        "version": version,
         "receiver_id": "active-receiver",
         "protected_receiver_token": [66, 77],
         "active_pairings": {
             "active-pairing": {"sender_id": "active-sender", "protected_key": [55, 66]}
         }
     });
+    if version == 2 {
+        legacy["provisional_pairing"] = json!({
+            "session_id": "older-session",
+            "receiver_id": "older-receiver",
+            "pairing_id": "older-pairing",
+            "sender_id": "older-sender",
+            "protected_key": [44, 55],
+        });
+    }
     let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
     fs::write(&path, &legacy_bytes).unwrap();
     let store = RegistrationStore::new(path.clone());

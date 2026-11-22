@@ -4,6 +4,7 @@ use pin_glide_http::{
     apis::urlencode,
     models::{IssuedReceiverToken, RedeemRequest},
 };
+use receiver_core::pairing::{EnrollmentAction, EnrollmentEvent};
 use reqwest::StatusCode;
 use tokio::time::timeout;
 use zeroize::Zeroizing;
@@ -12,13 +13,7 @@ use super::{
     NewReceiverSession, PairingOutcome, PairingProgress, Service, delivery::DeliveryConnection,
     pairing_events::PairingEventError, pairing_operation::ProgressUpdates,
 };
-use crate::storage::{Enrollment, EnrollmentPhase, RegistrationStore};
-
-enum Redemption {
-    Issued(Zeroizing<String>),
-    Uncertain,
-    Rejected,
-}
+use crate::storage::{Enrollment, RegistrationStore};
 
 pub(super) async fn enroll(
     service: &Service,
@@ -44,30 +39,38 @@ pub(super) async fn enroll(
     if pending.origin != service.config.base_path {
         return Err(PairingOutcome::Failed);
     }
-    if session.is_some() {
-        match redeem(service, &pending, 0).await {
-            Redemption::Issued(token) => save_issued(store, &mut pending, &token)?,
-            Redemption::Uncertain => {}
-            Redemption::Rejected => return reject(store, &pending),
-        }
-    }
-    match pending.phase {
-        EnrollmentPhase::Attempt0(_) => {
-            updates.publish(PairingProgress::Checking);
-            if pending.expires_at <= SystemTime::now() {
-                return reject(store, &pending);
+    let mut event = if session.is_some() {
+        EnrollmentEvent::Start
+    } else {
+        EnrollmentEvent::Resume
+    };
+    loop {
+        let newly_issued = matches!(event, EnrollmentEvent::Issued(_));
+        let action = pending
+            .phase
+            .advance(event, SystemTime::now(), pending.expires_at);
+        match action {
+            EnrollmentAction::Redeem(attempt, phase) => {
+                pending.phase = phase;
+                if attempt == 1 {
+                    updates.publish(PairingProgress::Checking);
+                    store
+                        .save_enrollment(&pending)
+                        .map_err(|_| PairingOutcome::Failed)?;
+                }
+                event = redeem(service, &pending, attempt).await?;
             }
-            pending.retry().map_err(|_| PairingOutcome::Failed)?;
-            store
-                .save_enrollment(&pending)
-                .map_err(|_| PairingOutcome::Failed)?;
-            match redeem(service, &pending, 1).await {
-                Redemption::Issued(token) => save_issued(store, &mut pending, &token)?,
-                Redemption::Rejected | Redemption::Uncertain => return reject(store, &pending),
+            EnrollmentAction::Connect(phase) => {
+                pending.phase = phase;
+                if newly_issued {
+                    store
+                        .save_enrollment(&pending)
+                        .map_err(|_| PairingOutcome::Failed)?;
+                }
+                break;
             }
+            EnrollmentAction::Fail => return reject(store, &pending.operation_id),
         }
-        EnrollmentPhase::Attempt1(_) => return reject(store, &pending),
-        EnrollmentPhase::Issued(_) => {}
     }
     updates.publish(PairingProgress::Connecting);
     let token = pending.token().map_err(|_| PairingOutcome::Failed)?;
@@ -81,7 +84,7 @@ pub(super) async fn enroll(
         Ok(Err(PairingEventError::Rejected { status, .. }))
             if status.is_client_error() && status != StatusCode::CONFLICT =>
         {
-            return reject(store, &pending);
+            return reject(store, &pending.operation_id);
         }
         _ => return Err(PairingOutcome::Failed),
     };
@@ -109,12 +112,19 @@ fn start(service: &Service, session: &NewReceiverSession) -> Result<Enrollment, 
     .map_err(|_| PairingOutcome::Failed)
 }
 
-async fn redeem(service: &Service, pending: &Enrollment, attempt: i64) -> Redemption {
-    if pending.expires_at <= SystemTime::now() {
-        return Redemption::Rejected;
+async fn redeem(
+    service: &Service,
+    pending: &Enrollment,
+    attempt: i64,
+) -> Result<EnrollmentEvent<Vec<u8>>, PairingOutcome> {
+    if !pending
+        .phase
+        .can_redeem_at(SystemTime::now(), pending.expires_at)
+    {
+        return Ok(EnrollmentEvent::Rejected);
     }
     let Ok(token) = pending.token() else {
-        return Redemption::Rejected;
+        return Ok(EnrollmentEvent::Rejected);
     };
     let request = RedeemRequest::new(attempt, pending.operation_id.clone());
     let config = &service.config;
@@ -131,32 +141,26 @@ async fn redeem(service: &Service, pending: &Enrollment, attempt: i64) -> Redemp
         .await;
     let response = match response {
         Ok(response) if response.status() == StatusCode::OK => response,
-        Err(error) if !error.is_builder() && !error.is_connect() => return Redemption::Uncertain,
-        _ => return Redemption::Rejected,
+        Err(error) if !error.is_builder() && !error.is_connect() => {
+            return Ok(EnrollmentEvent::Uncertain);
+        }
+        _ => return Ok(EnrollmentEvent::Rejected),
     };
     match response.json::<IssuedReceiverToken>().await {
         Ok(issued)
             if issued.receiver_id == pending.receiver_id && !issued.receiver_token.is_empty() =>
         {
-            Redemption::Issued(Zeroizing::new(issued.receiver_token))
+            let token = Zeroizing::new(issued.receiver_token);
+            Enrollment::protect_token(&token)
+                .map(EnrollmentEvent::Issued)
+                .map_err(|_| PairingOutcome::Failed)
         }
-        Ok(_) => Redemption::Rejected,
-        Err(_) => Redemption::Uncertain,
+        Ok(_) => Ok(EnrollmentEvent::Rejected),
+        Err(_) => Ok(EnrollmentEvent::Uncertain),
     }
 }
 
-fn save_issued(
-    store: &RegistrationStore,
-    pending: &mut Enrollment,
-    token: &str,
-) -> Result<(), PairingOutcome> {
-    pending
-        .issue(token)
-        .and_then(|()| store.save_enrollment(pending))
-        .map_err(|_| PairingOutcome::Failed)
-}
-
-fn reject<T>(store: &RegistrationStore, pending: &Enrollment) -> Result<T, PairingOutcome> {
-    let _ = store.finish_enrollment(&pending.operation_id, false);
+fn reject<T>(store: &RegistrationStore, operation_id: &str) -> Result<T, PairingOutcome> {
+    let _ = store.finish_enrollment(operation_id, false);
     Err(PairingOutcome::Failed)
 }

@@ -223,7 +223,15 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
             worker: None,
         };
         let worker = tokio::spawn(async move {
-            drive(&service, &updates, stopping, || clock(START), None).await
+            drive(
+                &service,
+                &updates,
+                stopping,
+                || clock(START),
+                None,
+                super::PairingStart::Fresh,
+            )
+            .await
         });
         send.send(Some("awaiting_authorization")).unwrap();
         wait_for(&operation, |state| {
@@ -271,7 +279,15 @@ async fn upgrade_rejection_distinguishes_expiry_from_other_failures() {
         let (service, server) = script_service(Script::Rejected(status, code));
         let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
-        drive(&service, &updates, stopping, || clock(START), None).await;
+        drive(
+            &service,
+            &updates,
+            stopping,
+            || clock(START),
+            None,
+            super::PairingStart::Fresh,
+        )
+        .await;
         assert!(
             matches!(*progress.borrow(), PairingProgress::Finished(outcome) if outcome == expected)
         );
@@ -289,10 +305,17 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
         progress,
         worker: None,
     };
-    let worker =
-        tokio::spawn(
-            async move { drive(&service, &updates, stopping, || clock(START), None).await },
-        );
+    let worker = tokio::spawn(async move {
+        drive(
+            &service,
+            &updates,
+            stopping,
+            || clock(START),
+            None,
+            super::PairingStart::Fresh,
+        )
+        .await
+    });
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })
@@ -328,7 +351,11 @@ async fn live_close_publishes_failure_while_cancellation_response_is_pending() {
         received,
         release: hold,
     });
-    let operation = PairingOperation::start(move || Some(service), || {});
+    let operation = PairingOperation::start(
+        move || Some(service),
+        || {},
+        super::PairingStart::ResumePending,
+    );
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })

@@ -22,7 +22,7 @@ mod enrollment;
 mod pairing_events;
 pub(crate) mod pairing_operation;
 mod pairing_snapshot;
-pub use pairing_operation::{PairingOperation, PairingProgress};
+pub use pairing_operation::{PairingOperation, PairingProgress, PairingStart};
 pub use receiver_core::pairing::{PairingOutcome, SessionState};
 
 #[cfg(test)]

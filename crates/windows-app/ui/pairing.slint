@@ -88,6 +88,7 @@ export enum PairingStage {
 export component PairingWindow inherits Window {
     in property <bool> chinese;
     in property <bool> motion-enabled;
+    in property <bool> completion-motion;
     in property <PairingStage> stage;
     in property <image> qr;
     in property <string> remaining;
@@ -150,26 +151,29 @@ export component PairingWindow inherits Window {
                 border-radius: 12px;
                 border-width: 1px;
                 border-color: #dbe8e2;
-                if root.loading || root.completed: QrLoading {
-                    width: 160px;
-                    height: 160px;
-                    seconds: root.motion-enabled && self.opacity > 0 ? mod(animation-tick(), 1.8s) / 1s : 0.68;
-                    opacity: root.loading ? 1 : 0;
-                    animate opacity { duration: root.motion-enabled ? 180ms : 0ms; }
-                }
-                if root.loading || root.completed: Rectangle {
+                if root.completed: Rectangle {
                     width: 64px;
                     height: 64px;
                     border-radius: 32px;
                     background: #e3f3ec;
-                    opacity: root.completed ? 1 : 0;
-                    animate opacity { duration: root.motion-enabled ? 180ms : 0ms; }
                     Path {
                         width: 28px;
                         height: 28px;
                         commands: "M 4 14 L 11 21 L 24 8";
                         stroke: #177761;
                         stroke-width: 2.5px;
+                    }
+                }
+                if root.loading || (root.completed && root.motion-enabled && root.completion-motion): Rectangle {
+                    width: 160px;
+                    height: 160px;
+                    background: white;
+                    opacity: root.loading ? 1 : 0;
+                    animate opacity { duration: root.motion-enabled && root.completed ? 180ms : 0ms; }
+                    QrLoading {
+                        width: 160px;
+                        height: 160px;
+                        seconds: root.motion-enabled && parent.opacity > 0 ? mod(animation-tick(), 1.8s) / 1s : 0.68;
                     }
                 }
                 if root.waiting: Image {

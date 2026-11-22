@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 mod enrollment;
-pub(crate) use enrollment::{Enrollment, EnrollmentPhase};
+pub(crate) use enrollment::Enrollment;
 
 #[cfg(all(test, windows))]
 mod tests;

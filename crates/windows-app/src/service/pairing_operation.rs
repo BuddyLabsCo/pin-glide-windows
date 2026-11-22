@@ -41,6 +41,12 @@ pub struct PairingOperation {
     worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
 }
 
+#[derive(Clone, Copy)]
+pub enum PairingStart {
+    ResumePending,
+    Fresh,
+}
+
 pub(super) struct ProgressUpdates {
     snapshot: watch::Sender<PairingProgress>,
     notify: fn(),
@@ -68,8 +74,17 @@ impl ProgressUpdates {
 }
 
 impl PairingOperation {
-    pub fn start(connect: impl FnOnce() -> Option<Service> + Send + 'static, notify: fn()) -> Self {
-        Self::spawn(connect, notify, RegistrationStore::for_current_user().ok())
+    pub fn start(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        start: PairingStart,
+    ) -> Self {
+        Self::spawn(
+            connect,
+            notify,
+            RegistrationStore::for_current_user().ok(),
+            start,
+        )
     }
 
     pub(crate) fn has_pending_enrollment() -> bool {
@@ -82,14 +97,16 @@ impl PairingOperation {
         connect: impl FnOnce() -> Option<Service> + Send + 'static,
         notify: fn(),
         path: PathBuf,
+        start: PairingStart,
     ) -> Self {
-        Self::spawn(connect, notify, Some(RegistrationStore::new(path)))
+        Self::spawn(connect, notify, Some(RegistrationStore::new(path)), start)
     }
 
     fn spawn(
         connect: impl FnOnce() -> Option<Service> + Send + 'static,
         notify: fn(),
         store: Option<RegistrationStore>,
+        start: PairingStart,
     ) -> Self {
         let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
         let (stop, stopping) = oneshot::channel();
@@ -113,6 +130,7 @@ impl PairingOperation {
                             stopping,
                             SystemTime::now,
                             store.as_ref(),
+                            start,
                         ));
                     }
                     _ => {
@@ -146,12 +164,24 @@ async fn drive(
     stopping: oneshot::Receiver<()>,
     now: impl FnOnce() -> SystemTime,
     store: Option<&RegistrationStore>,
+    start: PairingStart,
 ) {
-    if let Some(store) = store
-        && store.enrollment().is_ok_and(|pending| pending.is_some())
-    {
-        finish_enrollment(service, store, updates, stopping, None).await;
-        return;
+    if let Some(store) = store {
+        match (store.enrollment(), start) {
+            (Ok(Some(_)), PairingStart::ResumePending) => {
+                finish_enrollment(service, store, updates, stopping, None).await;
+                return;
+            }
+            (Ok(Some(pending)), PairingStart::Fresh)
+                if store
+                    .finish_enrollment(&pending.operation_id, false)
+                    .is_err() =>
+            {
+                updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
+                return;
+            }
+            _ => {}
+        }
     }
     let Ok(material) = PairingMaterial::generate() else {
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
