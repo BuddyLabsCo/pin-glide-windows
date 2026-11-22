@@ -6548,6 +6548,7 @@ dependencies = [
  "aes-gcm",
  "base64",
  "futures-util",
+ "getrandom 0.4.3",
  "hpke",
  "native-tls",
  "pin-glide-http",

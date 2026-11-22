@@ -6,8 +6,7 @@ use std::{
 
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{
-    Message, accept_hdr,
-    handshake::server::{Request, Response},
+    Message, WebSocket,
     protocol::{CloseFrame, frame::coding::CloseCode},
 };
 
@@ -16,6 +15,9 @@ use super::{
     Service, StatusCode, drive, oneshot, wait_for_confirmation, watch,
 };
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
+
+#[path = "../../../tests/support/socket.rs"]
+mod socket;
 
 pub(crate) const TOKEN: &str = "fixture-pairing-b";
 const EXPIRY: &str = "2030-01-01T00:01:00Z";
@@ -157,25 +159,8 @@ fn send_events(connection: impl Read + Write, frames: &mpsc::Receiver<Option<&st
 pub(crate) fn accept_events<Stream: Read + Write>(
     connection: Stream,
     path: &str,
-) -> tokio_tungstenite::tungstenite::WebSocket<Stream> {
-    #[expect(
-        clippy::result_large_err,
-        reason = "tungstenite fixes the callback error type"
-    )]
-    let socket = accept_hdr(connection, |request: &Request, mut response: Response| {
-        assert_eq!(request.uri().path(), path);
-        assert_eq!(
-            request.headers()["authorization"],
-            format!("Bearer {TOKEN}")
-        );
-        assert_eq!(request.headers()["sec-websocket-protocol"], "pin-glide.v1");
-        response
-            .headers_mut()
-            .insert("sec-websocket-protocol", "pin-glide.v1".parse().unwrap());
-        Ok(response)
-    })
-    .unwrap();
-    socket
+) -> WebSocket<Stream> {
+    socket::accept_socket(connection, path, TOKEN)
 }
 
 pub(crate) fn send_state(

@@ -17,6 +17,8 @@ use pin_glide_http::{
 use reqwest::{Certificate, Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+mod delivery;
+mod enrollment;
 mod pairing_events;
 pub(crate) mod pairing_operation;
 mod pairing_snapshot;
@@ -278,5 +280,6 @@ fn client_builder() -> ClientBuilder {
         .tls_backend_native()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(15))
 }

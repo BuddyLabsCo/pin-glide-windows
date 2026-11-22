@@ -9,6 +9,10 @@ mod pairing;
 
 pub use pairing::open_pairing;
 
+pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
+    pairing::resume(platform::chinese())
+}
+
 thread_local! {
     static WELCOME: RefCell<Option<WelcomeWindow>> = const { RefCell::new(None) };
 }

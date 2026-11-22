@@ -9,10 +9,13 @@ use std::{
 
 use windows_sys::Win32::{
     Foundation::LocalFree,
-    Security::Cryptography::{CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData},
+    Security::Cryptography::{
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+    },
     System::Com::CoTaskMemFree,
     UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath},
 };
+use zeroize::{Zeroize, Zeroizing};
 
 pub(super) fn local_app_data() -> io::Result<PathBuf> {
     let mut path = null_mut();
@@ -33,31 +36,61 @@ pub(super) fn local_app_data() -> io::Result<PathBuf> {
     Ok(output.into())
 }
 
-pub(super) fn protect(key: &[u8; 32]) -> io::Result<Vec<u8>> {
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: 32,
-        pbData: key.as_ptr().cast_mut(),
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    // SAFETY: DPAPI reads the fixed-size input and writes to the provided output blob.
-    let success = unsafe {
+pub(super) fn protect(secret: &[u8]) -> io::Result<Vec<u8>> {
+    // SAFETY: DPAPI reads the input and writes to the provided output blob.
+    dpapi(secret, |input, output| unsafe {
         CryptProtectData(
-            &input,
+            input,
             null(),
             null(),
             null(),
             null(),
             CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
+            output,
         )
+    })
+}
+
+pub(super) fn unprotect(blob: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
+    // SAFETY: DPAPI reads the input and writes to a local allocation.
+    dpapi(blob, |input, output| unsafe {
+        CryptUnprotectData(
+            input,
+            null_mut(),
+            null(),
+            null(),
+            null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            output,
+        )
+    })
+    .map(Zeroizing::new)
+}
+
+fn dpapi(
+    blob: &[u8],
+    transform: impl FnOnce(&CRYPT_INTEGER_BLOB, &mut CRYPT_INTEGER_BLOB) -> i32,
+) -> io::Result<Vec<u8>> {
+    if blob.is_empty() {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: blob.len().try_into().map_err(io::Error::other)?,
+        pbData: blob.as_ptr().cast_mut(),
     };
-    if success == 0 {
+    let mut output = CRYPT_INTEGER_BLOB::default();
+    if transform(&input, &mut output) == 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: successful DPAPI protection returns a valid local allocation with the declared size.
+    if output.pbData.is_null() {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    // SAFETY: the successful output allocation is writable, and is freed after copying and clearing it.
     unsafe {
-        let protected = slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let bytes = slice::from_raw_parts_mut(output.pbData, output.cbData as usize);
+        let result = bytes.to_vec();
+        bytes.zeroize();
         LocalFree(output.pbData.cast());
-        Ok(protected)
+        Ok(result)
     }
 }

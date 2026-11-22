@@ -76,12 +76,17 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         (PairingStage::Expired, "pair-expired"),
         (PairingStage::Waiting, "scan-to-prepare"),
         (PairingStage::CredentialReady, "pair-credential-ready"),
+        (PairingStage::Checking, "pair-uncertain"),
+        (PairingStage::Connecting, "pair-issued"),
+        (PairingStage::Completed, "pair-done"),
     ]
     .into_iter()
     .peekable();
     let timer = Timer::default();
     let started = Instant::now();
     let mut frame = None;
+    let mut reopened = None;
+    let mut captured_transition = false;
     timer.start(TimerMode::Repeated, Duration::from_millis(60), move || {
         assert!(started.elapsed() < Duration::from_secs(18));
         let Some(&(stage, name)) = states.peek() else {
@@ -92,6 +97,27 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         }
         if stage == PairingStage::Failed && may_refresh.try_recv().is_err() {
             return;
+        }
+        if stage == PairingStage::Completed {
+            let reopened = reopened.get_or_insert_with(|| {
+                assert!(!window.window().is_visible());
+                ui::open();
+                assert_eq!(window.get_stage(), PairingStage::Completed);
+                Instant::now()
+            });
+            if !captured_transition
+                && reopened.elapsed() >= Duration::from_millis(50)
+                && let Some(directory) = &evidence
+            {
+                capture(
+                    &window,
+                    &Path::new(directory).join("pair-done-transition.ppm"),
+                );
+                captured_transition = true;
+            }
+            if reopened.elapsed() < Duration::from_millis(200) {
+                return;
+            }
         }
         assert!(window.window().is_visible());
         if name == "scan-to-prepare" {
@@ -147,13 +173,12 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         states.next();
         match stage {
             PairingStage::Confirming => advance.send(()).unwrap(),
-            PairingStage::CredentialReady => {
+            PairingStage::CredentialReady | PairingStage::Checking => advance.send(()).unwrap(),
+            PairingStage::Connecting => {
                 window.window().hide().unwrap();
-                ui::open();
-                assert!(window.window().is_visible());
-                assert_eq!(window.get_stage(), PairingStage::CredentialReady);
-                slint::quit_event_loop().unwrap();
+                advance.send(()).unwrap();
             }
+            PairingStage::Completed => slint::quit_event_loop().unwrap(),
             _ => window.invoke_refresh(),
         }
     });
@@ -226,8 +251,42 @@ fn issue_sessions(
                     );
                     assert_bearer(&headers);
                     credential_ready(&mut socket, complete.get_mut(), claimed);
+                    issue_credential(&acceptor, &listener, &release);
                 }
             }
         }
     })
+}
+
+fn issue_credential(
+    acceptor: &native_tls::TlsAcceptor,
+    listener: &TcpListener,
+    release: &mpsc::Receiver<()>,
+) {
+    let mut original = BufReader::new(accept(acceptor, listener));
+    assert_redeem(&mut original, 0);
+    release.recv_timeout(Duration::from_secs(5)).unwrap();
+    drop(original);
+    let mut retry = BufReader::new(accept(acceptor, listener));
+    assert_redeem(&mut retry, 1);
+    release.recv_timeout(Duration::from_secs(5)).unwrap();
+    write_response(
+        retry.get_mut(),
+        "200 OK",
+        &json!({"receiverId": "receiver-1", "receiverToken": RECEIVER_TOKEN}),
+    );
+    let connection = accept(acceptor, listener);
+    release.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_peer_left(&mut accept_delivery(connection));
+}
+
+fn assert_redeem(connection: &mut BufReader<Connection>, attempt: i32) {
+    let (request, headers, body) = read_request_parts(connection);
+    assert_eq!(
+        request,
+        "POST /v1/pairing-sessions/fixture-4/receiver-token HTTP/1.1\r\n"
+    );
+    assert_bearer(&headers);
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["attempt"], attempt);
 }

@@ -17,9 +17,10 @@ use tokio_tungstenite::{
 use super::{NewReceiverSession, Service, SessionState, pairing_snapshot::Snapshot};
 
 const PROTOCOL: &str = "pin-glide.v1";
+pub(super) type Socket = WebSocketStream<reqwest::Upgraded>;
 
 pub(super) struct PairingEvents {
-    socket: WebSocketStream<reqwest::Upgraded>,
+    socket: Socket,
     session_id: String,
     receiver_id: String,
 }
@@ -49,15 +50,32 @@ impl Service {
         &self,
         session: &NewReceiverSession,
     ) -> Result<PairingEvents, PairingEventError> {
-        let path = &self.config.base_path;
         let session_id = pin_glide_http::apis::urlencode(&session.session_id);
+        let socket = self
+            .websocket(
+                &format!("/v1/pairing-sessions/{session_id}/events"),
+                &session.pairing_token,
+            )
+            .await?;
+        Ok(PairingEvents {
+            socket,
+            session_id: session.session_id.clone(),
+            receiver_id: session.receiver_id.clone(),
+        })
+    }
+
+    pub(super) async fn websocket(
+        &self,
+        route: &str,
+        token: &str,
+    ) -> Result<Socket, PairingEventError> {
         let key = generate_key();
         let response = self
             .config
             .client
-            .get(format!("{path}/v1/pairing-sessions/{session_id}/events"))
+            .get(format!("{}{route}", self.config.base_path))
             .version(Version::HTTP_11)
-            .bearer_auth(&session.pairing_token)
+            .bearer_auth(token)
             .header(header::CONNECTION, "Upgrade")
             .header(header::UPGRADE, "websocket")
             .header(header::SEC_WEBSOCKET_VERSION, "13")
@@ -77,11 +95,7 @@ impl Service {
         let config = WebSocketConfig::default()
             .max_message_size(Some(64 * 1024))
             .max_frame_size(Some(64 * 1024));
-        Ok(PairingEvents {
-            socket: WebSocketStream::from_raw_socket(stream, Role::Client, Some(config)).await,
-            session_id: session.session_id.clone(),
-            receiver_id: session.receiver_id.clone(),
-        })
+        Ok(WebSocketStream::from_raw_socket(stream, Role::Client, Some(config)).await)
     }
 }
 

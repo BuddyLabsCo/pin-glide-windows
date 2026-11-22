@@ -74,9 +74,12 @@ within 500 lines.
 - Store Receiver registration in `Pin Glide/registration.json` under Local
   AppData. Version 2 adds `provisional_pairing` with the session, Receiver,
   Sender and Pairing IDs and the protected key blob. Preserve the active
-  Receiver credential and Pairings when staging a provisional key. The version
-  1 reader accepts the same active fields without `provisional_pairing` and
-  migrates them on the next successful write.
+  Receiver credential and Pairings when staging a provisional key. Version 3
+  adds the in-flight enrollment with its Service origin, expiry and operation
+  ID. Protect B until redemption finishes and protect R before opening
+  delivery. Promote R and the provisional Pairing together after the
+  authenticated delivery upgrade. Read versions 1 and 2 and migrate them on
+  the next successful write.
 - Scope key loss and Pairing removal to the affected Pairing. Receiver
   revocation clears registration and Pairing state while keeping settings.
   Missing R requires explicit new registration. Installation upgrades

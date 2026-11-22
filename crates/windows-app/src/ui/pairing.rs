@@ -25,6 +25,13 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
     open_pairing(chinese, start_operation).map(drop)
 }
 
+pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
+    if PairingOperation::has_pending_enrollment() {
+        create_view(chinese, start_operation, false)?;
+    }
+    Ok(())
+}
+
 pub fn open_pairing(
     chinese: bool,
     start: impl Fn(fn()) -> PairingOperation + 'static,
@@ -32,6 +39,14 @@ pub fn open_pairing(
     if reopen()? {
         return Ok(PAIRING.with_borrow(|pairing| pairing.as_ref().unwrap().window.clone_strong()));
     }
+    create_view(chinese, start, true)
+}
+
+fn create_view(
+    chinese: bool,
+    start: impl Fn(fn()) -> PairingOperation + 'static,
+    visible: bool,
+) -> Result<PairingWindow, PlatformError> {
     let window = PairingWindow::new()?;
     window.set_chinese(chinese);
     window.set_motion_enabled(platform::animations_enabled());
@@ -40,8 +55,10 @@ pub fn open_pairing(
         .window()
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     window.on_refresh(refresh);
-    window.show()?;
-    super::focus(window.window());
+    if visible {
+        window.show()?;
+        super::focus(window.window());
+    }
     PAIRING.with_borrow_mut(|pairing| {
         let mut view = View {
             window: window.clone_strong(),
@@ -144,12 +161,15 @@ impl View {
                 PairingStage::Waiting
             }
             PairingProgress::Confirming => PairingStage::Confirming,
+            PairingProgress::CredentialReady => PairingStage::CredentialReady,
+            PairingProgress::Checking => PairingStage::Checking,
+            PairingProgress::Connecting => PairingStage::Connecting,
             PairingProgress::Finished(outcome) => match outcome {
                 PairingOutcome::CreateFailed => PairingStage::CreateFailed,
                 PairingOutcome::Failed => PairingStage::Failed,
                 PairingOutcome::Expired => PairingStage::Expired,
                 PairingOutcome::Canceled => PairingStage::Canceled,
-                PairingOutcome::KeyConfirmed(_) => PairingStage::CredentialReady,
+                PairingOutcome::KeyConfirmed(_) => PairingStage::Completed,
             },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {

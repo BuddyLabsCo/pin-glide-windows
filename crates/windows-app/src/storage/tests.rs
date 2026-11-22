@@ -43,7 +43,7 @@ fn migrates_an_older_registration_and_preserves_it_if_replacement_fails() {
         .commit_provisional(&reference("first"), &[42; 32])
         .unwrap();
     let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(current["version"], 2);
+    assert_eq!(current["version"], 3);
     for field in ["receiver_id", "protected_receiver_token", "active_pairings"] {
         assert_eq!(current[field], legacy[field]);
     }
@@ -62,7 +62,7 @@ fn refuses_unreadable_and_newer_registration_files_without_overwriting_them() {
     let store = RegistrationStore::new(path.clone());
     for content in [
         "broken JSON",
-        r#"{"version":3,"active_pairings":{}}"#,
+        r#"{"version":4,"active_pairings":{}}"#,
         r#"{"version":2,"active_pairings":{"unknown":{"protected_key":"invalid"}}}"#,
     ] {
         fs::write(&path, content).unwrap();

@@ -16,6 +16,7 @@ use zeroize::Zeroizing;
 
 use super::{
     CompletionError, NewReceiverSession, Service, SessionState,
+    enrollment::enroll,
     pairing_events::{PairingEvent, PairingEventError, PairingEvents},
     pairing_snapshot::{Claim, Snapshot},
 };
@@ -29,6 +30,9 @@ pub enum PairingProgress {
     Preparing,
     Waiting { code: Arc<QrCode>, seconds: u64 },
     Confirming,
+    CredentialReady,
+    Checking,
+    Connecting,
     Finished(PairingOutcome),
 }
 
@@ -37,13 +41,13 @@ pub struct PairingOperation {
     worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
 }
 
-struct ProgressUpdates {
+pub(super) struct ProgressUpdates {
     snapshot: watch::Sender<PairingProgress>,
     notify: fn(),
 }
 
 impl ProgressUpdates {
-    fn publish(&self, progress: PairingProgress) {
+    pub(super) fn publish(&self, progress: PairingProgress) {
         if self.snapshot.send_if_modified(|snapshot| {
             let unchanged = match (&*snapshot, &progress) {
                 (
@@ -65,7 +69,13 @@ impl ProgressUpdates {
 
 impl PairingOperation {
     pub fn start(connect: impl FnOnce() -> Option<Service> + Send + 'static, notify: fn()) -> Self {
-        Self::spawn(connect, notify, None)
+        Self::spawn(connect, notify, RegistrationStore::for_current_user().ok())
+    }
+
+    pub(crate) fn has_pending_enrollment() -> bool {
+        RegistrationStore::for_current_user()
+            .and_then(|store| store.enrollment())
+            .is_ok_and(|pending| pending.is_some())
     }
 
     pub fn start_with_registration(
@@ -137,11 +147,44 @@ async fn drive(
     now: impl FnOnce() -> SystemTime,
     store: Option<&RegistrationStore>,
 ) {
+    if let Some(store) = store
+        && store.enrollment().is_ok_and(|pending| pending.is_some())
+    {
+        finish_enrollment(service, store, updates, stopping, None).await;
+        return;
+    }
     let Ok(material) = PairingMaterial::generate() else {
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
         return;
     };
     drive_session(service, updates, stopping, now, material, store).await;
+}
+
+async fn finish_enrollment(
+    service: &Service,
+    store: &RegistrationStore,
+    updates: &ProgressUpdates,
+    mut stopping: oneshot::Receiver<()>,
+    session: Option<&NewReceiverSession>,
+) {
+    let outcome = tokio::select! {
+        biased;
+        _ = &mut stopping => return,
+        outcome = enroll(service, store, updates, session) => outcome,
+    };
+    match outcome {
+        Ok(connection) => {
+            updates.publish(PairingProgress::Finished(PairingOutcome::KeyConfirmed(
+                SessionState::Completed,
+            )));
+            tokio::select! {
+                biased;
+                _ = stopping => {}
+                () = connection.run() => {}
+            }
+        }
+        Err(outcome) => updates.publish(PairingProgress::Finished(outcome)),
+    }
 }
 
 async fn drive_session(
@@ -175,6 +218,14 @@ async fn drive_session(
         outcome = watch_session(service, &session, &material, deadline, updates, store) => (outcome, false),
         _ = sleep_until(deadline) => (PairingOutcome::Expired, false),
     };
+    if outcome == PairingOutcome::KeyConfirmed(SessionState::CredentialReady) {
+        if let Some(store) = store {
+            finish_enrollment(service, store, updates, stopping, Some(&session)).await;
+        } else {
+            updates.publish(PairingProgress::Finished(PairingOutcome::Failed));
+        }
+        return;
+    }
     updates.publish(PairingProgress::Finished(outcome));
     if exiting
         || matches!(
@@ -320,14 +371,7 @@ async fn verify_and_save(
         pairing_id: &claim.pairing_id,
         sender_id: &claim.sender_id,
     };
-    let local;
-    let store = match store {
-        Some(store) => store,
-        None => {
-            local = RegistrationStore::for_current_user().map_err(|_| PairingOutcome::Failed)?;
-            &local
-        }
-    };
+    let store = store.ok_or(PairingOutcome::Failed)?;
     store
         .commit_provisional(&reference, key.as_bytes())
         .map_err(|_| PairingOutcome::Failed)
@@ -392,12 +436,8 @@ fn outcome(state: SessionState, saved: bool) -> PairingOutcome {
     match state {
         SessionState::Canceled => PairingOutcome::Canceled,
         SessionState::Expired => PairingOutcome::Expired,
-        state @ (SessionState::CredentialReady
-        | SessionState::CredentialIssued
-        | SessionState::Completed)
-            if saved =>
-        {
-            PairingOutcome::KeyConfirmed(state)
+        SessionState::CredentialReady if saved => {
+            PairingOutcome::KeyConfirmed(SessionState::CredentialReady)
         }
         _ => PairingOutcome::Failed,
     }
