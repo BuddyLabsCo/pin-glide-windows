@@ -9,17 +9,17 @@ use native_tls::{Identity, TlsAcceptor};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-use super::{CreateError, Service, SessionState, client_builder};
+use super::{CreateError, NewReceiverSession, Service, SessionState, client_builder};
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
-fn listen(host: &str) -> (TcpListener, String) {
+pub(crate) fn listen(host: &str) -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("https://{host}:{}", listener.local_addr().unwrap().port());
     (listener, origin)
 }
 
-fn accept_loopback(listener: &TcpListener) -> TcpStream {
+pub(crate) fn accept_loopback(listener: &TcpListener) -> TcpStream {
     let timeout = Duration::from_secs(5);
     let deadline = Instant::now() + timeout;
     listener.set_nonblocking(true).unwrap();
@@ -42,7 +42,11 @@ fn accept_loopback(listener: &TcpListener) -> TcpStream {
     stream
 }
 
-fn local_service(listener: &TcpListener, origin: &str, trust_fixture_ca: bool) -> Service {
+pub(crate) fn local_service(
+    listener: &TcpListener,
+    origin: &str,
+    trust_fixture_ca: bool,
+) -> Service {
     let mut service = Service::new(origin).unwrap();
     let mut client = client_builder()
         .no_proxy()
@@ -54,7 +58,7 @@ fn local_service(listener: &TcpListener, origin: &str, trust_fixture_ca: bool) -
     service
 }
 
-fn acceptor() -> TlsAcceptor {
+pub(crate) fn acceptor() -> TlsAcceptor {
     let identity = Identity::from_pkcs12(
         include_bytes!("../../tests/fixtures/service/server.p12"),
         "pin-glide-test",
@@ -137,6 +141,57 @@ async fn creates_a_receiver_anonymously_and_decodes_the_session() {
     assert_eq!(session.expires_at.unix_timestamp(), 1_767_225_900);
     assert_eq!(session.pairing_token_expires_at, session.expires_at);
     assert!(!session.sender_confirmed && !session.receiver_confirmed);
+}
+
+#[tokio::test]
+async fn cancels_the_receiver_session_using_its_restricted_token() {
+    let deadline = time::OffsetDateTime::now_utc() + Duration::from_secs(300);
+    let session = NewReceiverSession {
+        session_id: "session-1".into(),
+        receiver_id: "receiver-1".into(),
+        pairing_id: None,
+        sender_id: None,
+        state: SessionState::AwaitingAuthorization,
+        receiver_confirmed: false,
+        sender_confirmed: false,
+        expires_at: deadline,
+        pairing_token: "restricted-test-token".into(),
+        pairing_token_expires_at: deadline,
+    };
+    let (listener, origin) = listen("localhost");
+    let service = local_service(&listener, &origin, true);
+    let server = thread::spawn(move || {
+        let stream = accept_loopback(&listener);
+        let mut stream = BufReader::new(acceptor().accept(stream).unwrap());
+        let mut request = String::new();
+        stream.read_line(&mut request).unwrap();
+        assert_eq!(
+            request,
+            "DELETE /v1/pairing-sessions/session-1 HTTP/1.1\r\n"
+        );
+        let mut authorization = None;
+        loop {
+            let mut header = String::new();
+            assert_ne!(stream.read_line(&mut header).unwrap(), 0);
+            if header == "\r\n" {
+                break;
+            }
+            let (name, value) = header.split_once(':').unwrap();
+            if name.eq_ignore_ascii_case("authorization") {
+                authorization = Some(value.trim().to_owned());
+            }
+        }
+        assert_eq!(
+            authorization.as_deref(),
+            Some("Bearer restricted-test-token")
+        );
+        stream
+            .get_mut()
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    assert!(service.cancel_receiver(&session).await);
+    server.join().unwrap();
 }
 
 #[tokio::test]

@@ -135,7 +135,7 @@ fn exercise_startup(
     result.unwrap();
 }
 
-fn select_test_backend() -> Result<(), slint::PlatformError> {
+pub(crate) fn select_test_backend() -> Result<(), slint::PlatformError> {
     let mut builder = EventLoop::with_user_event();
     builder.with_any_thread(true);
     slint::BackendSelector::new()

@@ -234,7 +234,11 @@ fn tray_event(window: HWND, event: u32) {
         _ => return,
     };
     match choice {
-        OPEN | SETTINGS => open(),
+        OPEN => open(),
+        SETTINGS if WITHOUT_UI.get() => open(),
+        SETTINGS => {
+            let _ = slint::invoke_from_event_loop(crate::ui::open_settings);
+        }
         EXIT if WITHOUT_UI.get() => {
             // SAFETY: the menu callback runs on the thread pumping the native queue.
             unsafe { PostQuitMessage(0) };

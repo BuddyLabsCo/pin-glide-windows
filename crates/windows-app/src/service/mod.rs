@@ -5,7 +5,8 @@ use pin_glide_http::{
         Error,
         configuration::Configuration,
         pairing_api::{
-            PostPairingSessionsError, PostPairingSessionsSuccess, post_pairing_sessions,
+            PostPairingSessionsError, PostPairingSessionsSuccess, delete_pairing_session,
+            post_pairing_sessions,
         },
     },
     models::{CreateRequest, create_request, pairing_session_view},
@@ -13,8 +14,13 @@ use pin_glide_http::{
 use reqwest::{Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+mod pairing_events;
+pub(crate) mod pairing_operation;
+pub use pairing_operation::{PairingOperation, PairingProgress};
+pub use receiver_core::pairing::{PairingOutcome, SessionState};
+
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub struct Service {
     config: Configuration,
@@ -31,18 +37,6 @@ pub struct NewReceiverSession {
     pub expires_at: OffsetDateTime,
     pub pairing_token: String,
     pub pairing_token_expires_at: OffsetDateTime,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SessionState {
-    AwaitingAuthorization,
-    AwaitingConfirmation,
-    CredentialReady,
-    CredentialIssued,
-    Completed,
-    Canceled,
-    Expired,
-    Superseded,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,7 +120,7 @@ impl Service {
             receiver_id: session.receiver_id,
             pairing_id: session.pairing_id,
             sender_id: session.sender_id,
-            state: SessionState::from_wire(session.state),
+            state: session_state(session.state),
             receiver_confirmed: session.receiver_confirmed,
             sender_confirmed: session.sender_confirmed,
             expires_at: OffsetDateTime::parse(&session.expires_at, &Rfc3339)
@@ -139,22 +133,29 @@ impl Service {
             .map_err(|_| CreateError::InvalidResponse)?,
         })
     }
+
+    pub async fn cancel_receiver(&self, session: &NewReceiverSession) -> bool {
+        let mut config = self.config.clone();
+        config.bearer_access_token = Some(session.pairing_token.clone());
+        matches!(
+            delete_pairing_session(&config, &session.session_id).await,
+            Ok(response) if response.status == StatusCode::NO_CONTENT
+        )
+    }
 }
 
-impl SessionState {
-    fn from_wire(state: pairing_session_view::State) -> Self {
-        use pairing_session_view::State;
+fn session_state(state: pairing_session_view::State) -> SessionState {
+    use pairing_session_view::State;
 
-        match state {
-            State::AwaitingAuthorization => Self::AwaitingAuthorization,
-            State::AwaitingConfirmation => Self::AwaitingConfirmation,
-            State::CredentialReady => Self::CredentialReady,
-            State::CredentialIssued => Self::CredentialIssued,
-            State::Completed => Self::Completed,
-            State::Canceled => Self::Canceled,
-            State::Expired => Self::Expired,
-            State::Superseded => Self::Superseded,
-        }
+    match state {
+        State::AwaitingAuthorization => SessionState::AwaitingAuthorization,
+        State::AwaitingConfirmation => SessionState::AwaitingConfirmation,
+        State::CredentialReady => SessionState::CredentialReady,
+        State::CredentialIssued => SessionState::CredentialIssued,
+        State::Completed => SessionState::Completed,
+        State::Canceled => SessionState::Canceled,
+        State::Expired => SessionState::Expired,
+        State::Superseded => SessionState::Superseded,
     }
 }
 

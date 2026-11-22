@@ -11,7 +11,7 @@ const generated = new Map([
   ["pin-glide-http", "generated/http-client"],
   ["pin-glide-wss", "generated/wss-models"],
 ]);
-const coreDependencies = new Set();
+const coreDependencies = new Set(["base64", "p256", "rand_core", "serde_json", "zeroize"]);
 
 function run(command, args, capture = false) {
   const result = spawnSync(command, args, {

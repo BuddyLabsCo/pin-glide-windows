@@ -126,6 +126,9 @@ Generated code is checked through regeneration and compilation when added.
 `rustfmt.toml`, `clippy.toml`, and `Cargo.toml` define the Rust rules.
 The Slint build treats compiler warnings as errors in CI.
 
+Set `PINGLIDE_SERVICE_URL` to the installation's HTTPS origin before building
+to enable live pairing. Use the same origin in the Sender build.
+
 [functional]: https://github.com/BuddyLabsCo/pin-glide-windows/issues/2#issuecomment-6875824783
 [time]: https://github.com/BuddyLabsCo/pin-glide-windows/issues/2#issuecomment-6879752448
 [ui]: https://github.com/BuddyLabsCo/pin-glide-windows/issues/3#issuecomment-7076999601
