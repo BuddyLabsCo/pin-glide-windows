@@ -1,6 +1,7 @@
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr::{null, null_mut};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use windows_sys::Win32::Foundation::{
@@ -21,7 +22,7 @@ use super::{wide, win32_result};
 
 pub struct Instance {
     _mutex: OwnedHandle,
-    open: OwnedHandle,
+    open: Arc<OwnedHandle>,
     window_name: Vec<u16>,
 }
 
@@ -47,7 +48,7 @@ impl Instance {
         }
         Ok(Some(Self {
             _mutex: mutex,
-            open,
+            open: Arc::new(open),
             window_name,
         }))
     }
@@ -56,8 +57,12 @@ impl Instance {
         &self.window_name
     }
 
+    pub fn activation_event(&self) -> Arc<OwnedHandle> {
+        Arc::clone(&self.open)
+    }
+
     pub fn listen(&self, window: HWND) -> io::Result<ActivationListener> {
-        let open = self.open.try_clone()?;
+        let open = self.activation_event();
         let stop = create_event(1, null())?;
         let stop_wait = stop.try_clone()?;
         let window = window as usize;

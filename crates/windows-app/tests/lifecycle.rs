@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+mod support;
+
 use std::io;
 use std::process::{Child, Command};
 use std::thread;
@@ -87,13 +89,7 @@ fn visible_window(process: u32) -> HWND {
     search.window
 }
 
-fn wait_for(mut condition: impl FnMut() -> bool, expectation: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !condition() {
-        assert!(Instant::now() < deadline, "{expectation}");
-        thread::sleep(Duration::from_millis(25));
-    }
-}
+use support::wait_for;
 
 #[test]
 #[ignore = "requires an interactive Windows desktop with Pin Glide stopped"]

@@ -14,7 +14,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(instance) = platform::Instance::claim(explicit)? else {
         return Ok(());
     };
-    run(instance, explicit, select_backend)
+    run(
+        instance,
+        explicit,
+        select_backend,
+        platform::Instance::listen,
+    )
 }
 
 #[cfg(windows)]
@@ -36,17 +41,23 @@ fn run(
     instance: platform::Instance,
     mut explicit: bool,
     mut select_backend: impl FnMut() -> Result<(), slint::PlatformError>,
+    start_listener: impl FnOnce(
+        &platform::Instance,
+        windows_sys::Win32::Foundation::HWND,
+    ) -> std::io::Result<platform::ActivationListener>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = platform::enable_per_monitor_dpi() {
         eprintln!("Could not set per-monitor DPI awareness: {error}");
     }
     let tray = platform::Tray::new(instance.window_name())?;
-    let _activation = instance
-        .listen(tray.window())
-        .map_err(|error| {
+    let _activation = match start_listener(&instance, tray.window()) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
             eprintln!("Could not listen for another launch: {error}");
-        })
-        .ok();
+            tray.poll_activation(instance.activation_event())?;
+            None
+        }
+    };
     let mut backend_ready = false;
     loop {
         let ui_result = (|| {
@@ -77,52 +88,4 @@ fn main() {
 }
 
 #[cfg(all(test, windows))]
-mod tests {
-    use std::sync::mpsc::channel;
-    use std::time::Duration;
-
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, IsWindowVisible, PostThreadMessageW, WM_QUIT,
-    };
-
-    use super::{platform, run};
-
-    #[test]
-    #[ignore = "requires an interactive Windows desktop with Pin Glide stopped"]
-    fn failed_automatic_startup_keeps_the_tray_running_and_explicit_launch_retries() {
-        let instance = platform::Instance::claim(false).unwrap().unwrap();
-        let window_name = instance.window_name().to_vec();
-        // SAFETY: this query returns the ID of the thread that will pump the message queue.
-        let tray_thread = unsafe { GetCurrentThreadId() };
-        let (attempted, attempts) = channel();
-        let observer = std::thread::spawn(move || {
-            let timeout = Duration::from_secs(5);
-            let result = (|| {
-                attempts.recv_timeout(timeout).ok()?;
-                // SAFETY: the name is NUL-terminated and owned by this thread.
-                let tray = unsafe { FindWindowW(std::ptr::null(), window_name.as_ptr()) };
-                // SAFETY: IsWindowVisible accepts the window handle returned by FindWindowW.
-                let visible = unsafe { IsWindowVisible(tray) } != 0;
-                if tray.is_null() || visible {
-                    return None;
-                }
-                if platform::Instance::claim(true).ok()?.is_some() {
-                    return None;
-                }
-                attempts.recv_timeout(timeout).ok()
-            })();
-            // SAFETY: the startup thread created the tray window and owns its queue.
-            unsafe { PostThreadMessageW(tray_thread, WM_QUIT, 0, 0) };
-            result
-        });
-        run(instance, false, || {
-            attempted.send(()).unwrap();
-            Err(slint::PlatformError::Other(
-                "simulated startup failure".into(),
-            ))
-        })
-        .unwrap();
-        assert_eq!(observer.join().unwrap(), Some(()));
-    }
-}
+mod startup_tests;

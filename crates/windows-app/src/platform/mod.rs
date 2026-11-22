@@ -1,7 +1,7 @@
 mod instance;
 mod tray;
 
-pub use instance::Instance;
+pub use instance::{ActivationListener, Instance};
 pub use tray::Tray;
 
 use std::io;

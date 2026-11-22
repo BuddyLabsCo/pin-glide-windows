@@ -1,11 +1,13 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::io;
 use std::mem::size_of;
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::ptr::{null, null_mut};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WAIT_OBJECT_0, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
@@ -14,8 +16,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, HICON,
     KillTimer, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
     RegisterWindowMessageW, SetForegroundWindow, SetTimer, TPM_NONOTIFY, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_LBUTTONDBLCLK, WM_NULL,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_POPUP,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, UnregisterClassW, WM_APP, WM_LBUTTONDBLCLK,
+    WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_POPUP,
 };
 
 use super::{chinese, wide, win32_result};
@@ -26,10 +28,13 @@ const OPEN: u32 = 1;
 const SETTINGS: u32 = 2;
 const EXIT: u32 = 3;
 const ICON_RETRY: usize = 1;
+const ACTIVATION_POLL: usize = 2;
+const TRAY_CLASS: &str = "BuddyLabsCo.PinGlide.Tray";
 static EXPLORER_RESTART: OnceLock<u32> = OnceLock::new();
 
 thread_local! {
     static WITHOUT_UI: Cell<bool> = const { Cell::new(false) };
+    static ACTIVATION_EVENT: RefCell<Option<Arc<OwnedHandle>>> = const { RefCell::new(None) };
 }
 
 pub struct Tray {
@@ -38,7 +43,7 @@ pub struct Tray {
 
 impl Tray {
     pub fn new(window_name: &[u16]) -> io::Result<Self> {
-        let class = wide("BuddyLabsCo.PinGlide.Tray");
+        let class = wide(TRAY_CLASS);
         // SAFETY: the current module handle and terminated strings remain valid for registration
         // and synchronous window creation. No Rust data is passed to the window procedure.
         let window = unsafe {
@@ -81,6 +86,15 @@ impl Tray {
         self.window
     }
 
+    pub fn poll_activation(&self, event: Arc<OwnedHandle>) -> io::Result<()> {
+        // SAFETY: the tray owns this HWND and pumps messages on this thread.
+        if unsafe { SetTimer(self.window, ACTIVATION_POLL, 200, None) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        ACTIVATION_EVENT.set(Some(event));
+        Ok(())
+    }
+
     pub fn run_without_ui(&self) -> io::Result<bool> {
         WITHOUT_UI.set(true);
         let mut message = MSG::default();
@@ -107,9 +121,12 @@ impl Drop for Tray {
     fn drop(&mut self) {
         // SAFETY: Tray is dropped on the thread that created its window.
         unsafe {
+            KillTimer(self.window, ACTIVATION_POLL);
             Shell_NotifyIconW(NIM_DELETE, &icon_data(self.window));
             DestroyWindow(self.window);
+            UnregisterClassW(wide(TRAY_CLASS).as_ptr(), GetModuleHandleW(null()));
         }
+        ACTIVATION_EVENT.set(None);
     }
 }
 
@@ -184,6 +201,18 @@ unsafe extern "system" fn window_proc(
         }
         WM_TIMER if wparam == ICON_RETRY => {
             let _ = register_icon(window);
+            0
+        }
+        WM_TIMER if wparam == ACTIVATION_POLL => {
+            let pending = ACTIVATION_EVENT.with_borrow(|event| {
+                event.as_ref().is_some_and(|event| {
+                    // SAFETY: the live auto-reset event is owned by the tray thread.
+                    unsafe { WaitForSingleObject(event.as_raw_handle(), 0) == WAIT_OBJECT_0 }
+                })
+            });
+            if pending {
+                open();
+            }
             0
         }
         _ if EXPLORER_RESTART
