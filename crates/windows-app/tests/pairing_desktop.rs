@@ -46,7 +46,7 @@ enum Step {
 fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     const CHILD: &str = "PIN_GLIDE_PAIRING_EVIDENCE_CHILD";
     let Ok(mode) = std::env::var(CHILD) else {
-        for mode in ["visible", "hidden", "reduced", "duplicate"] {
+        for mode in ["visible", "hidden", "reduced", "duplicate", "motion"] {
             let child = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -72,6 +72,11 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         .with_winit_event_loop_builder(builder)
         .select()
         .unwrap();
+    if mode == "motion" {
+        let evidence = std::env::var_os("PIN_GLIDE_PAIRING_EVIDENCE");
+        completion_frames::verify_transition(evidence.as_deref().map(Path::new));
+        return;
+    }
     let (listener, service) = listen();
     let (advance, release) = mpsc::channel();
     let (cancelled, may_refresh) = mpsc::channel();
@@ -142,7 +147,6 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     let mut completed_at = None;
     let mut main_expected_at: Option<Instant> = None;
     let mut main_label: Option<mpsc::Receiver<bool>> = None;
-    let mut completion_frames = completion_frames::CompletionFrames::default();
     let expected = if hidden {
         "未命名设备-3"
     } else {
@@ -186,12 +190,7 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
                 window.set_sender_name("我的设备".into());
                 Instant::now()
             });
-            if !completion_frames.observe(
-                &window,
-                completed_at.elapsed(),
-                !reduced,
-                evidence.as_deref().filter(|_| !duplicate).map(Path::new),
-            ) {
+            if !reduced && completed_at.elapsed() < Duration::from_millis(210) {
                 return;
             }
         }

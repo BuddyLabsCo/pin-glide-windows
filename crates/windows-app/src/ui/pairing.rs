@@ -3,6 +3,10 @@ use std::{cell::RefCell, sync::Arc};
 use crate::service::{PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service};
 use crate::storage::SenderNameError;
 use crate::{NamePaste, PairingStage, PairingWindow, platform};
+use i_slint_core::{
+    input::{InternalKeyEvent, KeyEvent, KeyEventType},
+    window::WindowInner,
+};
 use qrcode::{Color, QrCode};
 use slint::{
     CloseRequestResponse, ComponentHandle, Image, PlatformError, Rgb8Pixel, SharedPixelBuffer,
@@ -58,8 +62,13 @@ fn create_view(
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     window.on_refresh(refresh);
     window.on_finish_naming(finish_naming);
-    window
-        .on_read_name_paste(move |name, anchor, cursor| paste_name(chinese, name, anchor, cursor));
+    window.on_read_name_paste(move || read_name_paste(chinese));
+    let weak = window.as_weak();
+    window.on_insert_name_paste(move |text| {
+        if let Some(window) = weak.upgrade() {
+            insert_name_paste(window.window(), text);
+        }
+    });
     if visible {
         window.show()?;
         super::focus(window.window());
@@ -163,24 +172,13 @@ fn refresh() {
     });
 }
 
-fn paste_name(chinese: bool, name: slint::SharedString, anchor: i32, cursor: i32) -> NamePaste {
-    let mut pasted = NamePaste {
-        caret: -1,
-        ..Default::default()
-    };
+fn read_name_paste(chinese: bool) -> NamePaste {
+    let mut pasted = NamePaste::default();
     match platform::read_unicode_clipboard() {
-        Ok(Some(text)) if !text.is_empty() => {
-            let mut name = name.to_string();
-            let start = anchor.min(cursor) as usize;
-            let end = anchor.max(cursor) as usize;
-            if name.get(start..end).is_some() {
-                let text = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
-                name.replace_range(start..end, &text);
-                pasted.text = name.into();
-                pasted.caret = i32::try_from(start + text.len()).unwrap_or(i32::MAX);
-            }
+        Ok(Some(text)) => {
+            pasted.text = text.replace("\r\n", " ").replace(['\r', '\n'], " ").into();
         }
-        Ok(_) => {}
+        Ok(None) => {}
         Err(platform::ClipboardError::InvalidText) => {
             pasted.invalid_text = true;
             pasted.error = name_error(chinese, SenderNameError::InvalidCharacter).into();
@@ -195,6 +193,25 @@ fn paste_name(chinese: bool, name: slint::SharedString, anchor: i32, cursor: i32
         }
     }
     pasted
+}
+
+fn insert_name_paste(window: &slint::Window, text: slint::SharedString) {
+    let inner = WindowInner::from_pub(window);
+    let field = inner.focus_item.borrow().upgrade();
+    if let Some(field) = field {
+        let mut key_event = KeyEvent::default();
+        key_event.text = text;
+        // Route the validated text through the editor without normalizing pasted Unicode.
+        field.borrow().as_ref().key_event(
+            &InternalKeyEvent {
+                key_event,
+                event_type: KeyEventType::CommitComposition,
+                ..Default::default()
+            },
+            &inner.window_adapter(),
+            &field,
+        );
+    }
 }
 
 fn finish_naming() {

@@ -2,7 +2,6 @@ import { Button, Palette } from "std-widgets.slint";
 
 struct NamePaste {
     text: string,
-    caret: int,
     error: string,
     invalid-text: bool,
 }
@@ -12,20 +11,21 @@ component SenderNameForm inherits Rectangle {
     in-out property <string> name;
     in-out property <string> error;
     in-out property <bool> invalid-paste;
-    callback read-paste(string, int, int) -> NamePaste;
+    out property <bool> name-focused: field.has-focus;
+    callback read-paste() -> NamePaste;
+    callback insert-paste(string);
     callback done();
     public function focus-name() {
         field.focus();
     }
-    function paste-name() {
-        let pasted = root.read-paste(root.name, field.anchor-position-byte-offset, field.cursor-position-byte-offset);
+    public function paste-name() {
+        field.focus();
+        let pasted = root.read-paste();
         root.invalid-paste = pasted.invalid-text;
         root.error = pasted.error;
-        if pasted.caret >= 0 {
-            root.name = pasted.text;
-            field.set-selection-offsets(pasted.caret, pasted.caret);
+        if pasted.text != "" {
+            root.insert-paste(pasted.text);
         }
-        field.focus();
     }
 
     Text {
@@ -288,11 +288,16 @@ export component PairingWindow inherits Window {
     in-out property <string> sender-name;
     in-out property <string> name-error;
     in-out property <bool> invalid-paste;
+    out property <bool> name-focused: name-form.name-focused;
     callback refresh();
     callback finish-naming();
-    callback read-name-paste(string, int, int) -> NamePaste;
+    callback read-name-paste() -> NamePaste;
+    callback insert-name-paste(string);
     public function focus-name() {
         name-form.focus-name();
+    }
+    public function paste-name() {
+        name-form.paste-name();
     }
     private property <bool> loading: stage == PairingStage.preparing || stage == PairingStage.confirming
         || stage == PairingStage.credential-ready || stage == PairingStage.checking
@@ -453,7 +458,8 @@ export component PairingWindow inherits Window {
         name <=> root.sender-name;
         error <=> root.name-error;
         invalid-paste <=> root.invalid-paste;
-        read-paste(name, anchor, cursor) => { root.read-name-paste(name, anchor, cursor) }
+        read-paste => { root.read-name-paste() }
+        insert-paste(text) => { root.insert-name-paste(text); }
         done => { root.finish-naming(); }
     }
 }
