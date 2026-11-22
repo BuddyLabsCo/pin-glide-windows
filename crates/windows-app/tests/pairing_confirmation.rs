@@ -97,11 +97,11 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
     let directory = tempdir().unwrap();
     let path = directory.path().join("registration.json");
     let active = json!({
-        "version": 3,
+        "version": 4,
         "receiver_id": "previous-receiver",
         "protected_receiver_token": [66, 77],
         "active_pairings": {
-            "previous-pairing": {"sender_id": "previous-sender", "protected_key": [55, 66]}
+            "previous-pairing": {"sender_id": "previous-sender", "protected_key": [55, 66], "name": "Previous"}
         }
     });
     if matches!(scenario, Scenario::WriteRejected) {
@@ -132,6 +132,7 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
                 send_qr.take().unwrap().send(decode_qr(&code)).unwrap();
             }
             PairingProgress::Finished(outcome) => break outcome,
+            PairingProgress::Completed { pairing_id } => break completed_pairing(&pairing_id),
             _ => {}
         }
         if first_attempt.try_recv().is_ok() {
@@ -150,6 +151,11 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
     }
     server.join().unwrap();
     operation.shutdown();
+}
+
+fn completed_pairing(pairing_id: &str) -> PairingOutcome {
+    assert_eq!(pairing_id, "pairing-1");
+    PairingOutcome::KeyConfirmed(SessionState::Completed)
 }
 
 fn assert_rejection_preserves_registration(path: &std::path::Path, active: &Value) {
@@ -405,6 +411,7 @@ fn exercise_enrollment(
         stored["active_pairings"]["pairing-1"]["sender_id"],
         "sender-1"
     );
+    assert_eq!(stored["active_pairings"]["pairing-1"]["name"], "未命名设备");
 }
 
 fn decode_qr(code: &qrcode::QrCode) -> Value {

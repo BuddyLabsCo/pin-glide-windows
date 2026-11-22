@@ -86,7 +86,11 @@ impl RegistrationStore {
         })
     }
 
-    pub(crate) fn finish_enrollment(&self, operation_id: &str, completed: bool) -> io::Result<()> {
+    pub(crate) fn finish_enrollment(
+        &self,
+        operation_id: &str,
+        completed: bool,
+    ) -> io::Result<Option<String>> {
         self.update(|next| {
             let enrollment = next
                 .enrollment
@@ -107,15 +111,22 @@ impl RegistrationStore {
                 }
                 next.receiver_id = Some(enrollment.receiver_id);
                 next.protected_receiver_token = Some(token);
+                let name = next
+                    .active_pairings
+                    .get(&pairing.pairing_id)
+                    .and_then(|stored| stored.name.clone())
+                    .unwrap_or_else(|| next.first_available_name());
                 next.active_pairings.insert(
-                    pairing.pairing_id,
+                    pairing.pairing_id.clone(),
                     ProtectedPairing {
                         sender_id: pairing.sender_id,
                         protected_key: pairing.protected_key,
+                        name: Some(name),
                     },
                 );
+                return Ok(Some(pairing.pairing_id));
             }
-            Ok(())
+            Ok(None)
         })
     }
 }

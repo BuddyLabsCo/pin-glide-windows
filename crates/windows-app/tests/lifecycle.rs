@@ -1,6 +1,8 @@
 #![cfg(windows)]
 
 mod support;
+#[path = "support/window_size.rs"]
+mod window_size;
 
 use std::io;
 use std::process::{Child, Command};
@@ -9,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows_sys::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetThreadDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic,
@@ -124,15 +126,9 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         "the tray process must open Welcome",
     );
     let window = visible_window(primary.id());
-    // SAFETY: window was obtained from EnumWindows and bounds is a writable output.
+    assert!(window_size::client_size(window, 440, 560).is_some());
+    // SAFETY: window was obtained from EnumWindows.
     unsafe {
-        let mut bounds = RECT::default();
-        assert_ne!(GetClientRect(window, &raw mut bounds), 0);
-        let dpi = GetDpiForWindow(window) as i32;
-        assert_eq!(
-            (bounds.right, bounds.bottom),
-            (440 * dpi / 96, 560 * dpi / 96)
-        );
         let resize_buttons = (WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX) as isize;
         assert_eq!(GetWindowLongPtrW(window, GWL_STYLE) & resize_buttons, 0);
         assert_ne!(ShowWindowAsync(window, SW_MINIMIZE), 0);

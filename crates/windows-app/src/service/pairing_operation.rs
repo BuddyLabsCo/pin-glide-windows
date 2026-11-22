@@ -33,12 +33,15 @@ pub enum PairingProgress {
     CredentialReady,
     Checking,
     Connecting,
+    Completed { pairing_id: String },
     Finished(PairingOutcome),
 }
 
 pub struct PairingOperation {
     progress: watch::Receiver<PairingProgress>,
     worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
+    #[cfg(windows)]
+    store: Option<RegistrationStore>,
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +117,8 @@ impl PairingOperation {
             snapshot: snapshot.clone(),
             notify,
         };
+        #[cfg(windows)]
+        let window_store = store.clone();
         let worker = thread::Builder::new()
             .name("pairing".into())
             .spawn(move || {
@@ -143,7 +148,25 @@ impl PairingOperation {
             snapshot.send_replace(PairingProgress::Finished(PairingOutcome::CreateFailed));
             notify();
         }
-        Self { progress, worker }
+        Self {
+            progress,
+            worker,
+            #[cfg(windows)]
+            store: window_store,
+        }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn registration(&self) -> Option<&RegistrationStore> {
+        self.store.as_ref()
+    }
+
+    #[cfg(windows)]
+    pub fn sender_label(&self, pairing_id: &str) -> std::io::Result<Option<String>> {
+        match self.registration() {
+            Some(store) => super::delivery::sender_label(store, pairing_id),
+            None => Ok(None),
+        }
     }
 
     pub fn current(&self) -> PairingProgress {
@@ -203,10 +226,8 @@ async fn finish_enrollment(
         outcome = enroll(service, store, updates, session) => outcome,
     };
     match outcome {
-        Ok(connection) => {
-            updates.publish(PairingProgress::Finished(PairingOutcome::KeyConfirmed(
-                SessionState::Completed,
-            )));
+        Ok((connection, pairing_id)) => {
+            updates.publish(PairingProgress::Completed { pairing_id });
             tokio::select! {
                 biased;
                 _ = stopping => {}

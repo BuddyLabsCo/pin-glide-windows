@@ -19,6 +19,14 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_app::{PairingStage, PairingWindow, service::PairingOperation, ui};
+#[path = "support/completion_frames.rs"]
+mod completion_frames;
+#[path = "support/main_capture.rs"]
+mod main_capture;
+#[path = "support/name_clipboard.rs"]
+mod name_clipboard;
+#[path = "support/window_size.rs"]
+mod window_size;
 
 use fixture::*;
 
@@ -38,7 +46,7 @@ enum Step {
 fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     const CHILD: &str = "PIN_GLIDE_PAIRING_EVIDENCE_CHILD";
     let Ok(mode) = std::env::var(CHILD) else {
-        for mode in ["visible", "hidden", "reduced"] {
+        for mode in ["visible", "hidden", "reduced", "duplicate", "motion"] {
             let child = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
@@ -46,7 +54,6 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
                     "--ignored",
                 ])
                 .env(CHILD, mode)
-                .env("SLINT_SCALE_FACTOR", "1")
                 .status()
                 .unwrap();
             assert!(child.success(), "{mode}");
@@ -55,6 +62,8 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     };
     let hidden = mode == "hidden";
     let reduced = mode == "reduced";
+    let duplicate = mode == "duplicate";
+    let saved_name_evidence = mode == "name-saved";
     let mut builder = EventLoop::with_user_event();
     builder.with_any_thread(true);
     slint::BackendSelector::new()
@@ -63,13 +72,21 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         .with_winit_event_loop_builder(builder)
         .select()
         .unwrap();
+    if mode == "motion" {
+        let evidence = std::env::var_os("PIN_GLIDE_PAIRING_EVIDENCE");
+        completion_frames::verify_transition(evidence.as_deref().map(Path::new));
+        return;
+    }
     let (listener, service) = listen();
     let (advance, release) = mpsc::channel();
     let (cancelled, may_refresh) = mpsc::channel();
     let (send_qr, scanned) = mpsc::channel();
-    let fixture = issue_sessions(listener, release, cancelled, scanned);
+    let (pong, delivered) = mpsc::channel();
+    let fixture = issue_sessions(listener, release, cancelled, scanned, pong);
     let directory = tempfile::tempdir().unwrap();
     let registration = directory.path().join("registration.json");
+    main_capture::seed_sender_names(&registration, duplicate, hidden);
+    let stored = registration.clone();
     let window = ui::open_pairing(true, move |notify, start| {
         let service = service.clone();
         PairingOperation::start_with_registration(
@@ -81,9 +98,14 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     })
     .unwrap();
     window.set_motion_enabled(false);
-    let evidence = (mode == "visible")
+    let evidence = (mode == "visible" || duplicate || saved_name_evidence)
         .then(|| std::env::var_os("PIN_GLIDE_PAIRING_EVIDENCE"))
         .flatten();
+    let final_name = if saved_name_evidence {
+        "办公室手机"
+    } else {
+        "我的设备"
+    };
     let mut states = [
         (PairingStage::Waiting, Step::Advance, None),
         (
@@ -123,9 +145,24 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     let started = Instant::now();
     let mut frame = None;
     let mut completed_at = None;
-    let mut completion_frames = CompletionFrames::default();
-    timer.start(TimerMode::Repeated, Duration::from_millis(20), move || {
+    let mut main_expected_at: Option<Instant> = None;
+    let mut main_label: Option<mpsc::Receiver<bool>> = None;
+    let expected = if hidden {
+        "未命名设备-3"
+    } else {
+        final_name
+    };
+    timer.start(TimerMode::Repeated, Duration::from_millis(12), move || {
         assert!(started.elapsed() < Duration::from_secs(18));
+        if let Some(opened_at) = main_expected_at {
+            main_capture::check_main(
+                opened_at,
+                &mut main_label,
+                expected,
+                evidence.as_deref().map(Path::new),
+            );
+            return;
+        }
         let Some(&(stage, step, capture_name)) = states.peek() else {
             return;
         };
@@ -136,21 +173,24 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             return;
         }
         if matches!(step, Step::Finish) {
-            let completed_at = completed_at.get_or_insert_with(|| {
-                assert_eq!(window.window().is_visible(), !hidden);
-                if hidden {
-                    ui::open();
-                    assert!(window.window().is_visible());
-                    assert_eq!(window.get_stage(), PairingStage::Completed);
+            if hidden {
+                assert!(!window.window().is_visible());
+                if delivered.try_recv().is_err() {
+                    return;
                 }
+                assert!(main_capture::main_window().is_none());
+                ui::open();
+                assert!(!window.window().is_visible());
+                assert_eq!(saved_name(&stored), "未命名设备-3");
+                main_expected_at = Some(Instant::now());
+                return;
+            }
+            let completed_at = completed_at.get_or_insert_with(|| {
+                assert!(window.window().is_visible());
+                window.set_sender_name("我的设备".into());
                 Instant::now()
             });
-            if !completion_frames.observe(
-                &window,
-                completed_at.elapsed(),
-                !hidden && !reduced,
-                evidence.as_deref().map(Path::new),
-            ) {
+            if !reduced && completed_at.elapsed() < Duration::from_millis(210) {
                 return;
             }
         }
@@ -193,7 +233,9 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             } else {
                 return;
             }
-        } else if let Some(path) = &evidence_path {
+        } else if let Some(path) = &evidence_path
+            && !duplicate
+        {
             capture(&window, path);
         }
         states.next();
@@ -206,7 +248,22 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
                 }
                 advance.send(()).unwrap();
             }
-            Step::Finish => slint::quit_event_loop().unwrap(),
+            Step::Finish => {
+                completion_frames::verify_done_pointer_states(&window);
+                verify_pending_name_route(&window);
+                verify_naming(
+                    &window,
+                    &stored,
+                    duplicate,
+                    final_name,
+                    evidence.as_deref().map(Path::new),
+                );
+                if duplicate {
+                    slint::quit_event_loop().unwrap();
+                } else {
+                    main_expected_at = Some(Instant::now());
+                }
+            }
             Step::WaitForCancellation | Step::Refresh => window.invoke_refresh(),
             Step::Scan => unreachable!(),
         }
@@ -217,53 +274,83 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     fixture.join().unwrap();
 }
 
-#[derive(Default)]
-struct CompletionFrames {
-    first: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
-    transition: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
+fn verify_pending_name_route(window: &PairingWindow) {
+    window.set_sender_name("Draft".into());
+    window.hide().unwrap();
+    ui::open_settings();
+    assert!(window.window().is_visible());
+    assert_eq!(window.get_sender_name(), "Draft");
+    ui::open();
+    assert!(main_capture::main_window().is_none());
 }
 
-impl CompletionFrames {
-    fn observe(
-        &mut self,
-        window: &PairingWindow,
-        elapsed: Duration,
-        moving: bool,
-        evidence: Option<&Path>,
-    ) -> bool {
-        let frame = window.window().take_snapshot().unwrap();
-        let first = self.first.get_or_insert_with(|| frame.clone());
-        if moving
-            && self.transition.is_none()
-            && elapsed >= Duration::from_millis(55)
-            && elapsed < Duration::from_millis(120)
-        {
-            self.transition = Some(frame.clone());
-            if let Some(directory) = evidence {
-                capture(window, &directory.join("pair-done-transition.ppm"));
-            }
+fn saved_name(path: &Path) -> String {
+    let stored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    stored["active_pairings"]["pairing-1"]["name"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn verify_naming(
+    window: &PairingWindow,
+    store: &Path,
+    duplicate: bool,
+    final_name: &str,
+    evidence: Option<&Path>,
+) {
+    let too_long = "我的备用设备".repeat(7);
+    let cases = [
+        ("empty", "", "请填写设备名称。"),
+        ("too-long", &too_long, "设备名称最多 40 个字符。"),
+        ("duplicate", "我的设备", "已有一台同名设备，请换一个名称。"),
+    ];
+    for (state, input, error) in cases {
+        if (state == "duplicate") != duplicate {
+            continue;
         }
-        if elapsed < Duration::from_millis(200) {
-            return false;
+        window.set_sender_name(input.into());
+        window.set_name_error("".into());
+        if let Some(directory) = evidence {
+            capture(
+                window,
+                &directory.join(format!("pair-done-input-{state}.ppm")),
+            );
         }
-        let sample = |pixels: &slint::SharedPixelBuffer<slint::Rgba8Pixel>| {
-            pixels.as_slice()[160 * pixels.width() as usize + 220]
-        };
-        if moving {
-            let first = sample(first);
-            let during = sample(self.transition.as_ref().expect("completion fade frame"));
-            let settled = sample(&frame);
-            assert!(first.r > during.r && during.r > settled.r);
-        } else {
-            assert!(first.as_slice() == frame.as_slice());
+        window.invoke_finish_naming();
+        assert_eq!(window.get_name_error(), error);
+        assert!(window.window().is_visible());
+        assert_eq!(saved_name(store), "未命名设备");
+        if let Some(directory) = evidence {
+            capture(
+                window,
+                &directory.join(format!("pair-done-error-{state}.ppm")),
+            );
         }
-        true
+    }
+    if !duplicate {
+        window.set_sender_name("".into());
+        name_clipboard::verify_paste(window);
+        window.invoke_finish_naming();
+        assert_eq!(window.get_name_error(), "名称包含无效字符，请重新输入。");
+        assert_eq!(saved_name(store), "未命名设备");
+        if let Some(directory) = evidence {
+            capture(
+                window,
+                &directory.join("pair-done-error-invalid-character.ppm"),
+            );
+        }
+        name_clipboard::type_text(window, "X");
+        assert_eq!(window.get_name_error(), "");
+        window.set_sender_name(format!("　{final_name}\t").into());
+        window.invoke_finish_naming();
+        assert!(!window.window().is_visible());
+        assert_eq!(saved_name(store), final_name);
     }
 }
 
 fn capture(window: &PairingWindow, path: &Path) {
     let pixels = window.window().take_snapshot().unwrap();
-    assert_eq!((pixels.width(), pixels.height()), (440, 560));
     let mut file = fs::File::create(path).unwrap();
     write!(file, "P6\n{} {}\n255\n", pixels.width(), pixels.height()).unwrap();
     let rgb: Vec<_> = pixels
@@ -279,6 +366,7 @@ fn issue_sessions(
     release: mpsc::Receiver<()>,
     cancelled: mpsc::Sender<()>,
     scanned: mpsc::Receiver<Value>,
+    pong: mpsc::Sender<()>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let acceptor = acceptor();
@@ -324,7 +412,14 @@ fn issue_sessions(
                     );
                     assert_bearer(&headers);
                     credential_ready(&mut socket, complete.get_mut(), claimed);
-                    issue_credential(&acceptor, &listener, &release, &session_id, index == 3);
+                    issue_credential(
+                        &acceptor,
+                        &listener,
+                        &release,
+                        &session_id,
+                        index == 3,
+                        &pong,
+                    );
                 }
             }
         }
@@ -337,6 +432,7 @@ fn issue_credential(
     release: &mpsc::Receiver<()>,
     session_id: &str,
     reject_upgrade: bool,
+    pong: &mpsc::Sender<()>,
 ) {
     let mut original = BufReader::new(accept(acceptor, listener));
     assert_redeem(&mut original, session_id, 0);
@@ -370,7 +466,12 @@ fn issue_credential(
         );
         return;
     }
-    assert_peer_left(&mut accept_delivery(connection));
+    use tokio_tungstenite::tungstenite::Message;
+    let mut delivery = accept_delivery(connection);
+    delivery.send(Message::Ping(vec![29].into())).unwrap();
+    assert_eq!(delivery.read().unwrap(), Message::Pong(vec![29].into()));
+    pong.send(()).unwrap();
+    assert_peer_left(&mut delivery);
 }
 
 fn assert_redeem(connection: &mut BufReader<Connection>, session_id: &str, attempt: i32) {

@@ -6550,6 +6550,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "hpke",
+ "i-slint-core",
  "native-tls",
  "pin-glide-http",
  "pin-glide-wss",
@@ -6566,6 +6567,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
+ "windows",
  "windows-sys 0.61.2",
  "zeroize",
 ]

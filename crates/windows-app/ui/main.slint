@@ -1,0 +1,239 @@
+import { Button, Palette, ScrollView } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    in property <bool> chinese;
+    in property <[string]> sender-names;
+    title: root.chinese ? "鹊信" : "Pin Glide";
+    icon: @image-url("assets/app-icon.png");
+    min-width: 400px;
+    max-width: 400px;
+    min-height: 576px;
+    max-height: 576px;
+    background: #f1f8f5;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
+    VerticalLayout {
+        padding: 24px;
+        padding-bottom: 16px;
+        spacing: 16px;
+        HorizontalLayout {
+            height: 32px;
+            spacing: 10px;
+            Image {
+                source: @image-url("assets/app-icon.png");
+                width: 32px;
+                height: 32px;
+            }
+
+            Text {
+                text: root.title;
+                font-size: 18px;
+                font-weight: 600;
+                color: #22312f;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                Button {
+                    width: parent.width;
+                    height: parent.height;
+                    accessible-label: root.chinese ? "设置" : "Settings";
+                }
+
+                Path {
+                    width: 18px;
+                    height: 18px;
+                    viewbox-width: 20;
+                    viewbox-height: 20;
+                    commands: "M 8 2 L 12 2 L 12.5 4.3 L 14 5.2 L 16.3 4.5 L 18.3 8 L 16.6 9.6 L 16.6 10.4 L 18.3 12 L 16.3 15.5 L 14 14.8 L 12.5 15.7 L 12 18 L 8 18 L 7.5 15.7 L 6 14.8 L 3.7 15.5 L 1.7 12 L 3.4 10.4 L 3.4 9.6 L 1.7 8 L 3.7 4.5 L 6 5.2 L 7.5 4.3 Z";
+                    stroke: #455750;
+                    stroke-width: 1.35px;
+                }
+
+                Rectangle {
+                    width: 5px;
+                    height: 5px;
+                    border-radius: 2.5px;
+                    border-width: 1.2px;
+                    border-color: #455750;
+                }
+            }
+        }
+
+        Rectangle {
+            height: 152px;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #deebe5;
+            background: white;
+            Rectangle {
+                y: 16px;
+                width: 128px;
+                height: 68px;
+                Rectangle {
+                    width: 112px;
+                    height: 62px;
+                    border-radius: 31px;
+                    background: #e8f6ef;
+                }
+
+                Rectangle {
+                    x: 17px;
+                    y: 15px;
+                    width: 57px;
+                    height: 35px;
+                    border-radius: 5px;
+                    border-width: 2px;
+                    border-color: #478e80;
+                    background: #f9fffc;
+                    Rectangle {
+                        width: 21px;
+                        height: 2px;
+                        border-radius: 1px;
+                        background: #9ad1c2;
+                    }
+                }
+
+                Rectangle {
+                    x: 12px;
+                    y: 52px;
+                    width: 68px;
+                    height: 2px;
+                    border-radius: 1px;
+                    background: #478e80;
+                }
+
+                Rectangle {
+                    x: 86px;
+                    y: 22px;
+                    width: 24px;
+                    height: 38px;
+                    border-radius: 5px;
+                    border-width: 2px;
+                    border-color: #478e80;
+                    background: #f9fffc;
+                    Rectangle {
+                        y: 29px;
+                        width: 7px;
+                        height: 2px;
+                        border-radius: 1px;
+                        background: #9ad1c2;
+                    }
+                }
+
+                Rectangle {
+                    x: 67px;
+                    y: 25px;
+                    width: 26px;
+                    height: 26px;
+                    border-radius: 13px;
+                    background: #c7eade;
+                    Rectangle {
+                        width: 12px;
+                        height: 2px;
+                        border-radius: 1px;
+                        background: #006b60;
+                    }
+
+                    Rectangle {
+                        width: 2px;
+                        height: 12px;
+                        border-radius: 1px;
+                        background: #006b60;
+                    }
+                }
+            }
+
+            Rectangle {
+                x: 16px;
+                y: 96px;
+                width: parent.width - 32px;
+                height: 40px;
+                border-radius: 6px;
+                background: #006b60;
+                Text {
+                    text: root.chinese ? "配对新设备" : "Pair a new device";
+                    color: white;
+                    font-weight: 600;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+            Text {
+                height: 20px;
+                text: root.chinese ? "已配对设备" : "Paired devices";
+                font-size: 14px;
+                font-weight: 600;
+                color: #264239;
+                vertical-alignment: center;
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    y: 0px;
+                    for sender in root.sender-names: Rectangle {
+                        height: 48px;
+                        border-width: 1px;
+                        border-color: #deebe5;
+                        border-radius: 10px;
+                        background: white;
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 12px;
+                            spacing: 12px;
+                            Rectangle {
+                                width: 20px;
+                                Rectangle {
+                                    width: 16px;
+                                    height: 20px;
+                                    border-radius: 4px;
+                                    border-width: 1.5px;
+                                    border-color: #4c8074;
+                                    Rectangle {
+                                        y: 14px;
+                                        width: 5px;
+                                        height: 1.5px;
+                                        border-radius: 1px;
+                                        background: #4c8074;
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: sender;
+                                accessible-role: text;
+                                accessible-label: sender;
+                                color: #25322e;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                width: 32px;
+                                Path {
+                                    width: 12px;
+                                    height: 8px;
+                                    viewbox-width: 12;
+                                    viewbox-height: 8;
+                                    commands: "M 1 2 L 6 6 L 11 2";
+                                    stroke: #4c8074;
+                                    stroke-width: 1.5px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
