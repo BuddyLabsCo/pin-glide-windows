@@ -13,13 +13,13 @@ use super::{CreateError, NewReceiverSession, Service, SessionState, client_build
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
-pub(super) fn listen(host: &str) -> (TcpListener, String) {
+pub(crate) fn listen(host: &str) -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("https://{host}:{}", listener.local_addr().unwrap().port());
     (listener, origin)
 }
 
-pub(super) fn accept_loopback(listener: &TcpListener) -> TcpStream {
+pub(crate) fn accept_loopback(listener: &TcpListener) -> TcpStream {
     let timeout = Duration::from_secs(5);
     let deadline = Instant::now() + timeout;
     listener.set_nonblocking(true).unwrap();
@@ -42,7 +42,7 @@ pub(super) fn accept_loopback(listener: &TcpListener) -> TcpStream {
     stream
 }
 
-pub(super) fn local_service(
+pub(crate) fn local_service(
     listener: &TcpListener,
     origin: &str,
     trust_fixture_ca: bool,
@@ -58,7 +58,7 @@ pub(super) fn local_service(
     service
 }
 
-pub(super) fn acceptor() -> TlsAcceptor {
+pub(crate) fn acceptor() -> TlsAcceptor {
     let identity = Identity::from_pkcs12(
         include_bytes!("../../tests/fixtures/service/server.p12"),
         "pin-glide-test",

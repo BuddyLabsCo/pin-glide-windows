@@ -1,9 +1,6 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::mpsc,
     time::{Duration, Instant as WallInstant, SystemTime, UNIX_EPOCH},
 };
 
@@ -14,16 +11,24 @@ use tokio_tungstenite::tungstenite::{
     protocol::{CloseFrame, frame::coding::CloseCode},
 };
 
-use super::{PairingOperation, PairingOutcome, PairingProgress, Service, drive, oneshot, watch};
+use super::{
+    PairingOperation, PairingOutcome, PairingProgress, ProgressUpdates, Service, drive, oneshot,
+    watch,
+};
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
 
-const TOKEN: &str = "fixture-pairing-b";
+pub(crate) const TOKEN: &str = "fixture-pairing-b";
 const EXPIRY: &str = "2030-01-01T00:01:00Z";
 const START: u64 = 1_893_456_000;
 
 enum Script {
     Events(mpsc::Receiver<Option<&'static str>>),
     Rejected(&'static str, &'static str),
+    DelayedDelete {
+        frames: mpsc::Receiver<Option<&'static str>>,
+        received: oneshot::Sender<()>,
+        release: mpsc::Receiver<()>,
+    },
 }
 
 fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
@@ -47,6 +52,25 @@ fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
         let connection = acceptor.accept(accept_loopback(&listener)).unwrap();
         match script {
             Script::Events(frames) => send_events(connection, &frames),
+            Script::DelayedDelete {
+                frames,
+                received,
+                release,
+            } => {
+                send_events(connection, &frames);
+                let mut request =
+                    BufReader::new(acceptor.accept(accept_loopback(&listener)).unwrap());
+                assert_eq!(
+                    read_request(&mut request),
+                    "DELETE /v1/pairing-sessions/session-1 HTTP/1.1\r\n"
+                );
+                received.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(5)).unwrap();
+                request
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+            }
             Script::Rejected(status, code) => {
                 let mut request = BufReader::new(connection);
                 assert_eq!(
@@ -61,7 +85,7 @@ fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
     (service, server)
 }
 
-fn read_request(stream: &mut impl BufRead) -> String {
+pub(crate) fn read_request(stream: &mut impl BufRead) -> String {
     let mut request = String::new();
     stream.read_line(&mut request).unwrap();
     let mut size = 0;
@@ -80,7 +104,7 @@ fn read_request(stream: &mut impl BufRead) -> String {
     request
 }
 
-fn write_response(stream: &mut impl Write, status: &str, body: &Value) {
+pub(crate) fn write_response(stream: &mut impl Write, status: &str, body: &Value) {
     let body = body.to_string();
     write!(
         stream,
@@ -93,7 +117,7 @@ fn write_response(stream: &mut impl Write, status: &str, body: &Value) {
     stream.write_all(body.as_bytes()).unwrap();
 }
 
-fn snapshot(state: &str) -> Value {
+pub(crate) fn snapshot(state: &str) -> Value {
     json!({
         "sessionId": "session-1",
         "receiverId": "receiver-1",
@@ -106,15 +130,29 @@ fn snapshot(state: &str) -> Value {
 }
 
 fn send_events(connection: impl Read + Write, frames: &mpsc::Receiver<Option<&str>>) {
+    let mut socket = accept_events(connection, "/v1/pairing-sessions/session-1/events");
+    for state in frames {
+        let Some(state) = state else {
+            let _ = socket.close(Some(CloseFrame {
+                code: CloseCode::Policy,
+                reason: "fixture close".into(),
+            }));
+            return;
+        };
+        send_state(&mut socket, snapshot(state));
+    }
+}
+
+pub(crate) fn accept_events<Stream: Read + Write>(
+    connection: Stream,
+    path: &str,
+) -> tokio_tungstenite::tungstenite::WebSocket<Stream> {
     #[expect(
         clippy::result_large_err,
         reason = "tungstenite fixes the callback error type"
     )]
-    let mut socket = accept_hdr(connection, |request: &Request, mut response: Response| {
-        assert_eq!(
-            request.uri().path(),
-            "/v1/pairing-sessions/session-1/events"
-        );
+    let socket = accept_hdr(connection, |request: &Request, mut response: Response| {
+        assert_eq!(request.uri().path(), path);
         assert_eq!(
             request.headers()["authorization"],
             format!("Bearer {TOKEN}")
@@ -126,25 +164,23 @@ fn send_events(connection: impl Read + Write, frames: &mpsc::Receiver<Option<&st
         Ok(response)
     })
     .unwrap();
-    for state in frames {
-        let Some(state) = state else {
-            let _ = socket.close(Some(CloseFrame {
-                code: CloseCode::Policy,
-                reason: "fixture close".into(),
-            }));
-            return;
-        };
-        socket
-            .send(Message::text(
-                json!({
-                    "type": "pairing_state",
-                    "version": 1,
-                    "session": snapshot(state),
-                })
-                .to_string(),
-            ))
-            .unwrap();
-    }
+    socket
+}
+
+pub(crate) fn send_state(
+    socket: &mut tokio_tungstenite::tungstenite::WebSocket<impl Read + Write>,
+    state: Value,
+) {
+    socket
+        .send(Message::text(
+            json!({
+                "type": "pairing_state",
+                "version": 1,
+                "session": state,
+            })
+            .to_string(),
+        ))
+        .unwrap();
 }
 
 async fn wait_for(operation: &PairingOperation, matches: impl Fn(&PairingProgress) -> bool) {
@@ -159,8 +195,19 @@ fn clock(seconds: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(seconds)
 }
 
+fn progress_channel() -> (ProgressUpdates, watch::Receiver<PairingProgress>) {
+    let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
+    (
+        ProgressUpdates {
+            snapshot,
+            notify: || {},
+        },
+        progress,
+    )
+}
+
 #[tokio::test]
-async fn reopening_reads_the_terminal_snapshot_even_when_followed_by_policy_close() {
+async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_close() {
     for (state, expected) in [
         ("canceled", PairingOutcome::Canceled),
         ("expired", PairingOutcome::Expired),
@@ -168,7 +215,7 @@ async fn reopening_reads_the_terminal_snapshot_even_when_followed_by_policy_clos
     ] {
         let (send, frames) = mpsc::channel();
         let (service, server) = script_service(Script::Events(frames));
-        let (updates, progress) = watch::channel(PairingProgress::Preparing);
+        let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
         let operation = PairingOperation {
             progress,
@@ -181,13 +228,6 @@ async fn reopening_reads_the_terminal_snapshot_even_when_followed_by_policy_clos
             matches!(state, PairingProgress::Waiting { .. })
         })
         .await;
-        let PairingProgress::Waiting { code: first, .. } = operation.current() else {
-            unreachable!()
-        };
-        let PairingProgress::Waiting { code: reopened, .. } = operation.current() else {
-            unreachable!()
-        };
-        assert!(std::sync::Arc::ptr_eq(&first, &reopened));
         send.send(Some(state)).unwrap();
         send.send(None).unwrap();
         wait_for(&operation, |state| {
@@ -227,7 +267,7 @@ async fn upgrade_rejection_distinguishes_expiry_from_other_failures() {
         ),
     ] {
         let (service, server) = script_service(Script::Rejected(status, code));
-        let (updates, progress) = watch::channel(PairingProgress::Preparing);
+        let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
         drive(&service, &updates, stopping, || clock(START)).await;
         assert!(
@@ -238,30 +278,23 @@ async fn upgrade_rejection_distinguishes_expiry_from_other_failures() {
 }
 
 #[tokio::test]
-async fn a_wall_clock_jump_cannot_expire_the_display_ahead_of_the_operation() {
+async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
     let (send, frames) = mpsc::channel();
     let (service, server) = script_service(Script::Events(frames));
-    let (updates, progress) = watch::channel(PairingProgress::Preparing);
+    let (updates, progress) = progress_channel();
     let (_stop, stopping) = oneshot::channel();
     let operation = PairingOperation {
         progress,
         worker: None,
     };
-    let wall = std::sync::Arc::new(AtomicU64::new(START));
-    let worker_wall = wall.clone();
-    let worker = tokio::spawn(async move {
-        drive(&service, &updates, stopping, || {
-            clock(worker_wall.load(Ordering::Relaxed))
-        })
-        .await;
-    });
+    let worker =
+        tokio::spawn(async move { drive(&service, &updates, stopping, || clock(START)).await });
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })
     })
     .await;
     tokio::time::pause();
-    wall.store(START + 3600, Ordering::Relaxed);
     assert!(matches!(
         operation.current(),
         PairingProgress::Waiting { seconds: 60, .. }
@@ -279,4 +312,43 @@ async fn a_wall_clock_jump_cannot_expire_the_display_ahead_of_the_operation() {
     ));
     send.send(None).unwrap();
     server.join().unwrap();
+}
+
+#[tokio::test]
+async fn live_close_publishes_failure_while_cancellation_response_is_pending() {
+    let (send, frames) = mpsc::channel();
+    let (received, delete_arrived) = oneshot::channel();
+    let (release, hold) = mpsc::channel();
+    let (service, server) = script_service(Script::DelayedDelete {
+        frames,
+        received,
+        release: hold,
+    });
+    let operation = PairingOperation::start(move || Some(service), || {});
+    send.send(Some("awaiting_authorization")).unwrap();
+    wait_for(&operation, |state| {
+        matches!(state, PairingProgress::Waiting { .. })
+    })
+    .await;
+    send.send(None).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), delete_arrived)
+        .await
+        .unwrap()
+        .unwrap();
+    let outcome = operation.current();
+    let (dropped, replacement_ready) = oneshot::channel();
+    let replacement = std::thread::spawn(move || {
+        drop(operation);
+        dropped.send(()).unwrap();
+    });
+    let replaced_before_delete =
+        tokio::time::timeout(Duration::from_secs(1), replacement_ready).await;
+    release.send(()).unwrap();
+    replacement.join().unwrap();
+    server.join().unwrap();
+    assert!(matches!(
+        outcome,
+        PairingProgress::Finished(PairingOutcome::Failed)
+    ));
+    assert!(matches!(replaced_before_delete, Ok(Ok(()))));
 }

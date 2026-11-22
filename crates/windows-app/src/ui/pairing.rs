@@ -1,13 +1,14 @@
-use std::{cell::RefCell, sync::Arc, time::Duration};
+use std::{cell::RefCell, sync::Arc};
 
+use crate::service::{PairingOperation, PairingOutcome, PairingProgress, Service};
+use crate::{PairingStage, PairingWindow, platform};
 use qrcode::{Color, QrCode};
 use slint::{
     CloseRequestResponse, ComponentHandle, Image, PlatformError, Rgb8Pixel, SharedPixelBuffer,
-    Timer, TimerMode,
 };
-use windows_app::service::{PairingOperation, PairingOutcome, PairingProgress};
 
-use crate::{PairingStage, PairingWindow, platform};
+#[cfg(test)]
+mod tests;
 
 thread_local! {
     static PAIRING: RefCell<Option<View>> = const { RefCell::new(None) };
@@ -15,7 +16,6 @@ thread_local! {
 
 struct View {
     window: PairingWindow,
-    ticker: Timer,
     operation: PairingOperation,
     rendered_code: Option<Arc<QrCode>>,
 }
@@ -35,13 +35,12 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
     window.show()?;
     super::focus(window.window());
     PAIRING.with_borrow_mut(|pairing| {
-        let view = View {
+        let mut view = View {
             window,
-            ticker: Timer::default(),
             operation: start_operation(),
             rendered_code: None,
         };
-        view.watch_progress();
+        view.render();
         *pairing = Some(view);
     });
     Ok(())
@@ -80,11 +79,29 @@ pub(super) fn update_motion() {
 }
 
 pub(super) fn shutdown() {
-    PAIRING.with_borrow_mut(|pairing| *pairing = None);
+    if let Some(view) = PAIRING.with_borrow_mut(Option::take) {
+        view.operation.shutdown();
+    }
 }
 
 fn start_operation() -> PairingOperation {
-    PairingOperation::start(option_env!("PINGLIDE_SERVICE_URL"))
+    #[cfg(test)]
+    if let Some(service) = tests::connect() {
+        return PairingOperation::start(move || Some(service), notify_progress);
+    }
+    let connect =
+        || option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok());
+    PairingOperation::start(connect, notify_progress)
+}
+
+fn notify_progress() {
+    let _ = slint::invoke_from_event_loop(|| {
+        PAIRING.with_borrow_mut(|pairing| {
+            if let Some(view) = pairing {
+                view.render();
+            }
+        });
+    });
 }
 
 fn refresh() {
@@ -93,23 +110,11 @@ fn refresh() {
         if matches!(view.operation.current(), PairingProgress::Finished(_)) {
             view.operation = start_operation();
             view.render();
-            view.watch_progress();
         }
     });
 }
 
 impl View {
-    fn watch_progress(&self) {
-        self.ticker
-            .start(TimerMode::Repeated, Duration::from_millis(100), || {
-                PAIRING.with_borrow_mut(|pairing| {
-                    if let Some(view) = pairing {
-                        view.render();
-                    }
-                });
-            });
-    }
-
     fn render(&mut self) {
         let stage = match self.operation.current() {
             PairingProgress::Preparing => PairingStage::Preparing,
@@ -127,15 +132,12 @@ impl View {
                 PairingStage::Waiting
             }
             PairingProgress::Confirming => PairingStage::Confirming,
-            PairingProgress::Finished(outcome) => {
-                self.ticker.stop();
-                match outcome {
-                    PairingOutcome::CreateFailed => PairingStage::CreateFailed,
-                    PairingOutcome::Failed => PairingStage::Failed,
-                    PairingOutcome::Expired => PairingStage::Expired,
-                    PairingOutcome::Canceled => PairingStage::Canceled,
-                }
-            }
+            PairingProgress::Finished(outcome) => match outcome {
+                PairingOutcome::CreateFailed => PairingStage::CreateFailed,
+                PairingOutcome::Failed => PairingStage::Failed,
+                PairingOutcome::Expired => PairingStage::Expired,
+                PairingOutcome::Canceled => PairingStage::Canceled,
+            },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {
             self.window.set_qr(Image::default());

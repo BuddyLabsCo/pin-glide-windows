@@ -15,12 +15,12 @@ use reqwest::{Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod pairing_events;
-mod pairing_operation;
+pub(crate) mod pairing_operation;
 pub use pairing_operation::{PairingOperation, PairingProgress};
 pub use receiver_core::pairing::{PairingOutcome, SessionState};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub struct Service {
     config: Configuration,

@@ -5,8 +5,12 @@ slint::include_modules!();
 
 #[cfg(windows)]
 mod platform;
+#[cfg(all(test, windows))]
+mod service;
 #[cfg(windows)]
 mod ui;
+#[cfg(all(not(test), windows))]
+use windows_app::service;
 
 #[cfg(windows)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
