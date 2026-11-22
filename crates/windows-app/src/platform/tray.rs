@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::io;
 use std::mem::size_of;
 use std::ptr::{null, null_mut};
@@ -10,20 +11,26 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, HICON, KillTimer, MF_SEPARATOR,
-    MF_STRING, PostMessageW, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_LBUTTONDBLCLK,
-    WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_POPUP,
+    DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW, HICON,
+    KillTimer, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassW,
+    RegisterWindowMessageW, SetForegroundWindow, SetTimer, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_LBUTTONDBLCLK, WM_NULL,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_POPUP,
 };
 
-use super::{wide, win32_result};
+use super::{chinese, wide, win32_result};
 
 const TRAY_EVENT: u32 = WM_APP + 1;
+pub(super) const ACTIVATE: u32 = WM_APP + 2;
 const OPEN: u32 = 1;
 const SETTINGS: u32 = 2;
 const EXIT: u32 = 3;
 const ICON_RETRY: usize = 1;
 static EXPLORER_RESTART: OnceLock<u32> = OnceLock::new();
+
+thread_local! {
+    static WITHOUT_UI: Cell<bool> = const { Cell::new(false) };
+}
 
 pub struct Tray {
     window: HWND,
@@ -69,6 +76,31 @@ impl Tray {
         register_icon(window)?;
         Ok(tray)
     }
+
+    pub fn window(&self) -> HWND {
+        self.window
+    }
+
+    pub fn run_without_ui(&self) -> io::Result<bool> {
+        WITHOUT_UI.set(true);
+        let mut message = MSG::default();
+        loop {
+            // SAFETY: message is writable and only this thread reads and dispatches its queue.
+            unsafe {
+                match GetMessageW(&raw mut message, null_mut(), 0, 0) {
+                    -1 => return Err(io::Error::last_os_error()),
+                    0 => {
+                        WITHOUT_UI.set(false);
+                        return Ok(message.wParam != 0);
+                    }
+                    _ => {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl Drop for Tray {
@@ -82,8 +114,7 @@ impl Drop for Tray {
 }
 
 fn load_icon() -> io::Result<HICON> {
-    let mut image =
-        include_bytes!("../../../../docs/prototypes/ui-tool/assets/app-icon.png").to_vec();
+    let mut image = include_bytes!("../../ui/assets/app-icon.png").to_vec();
     // SAFETY: the original app icon is a trusted PNG in writable memory for this call.
     let icon = unsafe {
         CreateIconFromResourceEx(image.as_mut_ptr(), image.len() as u32, 1, 0x30000, 0, 0, 0)
@@ -117,7 +148,7 @@ fn add_icon(window: HWND, icon: HICON, chinese: bool) -> io::Result<()> {
 
 fn register_icon(window: HWND) -> io::Result<()> {
     let icon = load_icon()?;
-    let result = add_icon(window, icon, crate::ui::chinese());
+    let result = add_icon(window, icon, chinese());
     // SAFETY: Shell_NotifyIconW copies the icon. The retry timer belongs to this tray window.
     unsafe {
         DestroyIcon(icon);
@@ -137,12 +168,18 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
+        ACTIVATE => {
+            open();
+            0
+        }
         TRAY_EVENT => {
             tray_event(window, lparam as u32);
             0
         }
         WM_SETTINGCHANGE => {
-            crate::ui::update_motion();
+            if !WITHOUT_UI.get() {
+                let _ = slint::invoke_from_event_loop(crate::ui::update_motion);
+            }
             0
         }
         WM_TIMER if wparam == ICON_RETRY => {
@@ -164,17 +201,28 @@ unsafe extern "system" fn window_proc(
 fn tray_event(window: HWND, event: u32) {
     let choice = match event {
         WM_LBUTTONDBLCLK => OPEN,
-        WM_RBUTTONUP => show_menu(window, crate::ui::chinese()),
+        WM_RBUTTONUP => show_menu(window, chinese()),
         _ => return,
     };
     match choice {
-        OPEN | SETTINGS => {
-            let _ = slint::invoke_from_event_loop(crate::ui::open);
+        OPEN | SETTINGS => open(),
+        EXIT if WITHOUT_UI.get() => {
+            // SAFETY: the menu callback runs on the thread pumping the native queue.
+            unsafe { PostQuitMessage(0) };
         }
         EXIT => {
             let _ = slint::quit_event_loop();
         }
         _ => {}
+    }
+}
+
+fn open() {
+    if WITHOUT_UI.get() {
+        // SAFETY: the native loop treats a nonzero quit code as an explicit reopen request.
+        unsafe { PostQuitMessage(1) };
+    } else {
+        let _ = slint::invoke_from_event_loop(crate::ui::open);
     }
 }
 

@@ -1,0 +1,298 @@
+component Envelope inherits Path {
+    commands: "M 1 3 Q 1 1 3 1 H 15 Q 17 1 17 3 V 11 Q 17 13 15 13 H 3 Q 1 13 1 11 Z M 2 3 L 9 8 L 16 3";
+    stroke: white;
+    stroke-width: 1.35px;
+    width: 16px;
+    height: 13px;
+}
+
+export component WelcomeArt inherits Rectangle {
+    in property <float> seconds;
+    in property <string> message-label: "新短信";
+    pure function ease(start: float, end: float) -> float {
+        let t = min(1.0, max(0.0, (root.seconds - start) / (end - start)));
+        return t * t * (3 - 2 * t);
+    }
+    private property <float> incoming: root.ease(0.24, 0.70);
+    private property <float> flight: root.ease(1.03, 2.22);
+    private property <float> opened: root.ease(2.12, 2.60);
+    private property <float> reset: 1 - root.ease(5.52, 6.13);
+    private property <length> flight-x: 89px + 216px * root.flight;
+    private property <length> flight-y: 112px + 35px * root.flight - 338px * root.flight * (1 - root.flight);
+
+    Rectangle {
+        x: 6px;
+        y: 10px;
+        width: 360px;
+        height: 225px;
+        border-radius: 112px;
+        background: @radial-gradient(circle, #ddf3ea 0%, #eaf6f0 62%, #fafcfb 100%);
+    }
+
+    Rectangle {
+        x: 230px;
+        y: 24px;
+        width: 122px;
+        height: 122px;
+        border-radius: 61px;
+        background: @linear-gradient(142deg, #cceee4 0%, #e7f6ef 100%);
+    }
+
+    Rectangle {
+        x: 24px;
+        y: 50px;
+        width: 42px;
+        height: 42px;
+        border-radius: 21px;
+        background: #e0f3eb;
+    }
+
+    // A dotted route follows the same parabola as the moving notification.
+    for step in 23: Rectangle {
+        property <float> t: step / 22.0;
+        x: 89px + 216px * self.t - 1.5px;
+        y: 112px + 35px * self.t - 338px * self.t * (1 - self.t) - 1.5px;
+        width: 3px;
+        height: 3px;
+        border-radius: 2px;
+        background: self.t < root.flight ? #6eb29e : #afcfc2;
+    }
+
+    Rectangle {
+        x: 19px;
+        y: 77px;
+        width: 110px;
+        height: 118px;
+        border-radius: 14px;
+        background: @linear-gradient(165deg, #f9fffc 0%, #deeee7 100%);
+        border-width: 1px;
+        border-color: #91b6a8;
+        drop-shadow-offset-y: 5px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #1e543b19;
+        Rectangle {
+            x: 6px;
+            y: 6px;
+            width: 98px;
+            height: 106px;
+            border-radius: 10px;
+            background: @linear-gradient(150deg, #ffffff 0%, #edf7f2 100%);
+            Rectangle {
+                x: 13px;
+                y: 15px;
+                width: 30px;
+                height: 3px;
+                border-radius: 2px;
+                background: #b4d3c8;
+            }
+
+            Rectangle {
+                x: 13px;
+                y: 31px;
+                width: 72px;
+                height: 29px;
+                border-radius: 5px;
+                background: #e2f0e9;
+            }
+
+            Rectangle {
+                x: 13px;
+                y: 70px;
+                width: 50px;
+                height: 5px;
+                border-radius: 3px;
+                background: #cde2d8;
+            }
+
+            Rectangle {
+                x: 13px;
+                y: 82px;
+                width: 34px;
+                height: 5px;
+                border-radius: 3px;
+                background: #d9ebe3;
+            }
+        }
+
+        Rectangle {
+            x: 13px;
+            y: 21px + 12px * root.incoming;
+            width: 84px;
+            height: 31px;
+            background: #006b60;
+            border-radius: 7px;
+            opacity: root.incoming * root.reset;
+            Envelope {
+                x: 8px;
+            }
+
+            Rectangle {
+                x: 31px;
+                y: 10px;
+                width: 42px;
+                height: 3px;
+                border-radius: 2px;
+                background: #e6fff6;
+            }
+
+            Rectangle {
+                x: 31px;
+                y: 18px;
+                width: 26px;
+                height: 3px;
+                border-radius: 2px;
+                background: #9adcca;
+            }
+        }
+    }
+
+    Rectangle {
+        x: 168px;
+        y: 90px;
+        width: 184px;
+        height: 117px;
+        border-radius: 12px;
+        background: @linear-gradient(145deg, #f4fdf9 0%, #c5dfd5 100%);
+        border-width: 1px;
+        border-color: #8eb3a3;
+        drop-shadow-offset-y: 5px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: #1e543b19;
+        Rectangle {
+            x: 6px;
+            y: 6px;
+            width: 172px;
+            height: 104px;
+            border-radius: 8px;
+            background: @linear-gradient(135deg, #f8fcfa 0%, #cde8de 100%);
+            clip: true;
+            Path {
+                width: 172px;
+                height: 104px;
+                commands: "M 0 104 V 87 C 55 98 47 1 107 24 C 132 34 139 85 172 59 V 104 Z";
+                fill: @linear-gradient(135deg, #b6e5d5 0%, #e0f2e9 100%);
+            }
+
+            Path {
+                width: 172px;
+                height: 104px;
+                commands: "M 0 104 V 96 C 55 81 77 106 118 59 C 135 40 161 41 172 49 V 104 Z";
+                fill: @linear-gradient(160deg, #e4f7ef 0%, #a7d6c7 100%);
+            }
+
+            Rectangle {
+                width: 41px;
+                height: 5px;
+                y: 92px;
+                border-radius: 3px;
+                background: #f8fffaad;
+            }
+        }
+    }
+
+    Rectangle {
+        x: 151px;
+        y: 204px;
+        width: 218px;
+        height: 10px;
+        border-radius: 4px;
+        background: @linear-gradient(180deg, #e7f4ee 0%, #b4cfc4 100%);
+        border-width: 1px;
+        border-color: #9abaae;
+        Rectangle {
+            width: 46px;
+            height: 3px;
+            y: 0px;
+            border-radius: 2px;
+            background: #99bbae;
+        }
+    }
+
+    for tail in 3: Rectangle {
+        property <float> t: max(0.0, root.flight - (3 - tail) * 0.045);
+        x: 89px + 216px * self.t - 2px;
+        y: 112px + 35px * self.t - 338px * self.t * (1 - self.t) - 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 2px;
+        background: #6bc4b0;
+        opacity: (0.25 + tail * 0.20) * root.ease(1.10, 1.27) * (1 - root.ease(2.10, 2.30));
+    }
+
+    Rectangle {
+        x: root.flight-x - 15px;
+        y: root.flight-y - 15px;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: #006b60;
+        opacity: root.ease(1.03, 1.18) * (1 - root.ease(2.12, 2.38));
+        drop-shadow-offset-y: 3px;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #124f3938;
+        Envelope { }
+    }
+
+    Rectangle {
+        x: 207px + 83px * (1 - root.opened);
+        y: 108px + 24px * (1 - root.opened);
+        width: 30px + 142px * root.opened;
+        height: 30px + 46px * root.opened;
+        border-radius: 9px;
+        border-width: 1px;
+        border-color: #b7d8cc;
+        background: @linear-gradient(132deg, #ffffff 0%, #f1faf6 100%);
+        drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 15px;
+        drop-shadow-color: #205f4338;
+        opacity: root.ease(2.18, 2.42) * root.reset;
+        clip: true;
+        Rectangle {
+            x: 12px;
+            y: 11px;
+            width: 27px;
+            height: 27px;
+            border-radius: 6px;
+            background: #dcf2e9;
+            Image {
+                source: @image-url("assets/app-icon.png");
+                width: 19px;
+                height: 19px;
+            }
+        }
+
+        Text {
+            x: 47px;
+            y: 13px;
+            text: root.message-label;
+            font-size: 12px;
+            color: #426058;
+        }
+
+        Text {
+            x: 47px;
+            y: 32px;
+            text: "482913";
+            font-size: 24px;
+            font-weight: 600;
+            color: #173a31;
+        }
+
+        Rectangle {
+            x: 136px;
+            y: 36px;
+            width: 23px;
+            height: 23px;
+            border-radius: 12px;
+            background: #e2f3eb;
+            opacity: root.ease(2.60, 2.80);
+            Path {
+                width: 12px;
+                height: 9px;
+                commands: "M 1 5 L 5 9 L 12 1";
+                stroke: #006b60;
+                stroke-width: 1.7px;
+            }
+        }
+    }
+}

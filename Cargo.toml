@@ -10,6 +10,7 @@ publish = false
 [workspace.dependencies]
 receiver-core = { path = "crates/receiver-core" }
 slint = { version = "=1.19.0", default-features = false, features = [
+    "accessibility",
     "backend-winit",
     "compat-1-2",
     "renderer-software",

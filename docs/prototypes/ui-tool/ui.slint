@@ -1,12 +1,12 @@
 // Throwaway B-direction surfaces. No real connection, clipboard, tray, or keys.
 // Logical content sizes. Native Windows chrome is outside these renders.
 import { Button, ComboBox, LineEdit, ScrollView, Switch, Palette } from "std-widgets.slint";
-import { WelcomeArt } from "welcome.slint";
+import { WelcomeArt } from "../../../crates/windows-app/ui/welcome_art.slint";
 
 component Brand inherits HorizontalLayout {
     height: 32px;
     spacing: 10px;
-    Image { source: @image-url("assets/app-icon.png"); width: 32px; height: 32px; }
+    Image { source: @image-url("../../../crates/windows-app/ui/assets/app-icon.png"); width: 32px; height: 32px; }
     Text {
         text: "鹊信"; font-size: 18px; font-weight: 600; color: #22312f;
         vertical-alignment: center;
@@ -693,7 +693,7 @@ export component SmsWindow inherits Window {
             height: root.body-top - 22px; spacing: 8px;
             HorizontalLayout {
                 height: 20px; spacing: 4px;
-                Image { source: @image-url("assets/app-icon.png"); width: 20px; height: 20px; }
+                Image { source: @image-url("../../../crates/windows-app/ui/assets/app-icon.png"); width: 20px; height: 20px; }
                 Text { text: "鹊信"; font-size: 13px; color: #25322e; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
             }

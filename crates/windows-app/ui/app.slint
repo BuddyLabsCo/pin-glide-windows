@@ -1,4 +1,4 @@
-import { WelcomeArt } from "../../../docs/prototypes/ui-tool/welcome.slint";
+import { WelcomeArt } from "welcome_art.slint";
 
 export component WelcomeWindow inherits Window {
     in property <bool> chinese;
@@ -11,7 +11,7 @@ export component WelcomeWindow inherits Window {
     }
 
     title: root.chinese ? "鹊信" : "Pin Glide";
-    icon: @image-url("../../../docs/prototypes/ui-tool/assets/app-icon.png");
+    icon: @image-url("assets/app-icon.png");
     min-width: 440px;
     max-width: 440px;
     min-height: 560px;
@@ -27,7 +27,7 @@ export component WelcomeWindow inherits Window {
         height: 32px;
         spacing: 10px;
         Image {
-            source: @image-url("../../../docs/prototypes/ui-tool/assets/app-icon.png");
+            source: @image-url("assets/app-icon.png");
             width: 32px;
             height: 32px;
         }
@@ -81,8 +81,7 @@ export component WelcomeWindow inherits Window {
         width: 124px;
         height: 36px;
         border-radius: 4px;
-        background: press.pressed ? #00574f : press.has-hover ? #087b6e : #006b60;
-        animate background { duration: root.motion-enabled ? 120ms : 0ms; }
+        background: #006b60;
         accessible-role: button;
         accessible-label: root.start-label;
         accessible-action-default => { root.start-pairing(); }
@@ -93,12 +92,17 @@ export component WelcomeWindow inherits Window {
             color: white;
         }
 
+        Rectangle {
+            border-radius: 4px;
+            background: press.pressed ? #00000018 : press.has-hover ? #ffffff12 : transparent;
+        }
+
         if start-focus.has-focus: Rectangle {
-            x: -3px;
-            y: -3px;
-            width: parent.width + 6px;
-            height: parent.height + 6px;
-            border-radius: 6px;
+            x: -4px;
+            y: -4px;
+            width: parent.width + 8px;
+            height: parent.height + 8px;
+            border-radius: 8px;
             border-width: 2px;
             border-color: #19685b;
         }

@@ -2,17 +2,11 @@ use std::cell::RefCell;
 
 use slint::winit_030::WinitWindowAccessor;
 use slint::{CloseRequestResponse, ComponentHandle, PlatformError};
-use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 
 use crate::{WelcomeWindow, platform};
 
 thread_local! {
     static WELCOME: RefCell<Option<WelcomeWindow>> = const { RefCell::new(None) };
-}
-
-pub fn chinese() -> bool {
-    // SAFETY: this query requires no input and has no side effects.
-    unsafe { GetUserDefaultUILanguage() & 0x03ff == 0x04 }
 }
 
 pub fn open() {
@@ -43,7 +37,7 @@ fn show() -> Result<(), PlatformError> {
             return Ok(window.clone_strong());
         }
         let window = WelcomeWindow::new()?;
-        window.set_chinese(chinese());
+        window.set_chinese(platform::chinese());
         window
             .window()
             .on_close_requested(|| CloseRequestResponse::HideWindow);
@@ -55,8 +49,11 @@ fn show() -> Result<(), PlatformError> {
         window.invoke_restart_motion();
         window.show()?;
     }
-    window
-        .window()
-        .with_winit_window(|native| native.focus_window());
+    window.window().with_winit_window(|native| {
+        if native.is_minimized() == Some(true) {
+            native.set_minimized(false);
+        }
+        native.focus_window();
+    });
     Ok(())
 }

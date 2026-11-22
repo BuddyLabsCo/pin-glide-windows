@@ -6,6 +6,7 @@ pub use tray::Tray;
 
 use std::io;
 
+use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
@@ -28,6 +29,11 @@ pub fn animations_enabled() -> bool {
         SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut enabled).cast(), 0)
     };
     result != 0 && enabled != 0
+}
+
+pub fn chinese() -> bool {
+    // SAFETY: this query requires no input and has no side effects.
+    unsafe { GetUserDefaultUILanguage() & 0x03ff == 0x04 }
 }
 
 pub fn wide(value: &str) -> Vec<u16> {

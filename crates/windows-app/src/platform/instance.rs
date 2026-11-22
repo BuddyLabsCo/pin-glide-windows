@@ -4,7 +4,7 @@ use std::ptr::{null, null_mut};
 use std::thread::{self, JoinHandle};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GetLastError, HANDLE, LocalFree, WAIT_OBJECT_0,
+    ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LocalFree, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
@@ -13,9 +13,10 @@ use windows_sys::Win32::System::Threading::{
     WaitForMultipleObjects,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId,
+    AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, PostMessageW,
 };
 
+use super::tray::ACTIVATE;
 use super::{wide, win32_result};
 
 pub struct Instance {
@@ -55,10 +56,11 @@ impl Instance {
         &self.window_name
     }
 
-    pub fn listen(&self) -> io::Result<ActivationListener> {
+    pub fn listen(&self, window: HWND) -> io::Result<ActivationListener> {
         let open = self.open.try_clone()?;
         let stop = create_event(1, null())?;
         let stop_wait = stop.try_clone()?;
+        let window = window as usize;
         let thread = thread::Builder::new()
             .name("instance-activation".into())
             .spawn(move || {
@@ -67,7 +69,8 @@ impl Instance {
                 while unsafe { WaitForMultipleObjects(2, events.as_ptr(), 0, INFINITE) }
                     == WAIT_OBJECT_0 + 1
                 {
-                    if slint::invoke_from_event_loop(crate::ui::open).is_err() {
+                    // SAFETY: the caller keeps the tray window alive until the listener joins.
+                    if unsafe { PostMessageW(window as HWND, ACTIVATE, 0, 0) } == 0 {
                         break;
                     }
                 }

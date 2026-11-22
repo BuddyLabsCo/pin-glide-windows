@@ -10,8 +10,9 @@ use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId,
-    IsWindowVisible, PostMessageW, WM_CLOSE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_THICKFRAME,
+    EnumWindows, GWL_STYLE, GetClientRect, GetWindowLongPtrW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, PostMessageW, SW_MINIMIZE, ShowWindowAsync, WM_CLOSE, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_THICKFRAME,
 };
 
 struct AppProcess(Child);
@@ -28,6 +29,18 @@ impl AppProcess {
 
     fn id(&self) -> u32 {
         self.0.id()
+    }
+
+    fn wait_for_success(&mut self, expectation: &str) {
+        wait_for(
+            || {
+                self.0.try_wait().unwrap().is_some_and(|status| {
+                    assert!(status.success(), "{expectation}: {status}");
+                    true
+                })
+            },
+            expectation,
+        );
     }
 }
 
@@ -103,21 +116,13 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         thread::sleep(Duration::from_millis(25));
     }
 
-    let mut automatic = AppProcess::launch(&["--startup"]);
-    wait_for(
-        || automatic.0.try_wait().unwrap().is_some(),
-        "duplicate startup must exit",
-    );
+    AppProcess::launch(&["--startup"]).wait_for_success("duplicate startup must exit successfully");
     assert!(
         visible_window(primary.id()).is_null(),
         "duplicate startup must stay quiet"
     );
 
-    let mut explicit = AppProcess::launch(&[]);
-    wait_for(
-        || explicit.0.try_wait().unwrap().is_some(),
-        "the explicit second launch must exit",
-    );
+    AppProcess::launch(&[]).wait_for_success("explicit second launch must exit successfully");
     wait_for(
         || !visible_window(primary.id()).is_null(),
         "the tray process must open Welcome",
@@ -134,6 +139,21 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         );
         let resize_buttons = (WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX) as isize;
         assert_eq!(GetWindowLongPtrW(window, GWL_STYLE) & resize_buttons, 0);
+        assert_ne!(ShowWindowAsync(window, SW_MINIMIZE), 0);
+    }
+    wait_for(
+        // SAFETY: the primary process owns this HWND for the duration of the test.
+        || unsafe { IsIconic(window) != 0 },
+        "Windows must minimize Welcome",
+    );
+    AppProcess::launch(&[]).wait_for_success("launch while minimized must exit successfully");
+    wait_for(
+        // SAFETY: the primary process still owns the same Welcome HWND.
+        || unsafe { IsIconic(window) == 0 && IsWindowVisible(window) != 0 },
+        "explicit launch must restore the same minimized Welcome window",
+    );
+    // SAFETY: Windows delivers the close request to the primary process's window.
+    unsafe {
         assert_ne!(PostMessageW(window, WM_CLOSE, 0, 0), 0);
     }
     wait_for(
@@ -145,11 +165,7 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         "close must leave the tray process alive"
     );
 
-    let mut reopening = AppProcess::launch(&[]);
-    wait_for(
-        || reopening.0.try_wait().unwrap().is_some(),
-        "the relaunch must exit",
-    );
+    AppProcess::launch(&[]).wait_for_success("relaunch must exit successfully");
     wait_for(
         || !visible_window(primary.id()).is_null(),
         "relaunch must reopen Welcome",
