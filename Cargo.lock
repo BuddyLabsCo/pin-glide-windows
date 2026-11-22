@@ -3699,6 +3699,7 @@ version = "1.0.2"
 dependencies = [
  "serde",
  "serde_json",
+ "serde_with",
 ]
 
 [[package]]

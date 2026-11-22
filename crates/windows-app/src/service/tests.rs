@@ -1,8 +1,8 @@
 use std::{
-    io::{BufRead, BufReader, Read, Write},
-    net::TcpListener,
+    io::{self, BufRead, BufReader, Read, Write},
+    net::{TcpListener, TcpStream},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use native_tls::{Identity, TlsAcceptor};
@@ -13,13 +13,45 @@ use super::{CreateError, Service, SessionState, client_builder};
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
-fn listen() -> (TcpListener, String) {
+fn listen(host: &str) -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let origin = format!(
-        "https://localhost:{}",
-        listener.local_addr().unwrap().port()
-    );
+    let origin = format!("https://{host}:{}", listener.local_addr().unwrap().port());
     (listener, origin)
+}
+
+fn accept_loopback(listener: &TcpListener) -> TcpStream {
+    let timeout = Duration::from_secs(5);
+    let deadline = Instant::now() + timeout;
+    listener.set_nonblocking(true).unwrap();
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "client did not reach the TLS fixture"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("TLS fixture accept failed: {error}"),
+        }
+    };
+    stream.set_nonblocking(false).unwrap();
+    stream.set_read_timeout(Some(timeout)).unwrap();
+    stream.set_write_timeout(Some(timeout)).unwrap();
+    stream
+}
+
+fn local_service(listener: &TcpListener, origin: &str, trust_fixture_ca: bool) -> Service {
+    let mut service = Service::new(origin).unwrap();
+    let mut client = client_builder()
+        .no_proxy()
+        .resolve("localhost", listener.local_addr().unwrap());
+    if trust_fixture_ca {
+        client = client.tls_certs_only([reqwest::Certificate::from_pem(TEST_CA).unwrap()]);
+    }
+    service.config.client = client.build().unwrap();
+    service
 }
 
 fn acceptor() -> TlsAcceptor {
@@ -36,18 +68,10 @@ fn respond(
     media_type: &'static str,
     body: Value,
 ) -> (Service, JoinHandle<()>) {
-    let (listener, origin) = listen();
-    let mut service = Service::new(&origin).unwrap();
-    service.config.client = client_builder()
-        .no_proxy()
-        .tls_certs_only([reqwest::Certificate::from_pem(TEST_CA).unwrap()])
-        .build()
-        .unwrap();
+    let (listener, origin) = listen("localhost");
+    let service = local_service(&listener, &origin, true);
     let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        let stream = accept_loopback(&listener);
         let mut stream = BufReader::new(acceptor().accept(stream).unwrap());
         let mut request_line = String::new();
         stream.read_line(&mut request_line).unwrap();
@@ -174,21 +198,29 @@ async fn distinguishes_an_unstructured_failure_from_a_business_problem() {
 
 #[tokio::test]
 async fn rejects_an_untrusted_service_certificate() {
-    let (listener, origin) = listen();
-    let service = Service::new(&origin).unwrap();
+    assert_tls_rejected("localhost", false).await;
+}
+
+#[tokio::test]
+async fn rejects_a_trusted_service_certificate_for_a_different_hostname() {
+    assert_tls_rejected("127.0.0.1", true).await;
+}
+
+async fn assert_tls_rejected(host: &str, trust_fixture_ca: bool) {
+    let (listener, origin) = listen(host);
+    let service = local_service(&listener, &origin, trust_fixture_ca);
     let server = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
+        let stream = accept_loopback(&listener);
         if let Ok(mut stream) = acceptor().accept(stream) {
-            assert!(!matches!(stream.read(&mut [0]), Ok(1)));
+            assert!(
+                !matches!(stream.read(&mut [0]), Ok(1)),
+                "client sent HTTP over rejected TLS"
+            );
         }
     });
-    assert!(
-        matches!(service.new_receiver().await, Err(CreateError::Transport(error)) if error.is_connect())
-    );
+    let outcome = service.new_receiver().await;
     server.join().unwrap();
+    assert!(matches!(outcome, Err(CreateError::Transport(error)) if error.is_connect()));
 }
 
 #[test]
@@ -211,4 +243,25 @@ fn wss_pairing_state_preserves_recovery_mode_and_absent_pairing() {
     assert_eq!(model.session.pairing_id, None);
     assert_eq!(model.session.sender_id.as_deref(), Some("sender-1"));
     assert_eq!(serde_json::to_value(model).unwrap(), frame);
+}
+
+#[test]
+fn wss_business_error_round_trips_absent_null_and_array_errors() {
+    for errors in [
+        None,
+        Some(Value::Null),
+        Some(json!([{"location": "payload", "message": "Required"}])),
+    ] {
+        let mut frame = json!({
+            "type": "error",
+            "version": 1,
+            "requestId": "request-1",
+            "error": {"code": "invalid_request", "detail": "Invalid frame"}
+        });
+        if let Some(errors) = errors {
+            frame["error"]["errors"] = errors;
+        }
+        let model: pin_glide_wss::WssError = serde_json::from_value(frame.clone()).unwrap();
+        assert_eq!(serde_json::to_value(model).unwrap(), frame);
+    }
 }

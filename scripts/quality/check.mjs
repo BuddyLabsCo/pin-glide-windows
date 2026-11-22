@@ -125,6 +125,9 @@ function main(mode) {
     run("cargo", ["check", "--locked", "--workspace", "--all-targets", "--target", windowsTarget]);
     run("cargo", ["build", "--locked", "-p", "windows-app", "--release", "--target", windowsTarget]);
   }
+  if (mode === "service") {
+    run("cargo", ["test", "--locked", "-p", "windows-app", "--lib", "--target", windowsTarget]);
+  }
   if (mode === "core") {
     checkDependencies();
     run("cargo", [
@@ -134,7 +137,7 @@ function main(mode) {
     run("cargo", ["test", "--locked", "-p", "receiver-core"]);
   }
   if (mode === "advisories") run("cargo", ["deny", "--locked", "check", "advisories"]);
-  if (!["source", "lint", "quality", "build", "core", "advisories"].includes(mode)) {
+  if (!["source", "lint", "quality", "build", "service", "core", "advisories"].includes(mode)) {
     throw new Error(`Unknown quality check: ${mode}`);
   }
 }

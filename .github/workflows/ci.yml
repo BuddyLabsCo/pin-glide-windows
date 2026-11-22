@@ -56,4 +56,4 @@ jobs:
       - name: Check and link the Windows application
         run: node scripts/quality/check.mjs build
       - name: Test the Service adapter
-        run: cargo test --locked -p windows-app --lib --target x86_64-pc-windows-msvc
+        run: node scripts/quality/check.mjs service

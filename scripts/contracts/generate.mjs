@@ -104,8 +104,29 @@ try {
     payloads.models[model.name] = model;
   }
   assert.ok(Object.keys(payloads.models).length, "Expected WSS payloads");
+  const nullableErrors = ({ model, field }) =>
+    model.name === "BusinessError" && field.unconstrainedPropertyName === "errors";
+  const preserveNullableErrors = {
+    struct: {
+      field(args) {
+        return nullableErrors(args)
+          ? `pub errors: Option<Option<${args.field.property.type}>>,`
+          : args.content;
+      },
+      fieldMacro(args) {
+        return nullableErrors(args)
+          ? '#[serde(rename="errors", default, with = "::serde_with::rust::double_option", skip_serializing_if = "Option::is_none")]'
+          : args.content;
+      },
+    },
+    package: {
+      manifest({ content }) {
+        return content.replace("[dev-dependencies]", 'serde_with = { version = "^3.8", default-features = false }\n\n[dev-dependencies]');
+      },
+    },
+  };
   const defaults = defaultRustRenderCompleteModelOptions;
-  await new RustFileGenerator().generateToPackage(payloads, wss, {
+  await new RustFileGenerator({ presets: [preserveNullableErrors] }).generateToPackage(payloads, wss, {
     ...defaults,
     package: { ...defaults.package, packageName: "pin-glide-wss", packageVersion, edition: "2024" },
   }, true);

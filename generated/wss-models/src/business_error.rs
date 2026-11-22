@@ -5,6 +5,6 @@ pub struct BusinessError {
     pub code: String,
     #[serde(rename="detail")]
     pub detail: String,
-    #[serde(rename="errors", skip_serializing_if = "Option::is_none")]
-    pub errors: Option<Vec<crate::ErrorItem>>,
+    #[serde(rename="errors", default, with = "::serde_with::rust::double_option", skip_serializing_if = "Option::is_none")]
+    pub errors: Option<Option<Vec<crate::ErrorItem>>>,
 }
