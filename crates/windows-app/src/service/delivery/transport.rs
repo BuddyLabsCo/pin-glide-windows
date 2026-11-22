@@ -60,11 +60,11 @@ where
         &mut self,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
-        authenticate: mpsc::Sender<IncomingDelivery>,
+        authenticate: &mpsc::Sender<IncomingDelivery>,
     ) -> ConnectionLoss {
-        let status = self.drive(state, order, &authenticate).await;
+        let status = self.drive(state, order, authenticate).await;
         let resume_failed = self.probe.is_some();
-        if status == DeliveryStatus::Protocol {
+        if status == DeliveryStatus::Protocol && !resume_failed {
             let _ = timeout(
                 WRITE_LIMIT,
                 self.socket.send(Message::Close(Some(CloseFrame {
@@ -87,6 +87,7 @@ where
         authenticate: &mpsc::Sender<IncomingDelivery>,
     ) -> DeliveryStatus {
         let mut resumes = state.borrow().resumes;
+        let mut capacity = None;
         loop {
             let power = *state.borrow_and_update();
             if power.suspended {
@@ -111,15 +112,23 @@ where
             let event = tokio::select! {
                 biased;
                 _ = state.wait_for(|power| power.suspended || power.resumes != resumes) => continue,
-                event = timeout_at(deadline, self.next_event()) => event,
+                permit = authenticate.reserve(), if capacity.is_none() && self.receipt_pending() => {
+                    match permit {
+                        Ok(permit) => capacity = Some(permit),
+                        Err(_) => return DeliveryStatus::Disconnected,
+                    }
+                    continue;
+                }
+                event = timeout_at(deadline, self.next_event(capacity.is_some())) => event,
             };
             let result = match event {
                 Ok(SocketEvent::Incoming(frame)) => self.handle_frame(frame, order).await,
                 Ok(SocketEvent::Outgoing(result, incoming)) => {
-                    if let Some(incoming) = incoming
-                        && authenticate.try_send(incoming).is_err()
-                    {
-                        return DeliveryStatus::Disconnected;
+                    if let Some(incoming) = incoming {
+                        capacity
+                            .take()
+                            .expect("Receipt requires capacity")
+                            .send(incoming);
                     }
                     result.map_err(|_| DeliveryStatus::Disconnected)
                 }
@@ -129,6 +138,10 @@ where
                 return status;
             }
         }
+    }
+
+    fn receipt_pending(&self) -> bool {
+        !self.flushing && matches!(self.outbound.front(), Some((_, Some(_))))
     }
 
     fn start_probe(&mut self, resumes: u64) {
@@ -167,7 +180,6 @@ where
                     };
                     self.outbound
                         .push_back((Message::text(reply), Some(incoming)));
-                    self.set_write_deadline();
                 }
             }
             Some(Ok(Message::Ping(_))) => {
@@ -185,7 +197,9 @@ where
                 }
             }
             Some(Ok(Message::Close(_))) => {
-                let _ = timeout(WRITE_LIMIT, self.socket.flush()).await;
+                if self.probe.is_none() {
+                    let _ = timeout(WRITE_LIMIT, self.socket.flush()).await;
+                }
                 return Err(DeliveryStatus::Disconnected);
             }
             Some(Err(SocketError::Protocol(ProtocolError::ResetWithoutClosingHandshake))) => {
@@ -207,16 +221,18 @@ where
             .get_or_insert_with(|| Instant::now() + WRITE_LIMIT);
     }
 
-    async fn next_event(&mut self) -> SocketEvent {
+    async fn next_event(&mut self, has_capacity: bool) -> SocketEvent {
         poll_fn(|context| {
+            let can_write = self
+                .outbound
+                .front()
+                .is_some_and(|(_, incoming)| incoming.is_none() || has_capacity);
             let mut socket = Pin::new(&mut self.socket);
             if self.flushing {
                 match socket.as_mut().poll_flush(context) {
                     Poll::Ready(Ok(())) => {
                         self.flushing = false;
-                        if self.outbound.is_empty() {
-                            self.write_deadline = None;
-                        }
+                        self.write_deadline = None;
                         return Poll::Ready(SocketEvent::Outgoing(Ok(()), None));
                     }
                     Poll::Ready(Err(error)) => {
@@ -225,10 +241,14 @@ where
                     Poll::Pending => {}
                 }
             }
-            if !self.flushing
-                && !self.outbound.is_empty()
-                && let Poll::Ready(ready) = socket.as_mut().poll_ready(context)
-            {
+            if !self.flushing && can_write {
+                if self.write_deadline.is_none() {
+                    self.set_write_deadline();
+                    return Poll::Ready(SocketEvent::Outgoing(Ok(()), None));
+                }
+                let Poll::Ready(ready) = socket.as_mut().poll_ready(context) else {
+                    return socket.poll_next(context).map(SocketEvent::Incoming);
+                };
                 let (message, incoming) = self.outbound.pop_front().unwrap();
                 let sent = ready
                     .and_then(|()| socket.as_mut().start_send(message))
@@ -239,7 +259,7 @@ where
                             Ok(())
                         }
                     });
-                if !self.flushing && self.outbound.is_empty() {
+                if !self.flushing {
                     self.write_deadline = None;
                 }
                 return Poll::Ready(SocketEvent::Outgoing(sent, incoming));

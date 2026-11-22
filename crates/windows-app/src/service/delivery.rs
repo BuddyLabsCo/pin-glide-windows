@@ -39,7 +39,7 @@ pub(super) struct ConnectionLoss {
     pub resume_failed: bool,
 }
 
-struct IncomingDelivery {
+pub(super) struct IncomingDelivery {
     text: Utf8Bytes,
     arrival: Arrival,
     #[cfg(windows)]
@@ -91,22 +91,14 @@ fn delivery_resolves_the_latest_name_for_the_pairing_id() {
 
 pub(super) struct DeliveryConnection {
     socket: Socket,
-    receiver_id: String,
 }
 
 impl DeliveryConnection {
-    pub(super) async fn open(
-        service: &Service,
-        token: &str,
-        receiver_id: &str,
-    ) -> Result<Self, PairingEventError> {
+    pub(super) async fn open(service: &Service, token: &str) -> Result<Self, PairingEventError> {
         service
             .websocket("/v1/receiver/events", token)
             .await
-            .map(|socket| Self {
-                socket,
-                receiver_id: receiver_id.into(),
-            })
+            .map(|socket| Self { socket })
     }
 
     pub(super) async fn run(
@@ -115,27 +107,24 @@ impl DeliveryConnection {
         updates: &ProgressUpdates,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
+        authenticate: &mpsc::Sender<IncomingDelivery>,
     ) -> ConnectionLoss {
-        let (send, receive) = mpsc::channel(MAX_PENDING_DELIVERIES);
-        let mut transport = Transport::new(self.socket, store, updates);
-        let (loss, ()) = tokio::join!(
-            transport.run(state, order, send),
-            process_deliveries(receive, store, updates, self.receiver_id),
-        );
-        loss
+        Transport::new(self.socket, store, updates)
+            .run(state, order, authenticate)
+            .await
     }
 }
 
-async fn process_deliveries(
-    mut receive: mpsc::Receiver<IncomingDelivery>,
+pub(super) fn start_processing(
     store: &RegistrationStore,
     updates: &ProgressUpdates,
     receiver_id: String,
-) {
+) -> mpsc::Sender<IncomingDelivery> {
+    let (send, mut receive) = mpsc::channel::<IncomingDelivery>(MAX_PENDING_DELIVERIES);
     let store = store.clone();
     let inbox = updates.inbox.clone();
     let notify = updates.notify_sms;
-    let _ = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         while let Some(incoming) = receive.blocking_recv() {
             let result = match serde_json::from_str::<Delivery>(&incoming.text) {
                 Ok(delivery) if delivery.receiver_id == receiver_id => {
@@ -162,8 +151,8 @@ async fn process_deliveries(
                 }
             }
         }
-    })
-    .await;
+    });
+    send
 }
 
 fn receipt(text: &str) -> Result<Option<String>, PairingEventError> {

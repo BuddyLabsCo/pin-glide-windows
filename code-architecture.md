@@ -61,8 +61,10 @@ within 500 lines.
   directly with the stored Receiver credential on launch. Windows power and
   connectivity notifications drive retry timing. A failed resume probe
   triggers an immediate replacement attempt. Keep control frames responsive
-  during Receipt writes and authentication. The tray tooltip shows Ready
-  only while connected with at least one active Pairing.
+  during Receipt writes and authentication. Reserve space in the ordered
+  authentication queue before writing a Receipt. Keep that queue across
+  socket replacements. The tray tooltip shows Ready only while connected
+  with at least one active Pairing.
   Core `delivery/` selects the key by Pairing ID and orders OTPs by `receivedAt`
   with arrival time as fallback and arrival order as the tiebreaker. An empty
   OTP still allows the full SMS popup and leaves the latest OTP alone.

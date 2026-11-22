@@ -7,7 +7,9 @@ use tokio::{
 };
 
 use super::{
-    Service, delivery::DeliveryConnection, pairing_events::PairingEventError,
+    Service,
+    delivery::{DeliveryConnection, start_processing},
+    pairing_events::PairingEventError,
     pairing_operation::ProgressUpdates,
 };
 use crate::storage::RegistrationStore;
@@ -104,7 +106,7 @@ impl<'a> Reconnect<'a> {
                 biased;
                 _ = self.state.wait_for(|state| state.suspended || state.resumes != power.resumes) => continue,
                 result = timeout(Duration::from_secs(15), DeliveryConnection::open(
-                    self.service, self.token, self.receiver_id,
+                    self.service, self.token,
                 )) => result.unwrap_or(Err(PairingEventError::Transport)),
             };
             match result {
@@ -129,10 +131,17 @@ impl<'a> Reconnect<'a> {
         mut connection: DeliveryConnection,
     ) {
         let mut order = 0;
+        let authenticate = start_processing(store, self.updates, self.receiver_id.to_owned());
         loop {
             self.updates.delivery_status(connected_status(store));
             let loss = connection
-                .run(store, self.updates, &mut self.state, &mut order)
+                .run(
+                    store,
+                    self.updates,
+                    &mut self.state,
+                    &mut order,
+                    &authenticate,
+                )
                 .await;
             self.updates.delivery_status(loss.status);
             if !loss.resume_failed {
