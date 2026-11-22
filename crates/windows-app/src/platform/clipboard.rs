@@ -1,12 +1,45 @@
 use std::ptr;
 
-use windows_sys::Win32::System::{
-    DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
-    Diagnostics::Debug::ReadProcessMemory,
-    Memory::{GlobalLock, GlobalSize, GlobalUnlock},
-    Ole::CF_UNICODETEXT,
-    Threading::GetCurrentProcess,
+use windows_sys::Win32::{
+    Foundation::{GlobalFree, HWND},
+    System::{
+        DataExchange::{
+            CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+            OpenClipboard, SetClipboardData,
+        },
+        Diagnostics::Debug::ReadProcessMemory,
+        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+        Ole::CF_UNICODETEXT,
+        Threading::GetCurrentProcess,
+    },
 };
+
+pub(crate) fn write_unicode_clipboard(owner: HWND, text: &str) {
+    let text = zeroize::Zeroizing::new(super::wide(text));
+    // SAFETY: transfer the movable allocation to Windows only if SetClipboardData succeeds.
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, size_of_val(text.as_slice()));
+        if handle.is_null() {
+            return;
+        }
+        let data = GlobalLock(handle).cast::<u16>();
+        if data.is_null() {
+            GlobalFree(handle);
+            return;
+        }
+        ptr::copy_nonoverlapping(text.as_ptr(), data, text.len());
+        GlobalUnlock(handle);
+        let mut written = false;
+        if OpenClipboard(owner) != 0 {
+            written = EmptyClipboard() != 0
+                && !SetClipboardData(u32::from(CF_UNICODETEXT), handle).is_null();
+            CloseClipboard();
+        }
+        if !written {
+            GlobalFree(handle);
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ClipboardError {

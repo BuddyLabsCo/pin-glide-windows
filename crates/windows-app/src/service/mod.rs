@@ -22,6 +22,8 @@ mod enrollment;
 mod pairing_events;
 pub(crate) mod pairing_operation;
 mod pairing_snapshot;
+#[cfg(windows)]
+pub(crate) use delivery::ReceivedSms;
 pub use pairing_operation::{PairingOperation, PairingProgress, PairingStart};
 pub use receiver_core::pairing::{PairingOutcome, SessionState};
 

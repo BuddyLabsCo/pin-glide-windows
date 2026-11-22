@@ -7,6 +7,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
@@ -32,6 +33,11 @@ pub(crate) struct PairingReference<'a> {
     pub receiver_id: &'a str,
     pub pairing_id: &'a str,
     pub sender_id: &'a str,
+}
+
+pub(crate) struct DeliveryTarget {
+    pub name: String,
+    pub key: Zeroizing<[u8; 32]>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -108,6 +114,30 @@ impl RegistrationStore {
             }
             next.provisional_pairing = Some(pairing);
             Ok(())
+        })
+    }
+
+    pub(crate) fn delivery_target(
+        &self,
+        receiver_id: &str,
+        pairing_id: &str,
+        sender_id: &str,
+    ) -> Option<DeliveryTarget> {
+        let mut stored = self.read().ok()?;
+        if stored.receiver_id.as_deref() != Some(receiver_id) {
+            return None;
+        }
+        let pairing = stored.active_pairings.remove(pairing_id)?;
+        if pairing.sender_id != sender_id {
+            return None;
+        }
+        let bytes = unprotect(&pairing.protected_key).ok()?;
+        let mut key = Zeroizing::new([0; 32]);
+        key.as_mut_slice()
+            .copy_from_slice(<&[u8; 32]>::try_from(bytes.as_slice()).ok()?);
+        Some(DeliveryTarget {
+            name: pairing.name?,
+            key,
         })
     }
 

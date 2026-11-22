@@ -1,12 +1,15 @@
 use std::{
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::{Duration, SystemTime},
 };
 
 use qrcode::QrCode;
-use receiver_core::pairing::{PairingMaterial, PairingOutcome, pairing_lifetime};
+use receiver_core::{
+    delivery::Inbox,
+    pairing::{PairingMaterial, PairingOutcome, pairing_lifetime},
+};
 use reqwest::StatusCode;
 use tokio::{
     sync::{oneshot, watch},
@@ -16,7 +19,8 @@ use zeroize::Zeroizing;
 
 use super::{
     CompletionError, NewReceiverSession, Service, SessionState,
-    enrollment::enroll,
+    delivery::ReceivedSms,
+    enrollment::finish_enrollment,
     pairing_events::{PairingEvent, PairingEventError, PairingEvents},
     pairing_snapshot::{Claim, Snapshot},
 };
@@ -40,6 +44,7 @@ pub enum PairingProgress {
 pub struct PairingOperation {
     progress: watch::Receiver<PairingProgress>,
     worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
+    inbox: Arc<Mutex<Inbox>>,
     #[cfg(windows)]
     store: Option<RegistrationStore>,
 }
@@ -53,6 +58,8 @@ pub enum PairingStart {
 pub(super) struct ProgressUpdates {
     snapshot: watch::Sender<PairingProgress>,
     notify: fn(),
+    pub(super) inbox: Arc<Mutex<Inbox>>,
+    pub(super) notify_sms: fn(ReceivedSms),
 }
 
 impl ProgressUpdates {
@@ -82,11 +89,21 @@ impl PairingOperation {
         notify: fn(),
         start: PairingStart,
     ) -> Self {
+        Self::start_receiving(connect, notify, start, drop)
+    }
+
+    pub(crate) fn start_receiving(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        start: PairingStart,
+        notify_sms: fn(ReceivedSms),
+    ) -> Self {
         Self::spawn(
             connect,
             notify,
             RegistrationStore::for_current_user().ok(),
             start,
+            notify_sms,
         )
     }
 
@@ -102,7 +119,8 @@ impl PairingOperation {
         path: PathBuf,
         start: PairingStart,
     ) -> Self {
-        Self::spawn(connect, notify, Some(RegistrationStore::new(path)), start)
+        let store = RegistrationStore::new(path);
+        Self::spawn(connect, notify, Some(store), start, drop)
     }
 
     fn spawn(
@@ -110,12 +128,16 @@ impl PairingOperation {
         notify: fn(),
         store: Option<RegistrationStore>,
         start: PairingStart,
+        notify_sms: fn(ReceivedSms),
     ) -> Self {
         let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
         let (stop, stopping) = oneshot::channel();
+        let inbox = Arc::new(Mutex::new(Inbox::default()));
         let updates = ProgressUpdates {
             snapshot: snapshot.clone(),
             notify,
+            inbox: Arc::clone(&inbox),
+            notify_sms,
         };
         #[cfg(windows)]
         let window_store = store.clone();
@@ -151,6 +173,7 @@ impl PairingOperation {
         Self {
             progress,
             worker,
+            inbox,
             #[cfg(windows)]
             store: window_store,
         }
@@ -171,6 +194,10 @@ impl PairingOperation {
 
     pub fn current(&self) -> PairingProgress {
         self.progress.borrow().clone()
+    }
+
+    pub fn latest_otp(&self) -> Option<Zeroizing<String>> {
+        Some(Zeroizing::new(self.inbox.lock().ok()?.latest()?.to_owned()))
     }
 
     pub fn shutdown(mut self) {
@@ -211,31 +238,6 @@ async fn drive(
         return;
     };
     drive_session(service, updates, stopping, now, material, store).await;
-}
-
-async fn finish_enrollment(
-    service: &Service,
-    store: &RegistrationStore,
-    updates: &ProgressUpdates,
-    mut stopping: oneshot::Receiver<()>,
-    session: Option<&NewReceiverSession>,
-) {
-    let outcome = tokio::select! {
-        biased;
-        _ = &mut stopping => return,
-        outcome = enroll(service, store, updates, session) => outcome,
-    };
-    match outcome {
-        Ok((connection, pairing_id)) => {
-            updates.publish(PairingProgress::Completed { pairing_id });
-            tokio::select! {
-                biased;
-                _ = stopping => {}
-                () = connection.run() => {}
-            }
-        }
-        Err(outcome) => updates.publish(PairingProgress::Finished(outcome)),
-    }
 }
 
 async fn drive_session(

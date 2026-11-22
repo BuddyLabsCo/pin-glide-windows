@@ -12,13 +12,13 @@ pub fn launch(explicit: bool) -> Result<(), Box<dyn std::error::Error>> {
     )
 }
 
-fn select_backend() -> Result<(), slint::PlatformError> {
+pub(crate) fn select_backend() -> Result<(), slint::PlatformError> {
     use slint::winit_030::winit::window::WindowButtons;
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name("software".into())
         .with_winit_window_attributes_hook(|attributes| {
-            attributes
+            platform::popup_attributes(attributes)
                 .with_resizable(false)
                 .with_enabled_buttons(WindowButtons::CLOSE)
         })

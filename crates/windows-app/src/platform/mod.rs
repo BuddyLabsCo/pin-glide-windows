@@ -1,9 +1,12 @@
 mod clipboard;
 mod instance;
+mod popup;
 mod tray;
 
+pub(crate) use clipboard::write_unicode_clipboard;
 pub(crate) use clipboard::{ClipboardError, read_unicode_clipboard};
 pub use instance::{ActivationListener, Instance};
+pub(crate) use popup::{new_popup, place_popup, popup_attributes, prepare_popup, session_unlocked};
 pub use tray::Tray;
 
 use std::io;

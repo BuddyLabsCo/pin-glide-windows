@@ -145,11 +145,16 @@ pub(super) fn shutdown() {
 fn start_operation(notify: fn(), start: PairingStart) -> PairingOperation {
     #[cfg(test)]
     if let Some(service) = tests::connect() {
-        return PairingOperation::start(move || Some(service), notify, start);
+        return PairingOperation::start_receiving(
+            move || Some(service),
+            notify,
+            start,
+            super::sms::receive,
+        );
     }
     let connect =
         || option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok());
-    PairingOperation::start(connect, notify, start)
+    PairingOperation::start_receiving(connect, notify, start, super::sms::receive)
 }
 
 fn notify_progress() {
