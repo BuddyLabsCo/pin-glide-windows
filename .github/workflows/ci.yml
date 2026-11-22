@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Format and lint
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.18.0"
+      - name: Test quality scripts
+        run: node --test scripts/quality/check.test.mjs
+      - name: Install pinned quality tools
+        run: node scripts/quality/install-tools.mjs
+      - name: Check formatting and file size
+        run: node scripts/quality/check.mjs source
+      - name: Check dependency direction and lint
+        run: node scripts/quality/check.mjs lint
+      - name: Check dependency advisories
+        run: node scripts/quality/check.mjs advisories
+
+  core:
+    name: Portable core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.18.0"
+      - name: Check and test the core
+        run: node scripts/quality/check.mjs core
+
+  build:
+    name: Windows MSVC build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.18.0"
+      - name: Check and link the Windows application
+        run: node scripts/quality/check.mjs build

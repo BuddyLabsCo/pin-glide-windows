@@ -1,0 +1,5 @@
+*.rs text eol=lf
+*.slint text eol=lf
+*.toml text eol=lf
+*.mjs text eol=lf
+Cargo.lock text eol=lf
