@@ -9,6 +9,7 @@ mod pairing;
 mod sms;
 
 pub use pairing::open_pairing;
+pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
     pairing::resume(platform::chinese())

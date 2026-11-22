@@ -1,11 +1,11 @@
 use std::{sync::Mutex, time::SystemTime};
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use pin_glide_wss::{Delivery, Receipt};
 use receiver_core::delivery::{Arrival, Envelope, Inbox, Sms};
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::{
-    Message,
+    Error as SocketError, Message,
     protocol::{CloseFrame, frame::coding::CloseCode},
 };
 
@@ -15,6 +15,9 @@ use super::{
 };
 
 use crate::storage::RegistrationStore;
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) struct ReceivedSms {
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -98,8 +101,17 @@ impl DeliveryConnection {
             let result = match frame {
                 Message::Text(text) => {
                     order += 1;
-                    self.handle_text(&text, Arrival { time, order }, store, inbox, notify)
-                        .await
+                    handle_text(&mut self.socket, &text, &self.receiver_id, |delivery| {
+                        authenticate(
+                            &self.receiver_id,
+                            delivery,
+                            Arrival { time, order },
+                            store,
+                            inbox,
+                            notify,
+                        );
+                    })
+                    .await
                 }
                 Message::Ping(_) | Message::Pong(_) => self
                     .socket
@@ -126,66 +138,71 @@ impl DeliveryConnection {
             }
         }
     }
+}
 
-    async fn handle_text(
-        &mut self,
-        text: &str,
-        arrival: Arrival,
-        store: &RegistrationStore,
-        inbox: &Mutex<Inbox>,
-        notify: fn(ReceivedSms),
-    ) -> Result<(), PairingEventError> {
-        let header: EventHeader =
-            serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
-        if header.version != 1 {
-            return Err(PairingEventError::Protocol);
-        }
-        match header.kind.as_str() {
-            "delivery" => {}
-            "error" | "pairing_removed" | "device_revoked" => return Ok(()),
-            _ => return Err(PairingEventError::Protocol),
-        }
-        let receipt = Receipt {
-            sender_id: correlation(header.sender_id)?,
-            message_id: correlation(header.message_id)?,
-            reserved_type: "receipt".into(),
-            version: 1,
-        };
-        let receipt = serde_json::to_string(&receipt).map_err(|_| PairingEventError::Protocol)?;
-        let sent = self.socket.send(Message::text(receipt)).await;
-        if let Ok(delivery) = serde_json::from_str::<Delivery>(text)
-            && delivery.receiver_id == self.receiver_id
-            && let Some(message) = self.authenticate(&delivery, arrival, store, inbox)
-        {
-            notify(message);
-        }
-        sent.map_err(|_| PairingEventError::Transport)
+async fn handle_text(
+    socket: &mut (impl Sink<Message, Error = SocketError> + Unpin),
+    text: &str,
+    receiver_id: &str,
+    authenticate: impl FnOnce(Delivery),
+) -> Result<(), PairingEventError> {
+    let header: EventHeader =
+        serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
+    if header.version != 1 {
+        return Err(PairingEventError::Protocol);
     }
+    match header.kind.as_str() {
+        "delivery" => {}
+        "error" | "pairing_removed" | "device_revoked" => return Ok(()),
+        _ => return Err(PairingEventError::Protocol),
+    }
+    let receipt = Receipt {
+        sender_id: correlation(header.sender_id)?,
+        message_id: correlation(header.message_id)?,
+        reserved_type: "receipt".into(),
+        version: 1,
+    };
+    let receipt = serde_json::to_string(&receipt).map_err(|_| PairingEventError::Protocol)?;
+    let sent = socket.send(Message::text(receipt)).await;
+    match serde_json::from_str::<Delivery>(text) {
+        Ok(delivery) if delivery.receiver_id == receiver_id => authenticate(delivery),
+        Ok(_) => eprintln!("SMS delivery rejected: ReceiverMismatch"),
+        Err(_) => eprintln!("SMS delivery rejected: InvalidEnvelope"),
+    }
+    sent.map_err(|_| PairingEventError::Transport)
+}
 
-    fn authenticate(
-        &self,
-        delivery: &Delivery,
-        arrival: Arrival,
-        store: &RegistrationStore,
-        inbox: &Mutex<Inbox>,
-    ) -> Option<ReceivedSms> {
-        let mut sender_name = String::new();
-        let sms = inbox.lock().ok()?.receive(
-            arrival,
-            Envelope {
-                pairing_id: &delivery.pairing_id,
-                crypto_version: delivery.crypto_version,
-                nonce: &delivery.nonce,
-                ciphertext: &delivery.ciphertext,
-            },
-            |pairing_id| {
-                let target =
-                    store.delivery_target(&self.receiver_id, pairing_id, &delivery.sender_id)?;
-                sender_name = target.name;
-                Some(target.key)
-            },
-        )?;
-        Some(ReceivedSms { sms, sender_name })
+fn authenticate(
+    receiver_id: &str,
+    delivery: Delivery,
+    arrival: Arrival,
+    store: &RegistrationStore,
+    inbox: &Mutex<Inbox>,
+    notify: fn(ReceivedSms),
+) {
+    let mut sender_name = String::new();
+    let Ok(mut inbox) = inbox.lock() else {
+        eprintln!("SMS delivery rejected: InboxUnavailable");
+        return;
+    };
+    let result = inbox.receive(
+        arrival,
+        Envelope {
+            pairing_id: &delivery.pairing_id,
+            crypto_version: delivery.crypto_version,
+            nonce: &delivery.nonce,
+            ciphertext: &delivery.ciphertext,
+        },
+        |pairing_id| {
+            let target = store.delivery_target(receiver_id, pairing_id, &delivery.sender_id)?;
+            sender_name = target.name;
+            Some(target.key)
+        },
+    );
+    drop(inbox);
+    match result {
+        Ok(sms) => notify(ReceivedSms { sms, sender_name }),
+        Err(category) => eprintln!("SMS delivery rejected: {category:?}"),
     }
 }
 

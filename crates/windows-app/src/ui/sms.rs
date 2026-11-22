@@ -9,10 +9,9 @@ use slint::{
     winit_030::WinitWindowAccessor,
 };
 
-use crate::{SmsWindow, platform, service::ReceivedSms};
+use receiver_core::delivery::Sms;
 
-#[cfg(test)]
-mod tests;
+use crate::{SmsWindow, platform, service::ReceivedSms};
 
 thread_local! {
     static POPUPS: RefCell<BTreeMap<u64, (SmsWindow, Timer)>> = const { RefCell::new(BTreeMap::new()) };
@@ -22,37 +21,51 @@ thread_local! {
 pub(super) fn receive(message: ReceivedSms) {
     if platform::session_unlocked() {
         let _ = slint::invoke_from_event_loop(move || {
-            let _ = slint::spawn_local(show(message, platform::chinese()));
+            let _ = slint::spawn_local(show_sms(
+                message.sms,
+                message.sender_name,
+                platform::chinese(),
+            ));
         });
     }
 }
 
-async fn show(message: ReceivedSms, chinese: bool) -> Result<(), PlatformError> {
+pub async fn show_sms(
+    sms: Sms,
+    sender_name: String,
+    chinese: bool,
+) -> Result<Option<SmsWindow>, PlatformError> {
+    if !platform::session_unlocked() {
+        return Ok(None);
+    }
     let window = platform::new_popup()?;
     window.set_chinese(chinese);
-    window.set_otp(message.sms.otp.as_str().into());
-    window.set_sms(message.sms.body.into());
-    window.set_sender_name(message.sender_name.into());
+    window.set_otp(sms.otp.into());
+    window.set_sms(sms.body.into());
+    window.set_sender_name(sender_name.into());
     let native = window.window().winit_window().await?;
     if !platform::session_unlocked() {
-        return Ok(());
+        return Ok(None);
     }
     let native_error = |error| {
         PlatformError::OtherError(format!("Could not configure the SMS popup: {error}").into())
     };
     let owner = platform::prepare_popup(&native).map_err(native_error)?;
     window.show()?;
-    if let Err(error) = platform::place_popup(&native) {
+    if let Err(error) = platform::place_popup(&native, owner) {
         let _ = window.hide();
         return Err(native_error(error));
     }
 
     let id = NEXT_ID.get();
     NEXT_ID.set(id + 1);
-    let otp = zeroize::Zeroizing::new(message.sms.otp);
+    let popup = window.as_weak();
     window.on_copy_code(move || {
-        if !otp.is_empty() {
-            platform::write_unicode_clipboard(owner, &otp);
+        if let Some(window) = popup.upgrade() {
+            let otp = window.get_otp();
+            if !otp.is_empty() {
+                platform::write_unicode_clipboard(owner, &otp);
+            }
         }
         dismiss(id);
     });
@@ -65,18 +78,24 @@ async fn show(message: ReceivedSms, chinese: bool) -> Result<(), PlatformError> 
     timer.start(TimerMode::SingleShot, Duration::from_secs(30), move || {
         dismiss(id)
     });
-    POPUPS.with_borrow_mut(|popups| popups.insert(id, (window, timer)));
-    Ok(())
+    POPUPS.with_borrow_mut(|popups| popups.insert(id, (window.clone_strong(), timer)));
+    Ok(Some(window))
 }
 
 fn dismiss(id: u64) {
     if let Some((window, _timer)) = POPUPS.with_borrow_mut(|popups| popups.remove(&id)) {
-        let _ = window.hide();
+        clear(window);
     }
 }
 
 pub(super) fn close_all() {
     for (_, (window, _timer)) in POPUPS.take() {
-        let _ = window.hide();
+        clear(window);
     }
+}
+
+fn clear(window: SmsWindow) {
+    let _ = window.hide();
+    window.set_sms(Default::default());
+    window.set_otp(Default::default());
 }

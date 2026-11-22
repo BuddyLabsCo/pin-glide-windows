@@ -12,7 +12,7 @@ pub fn launch(explicit: bool) -> Result<(), Box<dyn std::error::Error>> {
     )
 }
 
-pub(crate) fn select_backend() -> Result<(), slint::PlatformError> {
+pub fn select_backend() -> Result<(), slint::PlatformError> {
     use slint::winit_030::winit::window::WindowButtons;
     slint::BackendSelector::new()
         .backend_name("winit".into())

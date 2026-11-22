@@ -23,6 +23,15 @@ pub struct Sms {
     pub otp: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReceiveError {
+    UnsupportedCrypto,
+    PairingKeyUnavailable,
+    InvalidEncoding,
+    AuthenticationFailed,
+    InvalidPlaintext,
+}
+
 #[derive(Default)]
 pub struct Inbox {
     latest: Option<((SystemTime, u64), Zeroizing<String>)>,
@@ -48,23 +57,25 @@ impl Inbox {
         arrival: Arrival,
         envelope: Envelope<'_>,
         key_for_pairing: impl FnOnce(&str) -> Option<Zeroizing<[u8; 32]>>,
-    ) -> Option<Sms> {
+    ) -> Result<Sms, ReceiveError> {
         if envelope.crypto_version != 1 {
-            return None;
+            return Err(ReceiveError::UnsupportedCrypto);
         }
-        let key = key_for_pairing(envelope.pairing_id)?;
-        let nonce = <[u8; 12]>::try_from(STANDARD.decode(envelope.nonce).ok()?).ok()?;
-        let ciphertext = STANDARD.decode(envelope.ciphertext).ok()?;
+        let key =
+            key_for_pairing(envelope.pairing_id).ok_or(ReceiveError::PairingKeyUnavailable)?;
+        let nonce = <[u8; 12]>::try_from(decode(envelope.nonce)?)
+            .map_err(|_| ReceiveError::InvalidEncoding)?;
+        let ciphertext = decode(envelope.ciphertext)?;
         let plaintext = Zeroizing::new(
             Aes256Gcm::new((&*key).into())
                 .decrypt(&Nonce::from(nonce), ciphertext.as_slice())
-                .ok()?,
+                .map_err(|_| ReceiveError::AuthenticationFailed)?,
         );
         let Plaintext::VerificationMessage {
             sms_text,
             otp,
             received_at,
-        } = serde_json::from_slice(&plaintext).ok()?;
+        } = serde_json::from_slice(&plaintext).map_err(|_| ReceiveError::InvalidPlaintext)?;
         let effective_time = received_at
             .as_ref()
             .and_then(serde_json::Value::as_str)
@@ -80,7 +91,7 @@ impl Inbox {
         {
             self.latest = Some((order, Zeroizing::new(otp.clone())));
         }
-        Some(Sms {
+        Ok(Sms {
             body: sms_text,
             otp,
         })
@@ -89,4 +100,10 @@ impl Inbox {
     pub fn latest(&self) -> Option<&str> {
         self.latest.as_ref().map(|(_, otp)| otp.as_str())
     }
+}
+
+fn decode(encoded: &str) -> Result<Vec<u8>, ReceiveError> {
+    STANDARD
+        .decode(encoded)
+        .map_err(|_| ReceiveError::InvalidEncoding)
 }

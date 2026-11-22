@@ -1,4 +1,55 @@
-import { Button, Palette } from "std-widgets.slint";
+component CopyCodeButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    callback dismissed();
+    width: 104px;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: #ececec;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: keyboard;
+
+    Text {
+        text: root.label;
+        color: #1a1a1a;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        border-radius: root.border-radius;
+        background: pointer.has-hover ? #284e7912 : transparent;
+    }
+
+    keyboard := FocusScope {
+        x: 0;
+        width: 0;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            if event.text == Key.Escape {
+                root.dismissed();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    pointer := TouchArea {
+        mouse-cursor: MouseCursor.pointer;
+        clicked => { root.clicked(); }
+    }
+
+    if keyboard.has-focus: Rectangle {
+        border-radius: root.border-radius;
+        border-width: 2px;
+        border-color: #4c8074;
+    }
+}
 
 component SmsBodyText inherits Text {
     color: #25322e;
@@ -43,7 +94,6 @@ export component SmsWindow inherits Window {
     background: #ffffff;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
-    init => { Palette.color-scheme = ColorScheme.light; }
 
     Rectangle {
         border-width: 1px;
@@ -95,10 +145,10 @@ export component SmsWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                Button {
-                    width: 104px;
-                    text: root.chinese ? "复制验证码" : "Copy code";
+                CopyCodeButton {
+                    label: root.chinese ? "复制验证码" : "Copy code";
                     clicked => { root.copy-code(); }
+                    dismissed => { root.dismiss(); }
                 }
             }
         }
@@ -117,6 +167,9 @@ export component SmsWindow inherits Window {
             content-height: original-text.height;
             content-width: self.width;
             mouse-drag-pan-enabled: false;
+            accessible-role: region;
+            accessible-label: root.chinese ? "短信正文" : "SMS body";
+            forward-focus: body-keyboard;
 
             original-text := SmsBodyText {
                 x: 0;
@@ -131,6 +184,33 @@ export component SmsWindow inherits Window {
                 width: body.width;
                 height: max(body.height, original-text.height);
                 clicked => { root.dismiss(); }
+            }
+        }
+
+        body-keyboard := FocusScope {
+            x: 0;
+            width: 0;
+
+            key-pressed(event) => {
+                if event.text == Key.Escape {
+                    root.dismiss();
+                    return accept;
+                }
+                if !root.scrolls {
+                    return reject;
+                }
+                if event.text == Key.UpArrow {
+                    scrollbar.scroll-to(body.content-y + 20px);
+                } else if event.text == Key.DownArrow {
+                    scrollbar.scroll-to(body.content-y - 20px);
+                } else if event.text == Key.PageUp {
+                    scrollbar.scroll-to(body.content-y + body.height);
+                } else if event.text == Key.PageDown {
+                    scrollbar.scroll-to(body.content-y - body.height);
+                } else {
+                    return reject;
+                }
+                return accept;
             }
         }
 
@@ -205,6 +285,15 @@ export component SmsWindow inherits Window {
                 accessible-label: root.chinese ? "向下滚动" : "Scroll down";
                 clicked => { parent.scroll-to(body.content-y - 20px); }
             }
+        }
+
+        if body-keyboard.has-focus: Rectangle {
+            x: body.x;
+            y: body.y;
+            width: body.width + (root.scrolls ? scrollbar.width : 0px);
+            height: body.height;
+            border-width: 2px;
+            border-color: #4c8074;
         }
 
         VerticalLayout {
