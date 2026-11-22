@@ -22,6 +22,17 @@ use windows_app::{PairingStage, PairingWindow, service::PairingOperation, ui};
 
 use fixture::*;
 
+#[derive(Clone, Copy)]
+enum Step {
+    Advance,
+    VerifyKeyCheckMotion,
+    WaitForCancellation,
+    Scan,
+    Refresh,
+    ConnectForCompletion,
+    Finish,
+}
+
 #[test]
 #[ignore = "requires an interactive Windows desktop"]
 fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
@@ -74,21 +85,37 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         .then(|| std::env::var_os("PIN_GLIDE_PAIRING_EVIDENCE"))
         .flatten();
     let mut states = [
-        (PairingStage::Waiting, ""),
-        (PairingStage::Confirming, "pair-key-check"),
-        (PairingStage::Failed, "pair-failed"),
-        (PairingStage::Waiting, ""),
-        (PairingStage::Confirming, ""),
-        (PairingStage::Canceled, "pair-canceled"),
-        (PairingStage::Expired, "pair-expired"),
-        (PairingStage::Waiting, "scan-to-prepare"),
-        (PairingStage::CredentialReady, "pair-credential-ready"),
-        (PairingStage::Checking, "pair-uncertain"),
-        (PairingStage::Connecting, "pair-issued"),
-        (PairingStage::Failed, "upgrade-failed"),
-        (PairingStage::Waiting, "scan-after-refresh"),
-        (PairingStage::Connecting, ""),
-        (PairingStage::Completed, "pair-done"),
+        (PairingStage::Waiting, Step::Advance, None),
+        (
+            PairingStage::Confirming,
+            Step::VerifyKeyCheckMotion,
+            Some("pair-key-check"),
+        ),
+        (
+            PairingStage::Failed,
+            Step::WaitForCancellation,
+            Some("pair-failed"),
+        ),
+        (PairingStage::Waiting, Step::Advance, None),
+        (PairingStage::Confirming, Step::Advance, None),
+        (PairingStage::Canceled, Step::Refresh, Some("pair-canceled")),
+        (PairingStage::Expired, Step::Refresh, Some("pair-expired")),
+        (PairingStage::Waiting, Step::Scan, None),
+        (
+            PairingStage::CredentialReady,
+            Step::Advance,
+            Some("pair-credential-ready"),
+        ),
+        (
+            PairingStage::Checking,
+            Step::Advance,
+            Some("pair-uncertain"),
+        ),
+        (PairingStage::Connecting, Step::Advance, Some("pair-issued")),
+        (PairingStage::Failed, Step::Refresh, Some("upgrade-failed")),
+        (PairingStage::Waiting, Step::Scan, None),
+        (PairingStage::Connecting, Step::ConnectForCompletion, None),
+        (PairingStage::Completed, Step::Finish, Some("pair-done")),
     ]
     .into_iter()
     .peekable();
@@ -99,16 +126,16 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     let mut completion_frames = CompletionFrames::default();
     timer.start(TimerMode::Repeated, Duration::from_millis(20), move || {
         assert!(started.elapsed() < Duration::from_secs(18));
-        let Some(&(stage, name)) = states.peek() else {
+        let Some(&(stage, step, capture_name)) = states.peek() else {
             return;
         };
         if window.get_stage() != stage {
             return;
         }
-        if name == "pair-failed" && may_refresh.try_recv().is_err() {
+        if matches!(step, Step::WaitForCancellation) && may_refresh.try_recv().is_err() {
             return;
         }
-        if stage == PairingStage::Completed {
+        if matches!(step, Step::Finish) {
             let completed_at = completed_at.get_or_insert_with(|| {
                 assert_eq!(window.window().is_visible(), !hidden);
                 if hidden {
@@ -128,7 +155,7 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             }
         }
         assert!(window.window().is_visible());
-        if matches!(name, "scan-to-prepare" | "scan-after-refresh") {
+        if matches!(step, Step::Scan) {
             let image = window.get_qr().to_rgb8().unwrap();
             let pixels: Vec<_> = image.as_slice().iter().map(|pixel| pixel.r).collect();
             send_qr
@@ -141,24 +168,21 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             states.next();
             return;
         }
-        if stage == PairingStage::Waiting || (stage == PairingStage::Confirming && name.is_empty())
-        {
-            assert_eq!(
-                window.get_qr().to_rgb8().is_some(),
-                stage == PairingStage::Waiting
-            );
-            advance.send(()).unwrap();
-            states.next();
-            return;
-        }
-        assert!(window.get_qr().to_rgb8().is_none());
-        if stage == PairingStage::Confirming {
+        assert_eq!(
+            window.get_qr().to_rgb8().is_some(),
+            stage == PairingStage::Waiting
+        );
+        let evidence_path = evidence
+            .as_deref()
+            .zip(capture_name)
+            .map(|(directory, name)| Path::new(directory).join(format!("{name}.ppm")));
+        if matches!(step, Step::VerifyKeyCheckMotion) {
             let current = window.window().take_snapshot().unwrap();
             if let Some(previous) = frame.replace(current.clone()) {
                 if !window.get_motion_enabled() {
                     assert!(previous.as_slice() == current.as_slice());
-                    if let Some(directory) = &evidence {
-                        capture(&window, &Path::new(directory).join(format!("{name}.ppm")));
+                    if let Some(path) = &evidence_path {
+                        capture(&window, path);
                     }
                     window.set_motion_enabled(true);
                     return;
@@ -169,28 +193,22 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
             } else {
                 return;
             }
-        }
-        if stage != PairingStage::Confirming
-            && !name.is_empty()
-            && let Some(directory) = &evidence
-        {
-            capture(&window, &Path::new(directory).join(format!("{name}.ppm")));
+        } else if let Some(path) = &evidence_path {
+            capture(&window, path);
         }
         states.next();
-        match stage {
-            PairingStage::Confirming => advance.send(()).unwrap(),
-            PairingStage::CredentialReady | PairingStage::Checking => advance.send(()).unwrap(),
-            PairingStage::Connecting => {
-                if name.is_empty() {
-                    window.set_motion_enabled(!reduced);
-                    if hidden {
-                        window.window().hide().unwrap();
-                    }
+        match step {
+            Step::Advance | Step::VerifyKeyCheckMotion => advance.send(()).unwrap(),
+            Step::ConnectForCompletion => {
+                window.set_motion_enabled(!reduced);
+                if hidden {
+                    window.window().hide().unwrap();
                 }
                 advance.send(()).unwrap();
             }
-            PairingStage::Completed => slint::quit_event_loop().unwrap(),
-            _ => window.invoke_refresh(),
+            Step::Finish => slint::quit_event_loop().unwrap(),
+            Step::WaitForCancellation | Step::Refresh => window.invoke_refresh(),
+            Step::Scan => unreachable!(),
         }
     });
     slint::run_event_loop_until_quit().unwrap();

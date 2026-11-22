@@ -123,7 +123,6 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
             PairingStart::ResumePending,
         )
     };
-    finished.send(()).ok();
     let mut operation = start();
     let until = std::time::Instant::now() + Duration::from_secs(10);
     let mut send_qr = Some(send_qr);
@@ -142,6 +141,7 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
         assert!(std::time::Instant::now() < until, "pairing did not finish");
         std::thread::sleep(Duration::from_millis(10));
     };
+    let _ = finished.send(());
     assert_eq!(actual, expected);
     if matches!(scenario, Scenario::WriteRejected) {
         assert_eq!(fs::read(&path).unwrap(), br#"{"version":99}"#);
