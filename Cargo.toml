@@ -1,5 +1,10 @@
 [workspace]
-members = ["crates/receiver-core", "crates/windows-app"]
+members = [
+    "crates/receiver-core",
+    "crates/windows-app",
+    "generated/http-client",
+    "generated/wss-models",
+]
 resolver = "3"
 
 [workspace.package]

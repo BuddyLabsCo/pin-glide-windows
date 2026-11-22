@@ -1,0 +1,8 @@
+{
+  "name": "pin-glide-contract-tools",
+  "private": true,
+  "dependencies": {
+    "@asyncapi/modelina": "5.10.1",
+    "@asyncapi/parser": "3.6.6"
+  }
+}
