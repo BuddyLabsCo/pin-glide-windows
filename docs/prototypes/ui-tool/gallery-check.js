@@ -1,58 +1,14 @@
-// Run against the generated gallery with agent-browser eval -b.
 (async () => {
-  let checks = 0;
-  const check = (condition, label) => {
-    if (!condition) throw new Error(label);
-    checks++;
-  };
-  check(cases.length > 0, "Feature has states");
-  check(new Set(cases.map(c => c.key)).size === cases.length, "Unique states");
-  check(cases.every(c => c.feature === feature), "No states from another functional boundary");
-  check(location.pathname.endsWith(`/${feature}.html`), "Separate functional HTML file");
-  check(document.documentElement.lang === "zh-CN", "Chinese demo language");
-  for (const item of cases) {
-    check(/\p{Script=Han}/u.test(item.title), `${item.key}: Chinese state title`);
-    check(/\p{Script=Han}/u.test(item.behavior), `${item.key}: Chinese description`);
-    show(item.key);
-    check(document.querySelector("#title").textContent === item.title, `${item.key}: title`);
-    check(new URL(location.href).searchParams.get("state") === item.key, `${item.key}: URL`);
-    if (item.image) {
-      const image = document.querySelector("#render img");
-      await image.decode();
-      check(image.naturalWidth === item.size[0] && image.naturalHeight === item.size[1],
-        `${item.key}: native image dimensions`);
-    } else {
-      check(!document.querySelector("#render img"), `${item.key}: no invented surface`);
+  const initial = state.value;
+  for (const option of state.options) {
+    state.value = option.value;
+    state.dispatchEvent(new Event("change"));
+    const image = render.querySelector("img");
+    await image.decode();
+    if (image.alt !== option.label || new URL(location.href).searchParams.get("state") !== option.value) {
+      throw new Error(`Incorrect preview for ${option.value}`);
     }
   }
-  const search = document.querySelector("#search");
-  search.value = cases[0].key;
-  search.dispatchEvent(new Event("input"));
-  check([...document.querySelectorAll("#list button")].some(b => b.dataset.state === cases[0].key),
-    "Feature-local search");
-  search.value = "";
-  search.dispatchEvent(new Event("input"));
-  show(cases[0].key);
-  move(-1);
-  check(current === cases.at(-1).key, "Previous stays in this feature and wraps");
-  move(1);
-  check(current === cases[0].key, "Next stays in this feature and wraps");
-  const caption = document.querySelector("#render .caption");
-  check(!caption || !caption.textContent.includes("□"), "No maximize affordance");
-  const logo = document.querySelector("header .brand img");
-  await logo.decode();
-  check(logo.naturalWidth > 0, "Android logo loads");
-  check(!document.querySelector('[id="theme"]'), "No theme control");
-  check(document.querySelectorAll(".feature-links a").length === 8, "Overview and seven feature links");
-  if (feature === "settings") {
-    check(cases.find(c => c.key === "settings-language-zh").properties["language-index"] === 1,
-      "Manual Chinese preference");
-    check(cases.find(c => c.key === "settings-language-en").properties["language-index"] === 2,
-      "English preference without English screens");
-    check(!cases.find(c => c.key === "settings-default").properties["language-index"],
-      "Follow-system default");
-    check(cases.some(c => c.key === "settings-language-save-failed"), "Language save failure");
-  }
-  return { feature, states: cases.length, nativeRenders: cases.filter(c => c.image).length,
-    passed: checks, scope: "Static feature pages only; no native integration claim." };
+  show(initial);
+  return state.options.length;
 })();

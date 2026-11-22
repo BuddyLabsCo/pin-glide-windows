@@ -5,78 +5,34 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>鹊信／设置</title>
 <link rel="stylesheet" href="assets/preview.css">
+<link rel="stylesheet" href="assets/settings.css">
 </head>
-<body data-feature="settings">
-<header>
-<div class="brand">
-<img src="assets/app-icon.png" alt="鹊信图标">
-<div>
-<h1>设置</h1>
-<div class="subtitle">方案 B／固定尺寸／单一浅色外观／原生 Slint Fluent 预览</div>
-</div>
-</div>
-<div class="actions">
-<a class="button" href="index.html">全部功能</a>
-<a class="button small-action" href="ui-inventory.md">完整 UI 场景清单</a>
-<span class="count" id="count">
-</span>
-</div>
-</header>
-<nav class="feature-links" aria-label="UI 原型功能页">
-<a href="index.html">功能总览</a>
-<a href="main.html">主窗口</a>
-<a href="pairing.html">配对流程</a>
-<a href="settings.html">设置</a>
+<body>
+<nav class="feature-links" aria-label="预览页面">
+<a href="welcome.html">首次使用</a>
+<a href="main.html">配对后使用</a>
+<a href="add-phone.html">添加设备</a>
+<a href="settings.html" aria-current="page">设置</a>
 <a href="messages.html">短信与复制</a>
-<a href="tray.html">系统托盘</a>
-<a href="lifecycle.html">运行与生命周期</a>
-<a href="installation.html">安装与卸载</a>
+<a href="tray.html">托盘右键菜单</a>
 </nav>
-<div class="layout">
-<nav aria-label="本功能状态目录">
-<input id="search" aria-label="搜索状态" placeholder="搜索当前功能的状态…">
-<div id="list">
+<main class="stage settings-stage">
+<label for="state">预览状态</label>
+<select id="state"></select>
+<div id="render"></div>
+<template id="duration-setting">
+<div class="duration-setting">
+<div class="duration-label">
+<label for="popup-duration">弹窗显示时长</label>
+<span id="duration-error" aria-live="polite"></span>
 </div>
-<footer>本页仅浏览当前功能的状态；不影响其他功能页。</footer>
-</nav>
-<main class="stage">
-<div class="kicker" id="kicker">
+<input id="popup-duration" type="text" inputmode="numeric" autocomplete="off" aria-label="弹窗显示时长（秒）" aria-describedby="duration-error">
+<span class="duration-unit" aria-hidden="true">秒</span>
 </div>
-<h2 id="title">
-</h2>
-<div class="meta" id="meta">
-</div>
-<div id="render">
-</div>
-<p class="annotation" id="annotation">
-</p>
-<div class="controls">
-<button id="previous">上一个状态</button>
-<button id="next">下一个状态</button>
-</div>
+</template>
 </main>
-<aside>
-<div class="section">
-<h3>本页功能</h3>
-<p>开机启动、界面语言、快捷键与弹窗时长。</p>
-<p>语言提供“跟随系统、中文、English”，默认跟随系统。本 Demo 始终展示中文；选择 English 的状态仅预览偏好设置，不展示英文界面。</p>
-</div>
-<div class="section">
-<h3>触发条件与可见结果</h3>
-<p id="behavior">
-</p>
-</div>
-<div class="section">
-<h3>功能边界</h3>
-<p>错误在对应字段旁提示，保留上次保存的设置与实际系统状态。没有主题或验证码到期设置。</p>
-</div>
-<h3>技术边界</h3>
-<p>应用界面来自真实 Slint Fluent 渲染。标题栏按钮仅作示意，焦点、托盘及系统集成尚未验证。</p>
-</aside>
-</div>
-<script src="data/settings.js">
-</script>
-<script src="assets/gallery.js">
-</script>
+<script src="data/settings.js"></script>
+<script src="assets/settings.js"></script>
+<script src="assets/gallery.js"></script>
 </body>
 </html>

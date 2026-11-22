@@ -3,79 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>鹊信／配对流程</title>
+<title>鹊信／首次配对</title>
 <link rel="stylesheet" href="assets/preview.css">
 </head>
-<body data-feature="pairing">
-<header>
-<div class="brand">
-<img src="assets/app-icon.png" alt="鹊信图标">
-<div>
-<h1>配对流程</h1>
-<div class="subtitle">方案 B／固定尺寸／单一浅色外观／原生 Slint Fluent 预览</div>
-</div>
-</div>
-<div class="actions">
-<a class="button" href="index.html">全部功能</a>
-<a class="button small-action" href="ui-inventory.md">完整 UI 场景清单</a>
-<span class="count" id="count">
-</span>
-</div>
-</header>
-<nav class="feature-links" aria-label="UI 原型功能页">
-<a href="index.html">功能总览</a>
-<a href="main.html">主窗口</a>
-<a href="pairing.html">配对流程</a>
+<body>
+<nav class="feature-links" aria-label="预览页面">
+<a href="welcome.html">首次使用</a>
+<a href="main.html">配对后使用</a>
+<a href="add-phone.html">添加设备</a>
 <a href="settings.html">设置</a>
 <a href="messages.html">短信与复制</a>
-<a href="tray.html">系统托盘</a>
-<a href="lifecycle.html">运行与生命周期</a>
-<a href="installation.html">安装与卸载</a>
-</nav>
-<div class="layout">
-<nav aria-label="本功能状态目录">
-<input id="search" aria-label="搜索状态" placeholder="搜索当前功能的状态…">
-<div id="list">
-</div>
-<footer>本页仅浏览当前功能的状态；不影响其他功能页。</footer>
+<a href="tray.html">托盘右键菜单</a>
 </nav>
 <main class="stage">
-<div class="kicker" id="kicker">
-</div>
-<h2 id="title">
-</h2>
-<div class="meta" id="meta">
-</div>
-<div id="render">
-</div>
-<p class="annotation" id="annotation">
-</p>
-<div class="controls">
-<button id="previous">上一个状态</button>
-<button id="next">下一个状态</button>
-</div>
+<p class="steps"><a href="?state=pair-waiting">扫码</a> → <a href="?state=pair-key-check">正在配对</a> → <a href="?state=pair-issued">首次连接</a> → <a href="?state=pair-done">配对完成</a> → <a href="main.html">主窗口</a></p>
+<label for="state">预览状态</label>
+<select id="state" data-initial="pair-waiting" data-prepare="pair-preparing"></select>
+<label class="name-scenario" data-state="pair-done" hidden>输入情景<select id="name-scenario">
+<option value="normal">正常填写</option>
+<option value="empty">留空</option>
+<option value="duplicate">设备重名</option>
+<option value="too-long">超过 40 个字符</option>
+</select></label>
+<div id="render"></div>
 </main>
-<aside>
-<div class="section">
-<h3>本页功能</h3>
-<p>二维码、注册进度、配对失败与主动重新注册。</p>
-</div>
-<div class="section">
-<h3>触发条件与可见结果</h3>
-<p id="behavior">
-</p>
-</div>
-<div class="section">
-<h3>功能边界</h3>
-<p>按实际进度更新界面，关闭窗口不取消配对；添加手机不影响现有接收。</p>
-</div>
-<h3>技术边界</h3>
-<p>应用界面来自真实 Slint Fluent 渲染。标题栏按钮仅作示意，焦点、托盘及系统集成尚未验证。</p>
-</aside>
-</div>
-<script src="data/pairing.js">
-</script>
-<script src="assets/gallery.js">
-</script>
+<script src="data/pairing.js"></script>
+<script src="assets/device-names.js"></script>
+<script src="assets/gallery.js"></script>
 </body>
 </html>

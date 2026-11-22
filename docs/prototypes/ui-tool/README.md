@@ -4,35 +4,43 @@ This continues the B direction selected by the user on November 14, 2026.
 The user also selected fixed-size, non-maximizable windows and no theme/dark
 appearance in the current scope. UI supports Chinese and English, defaulting
 to the system language with an explicit override in Settings. The demo itself
-shows Chinese only, including previews of the English preference selection.
-The other presentation details remain draft.
+shows Chinese only.
 
-Open [index.html](index.html) directly in a browser. It contains overview and
-navigation only. Each functional boundary has its own independently editable
-HTML page; each page searches and cycles only its own states:
+Open [index.html](index.html) directly in a browser. It opens the animated
+welcome screen. Choose Start to enter pairing. Each scenario has its own HTML
+page.
+
+The [screenshot archive](../shots/README.md) shows every gallery state and
+screens that appear after interacting with the prototype.
 
 | Page | Boundary |
 | --- | --- |
-| [main.html](main.html) | Receiver readiness, phones, credential/key errors |
-| [pairing.html](pairing.html) | QR, enrollment progress/errors, new registration |
-| [settings.html](settings.html) | Language, startup, shortcut, popup duration, save errors |
-| [messages.html](messages.html) | Full SMS, OTP/no-OTP, clipboard and latest-code feedback |
-| [tray.html](tray.html) | System-tray icon/tooltip/menu proposals |
-| [lifecycle.html](lifecycle.html) | Automatic launch, lock, suspend, Exit |
-| [installation.html](installation.html) | NSIS and Windows-owned installation/trust UI |
+| [welcome.html](welcome.html) | First launch: SMS delivery animation and Start |
+| [pairing.html](pairing.html) | First pairing: QR, confirmation, first connection, completion |
+| [main.html](main.html) | After pairing: device list, pairing management and registration recovery |
+| [Add a device](add-phone.html) | Add a device: QR, expiry and completion |
+| [settings.html](settings.html) | Language, startup, shortcut, popup duration, field feedback |
+| [messages.html](messages.html) | SMS popups with or without a code, scrolling, and copying |
+| [tray.html](tray.html) | Native tray menu with Open Pin Glide, Settings, and Exit |
 
-Use the page's state list, search or arrow keys. A state is shareable as
-`pairing.html?state=pair-issued`, for example. Native screenshots are static
-Slint renders, not a proposed browser-based application.
+Use the state selector and the links between workflow screens. A state is
+shareable as `pairing.html?state=pair-issued`, for example. The HTML welcome
+preview plays a 6.4-second sequence rendered from the Slint illustration
+and shows the arrival frame when the browser requests reduced motion.
+The preview advances from preparation to
+the QR after a short delay. The real flow advances when session preparation
+completes. The completion screens accept a device name and show the saved
+name in the device list and SMS source. The browser preview keeps these names
+for the current tab session.
 
 Read [ui-inventory.md](ui-inventory.md) for the complete trigger/action/error
-inventory, including tray, installer and deliberately invisible outcomes.
-There are 65 catalogue states, of which 54 have native Slint screenshots.
-The inventory also enumerates subcases not requiring distinct artwork.
+inventory. The demo shows application screens and the tray menu sketch.
 
 ## Native source and regeneration
 
-Requires the already-installed `slint-viewer` (preview version: 1.18.1) and Python.
+Regeneration requires `slint-viewer` (preview version: 1.18.1), Python and
+FFmpeg with `libwebp_anim` to encode the welcome preview. Opening the
+generated HTML requires only a browser.
 No Python package or frontend dependency is needed.
 
 ```powershell
@@ -42,13 +50,13 @@ python docs/prototypes/ui-tool/build-preview.py
 The command compiles the source with `--style fluent`, renders every state and
 asserts each output has the proposed fixed logical dimensions. It writes
 `shots/` and a separate state-data file for each feature under `data/`.
-It does not overwrite the feature HTML pages or overview.
+The HTML files are edited directly.
 
 Edit each feature's HTML for its layout and discussion notes. Shared preview
 styles live in `assets/preview.css`; shared state navigation/rendering lives
 in `assets/gallery.js`. Product-surface artwork comes from `ui.slint`, with
 scenario inputs defined in `build-preview.py`. No file-loader server, bundler
-or frontend dependency is required; all eight HTML files work via `file://`.
+or frontend dependency is required. The pages work via `file://`.
 
 To inspect a real fixed-size Slint window interactively:
 
@@ -56,40 +64,44 @@ To inspect a real fixed-size Slint window interactively:
 slint-viewer --style fluent --component MainWindow docs/prototypes/ui-tool/ui.slint
 ```
 
-Use `--component PairingWindow`, `SettingsWindow`, `SmsWindow`,
-`FeedbackWindow`, `ConfirmationWindow` or `TrayContentPreview` for the other
-surfaces. Their callbacks intentionally do not call product actions. This is a
-visual/state prototype, not functional receiver implementation.
+Use `--component WelcomeWindow`, `PairingWindow`, `SettingsWindow` or `SmsWindow`
+for the other surfaces. The browser SMS preview supports scrolling, click to
+dismiss and copying the sample code. The Slint callbacks are ready for a host
+to wire to the application.
 
 ## Sources and limits
 
-The logo is the byte-for-byte Android launcher asset at source
+The logo is the original Pin Glide launcher asset, copied byte for byte from
 `4ee4dd42f522bb56cd54c20e98247f93e276192c`, blob
 `a6ae2d7b6ee4327462a6b91f0ce4448a86384cf3`. It is not a generated replacement.
 `qr-placeholder.svg` is deliberately non-scannable.
 
-App controls use real Fluent standard widgets; status, labels, wrapped text
-and scroll regions are ordinary Slint elements. There is no Mica, Acrylic,
-custom native caption, WebView or required animation. Light appearance is
-forced for these prototype windows; no theme preference is added.
+App controls use Fluent standard widgets except for the welcome action.
+That action uses a compact, left-aligned Slint control with the app's accent
+color, a 4 px radius and visible hover, press and focus states. The welcome
+illustration is drawn in `welcome.slint`. Its timeline drives both the live
+Slint preview and the generated animation. The production window host should
+set `motion-enabled` to match Windows Animation effects. The prototype uses
+one light appearance and standard window chrome.
 
 Native OS caption buttons are absent from headless component screenshots;
 the browser gallery adds a schematic caption with no maximize button. The
 production Windows adapter must still enforce non-resize/non-maximize,
 hide-to-tray, independent non-activating SMS windows and taskbar policy.
-The tray component is only a content sketch: real tray icons/tooltips/menus
-must be implemented with Windows APIs, and the OS controls their appearance.
+The tray page sketches the native context menu. A left single-click is a
+no-op, a left double-click opens the main entry, and a right-click opens the
+Windows context menu. For a new installation, the main entry opens the welcome
+screen. Start creates the first pairing session.
 
 Some screenshots deliberately show progress text rather than a fabricated
-percentage. Quiet states render no invented application dialog. The original
+percentage. The original
 fixed test SMS remains unchanged. Demo UI, state descriptions and errors are
 Chinese. The Settings language choices are Follow system (default), Chinese
 and English; the latter does not introduce English demo screens. Real SMS/OTP
 must never be translated when the application language changes.
 
 Compilation, native render dimensions and browser-catalogue navigation were
-checked across the separate feature pages (413 assertions, including Chinese
-labels and language-choice previews; this is not a product test suite).
+checked across the separate scenario pages.
 Focus/maximize/tray/clipboard/hotkeys, real pairing/crypto/reception,
 installer behavior, accessibility automation, product E2E, resource measurement
 and acceptance were not validated. The user has excluded the last three

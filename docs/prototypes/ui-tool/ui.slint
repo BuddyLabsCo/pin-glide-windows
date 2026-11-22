@@ -1,12 +1,16 @@
 // Throwaway B-direction surfaces. No real connection, clipboard, tray, or keys.
 // Fixed logical content sizes; native Windows chrome is outside these renders.
-import { Button, CheckBox, ComboBox, LineEdit, ScrollView, Palette } from "std-widgets.slint";
+import { Button, ComboBox, LineEdit, ScrollView, Switch, Palette } from "std-widgets.slint";
+import { WelcomeArt } from "welcome.slint";
 
 component Brand inherits HorizontalLayout {
     height: 32px;
     spacing: 10px;
     Image { source: @image-url("assets/app-icon.png"); width: 32px; height: 32px; }
-    Text { text: "鹊信"; font-size: 18px; font-weight: 600; color: #22312f; }
+    Text {
+        text: "鹊信"; font-size: 18px; font-weight: 600; color: #22312f;
+        vertical-alignment: center;
+    }
     Rectangle { horizontal-stretch: 1; }
 }
 
@@ -28,194 +32,640 @@ component Separator inherits Rectangle {
     background: #dfe5e3;
 }
 
-component Banner inherits Rectangle {
-    in property <string> message;
-    in property <bool> error: false;
-    height: content.preferred-height;
+component BackButton inherits Rectangle {
+    callback clicked();
+    width: 32px; height: 32px;
     border-radius: 4px;
-    border-width: 1px;
-    border-color: root.error ? #e5c6c2 : #dfe5e3;
-    background: root.error ? #fff4f2 : #f1f4f2;
-    content := VerticalLayout {
-        padding: 12px;
-        Note { text: root.message; color: root.error ? #903d34 : #315b4e; }
+    background: press.pressed ? #dceae3 : press.has-hover ? #eaf2ee : transparent;
+    border-color: #4c8074;
+    border-width: key-focus.has-focus ? 2px : 0px;
+    accessible-role: button;
+    accessible-label: "返回主窗口";
+    accessible-action-default => { root.clicked(); }
+    forward-focus: key-focus;
+    Path {
+        width: 18px; height: 18px; viewbox-width: 18; viewbox-height: 18;
+        commands: "M 9 3 L 3 9 L 9 15 M 3 9 H 15";
+        stroke: #344940; stroke-width: 1.5px;
+    }
+    key-focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    press := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
     }
 }
 
-component PhoneRow inherits VerticalLayout {
+component FilledButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> destructive: false;
+    callback clicked();
+    border-radius: 6px;
+    background: root.destructive
+        ? (press.pressed ? #801b14 : press.has-hover ? #9e1f16 : #b42318)
+        : (press.pressed ? #00574f : press.has-hover ? #087b6e : #006b60);
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: key-focus;
+    Text { text: root.text; color: white; font-weight: 600; }
+    if key-focus.has-focus : Rectangle {
+        x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px;
+        border-radius: 8px; border-width: 2px; border-color: root.destructive ? #b42318 : #19685b;
+    }
+    key-focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    press := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component DeviceRow inherits VerticalLayout {
     in property <string> name;
     in property <bool> attention: false;
-    spacing: 7px;
-    HorizontalLayout {
-        Text { text: root.name; font-size: 14px; color: #25322e; }
-        Rectangle { horizontal-stretch: 1; }
-        Text { text: root.attention ? "需要处理" : "已配对"; font-size: 12px; color: root.attention ? #9a6124 : #42645a; }
-    }
-    Note { text: root.attention ? "请先在此手机移除旧配对，再重新配对。" : "已与此接收端配对"; font-size: 12px; }
-    Separator {}
-}
-
-export component MainWindow inherits Window {
-    title: "鹊信";
-    width: 440px; height: 600px;
-    background: #fafcfb;
-    default-font-family: "Microsoft YaHei UI";
-    default-font-size: 14px;
-    in property <string> status: "就绪";
-    in property <string> reason: "连接正常，可以接收新短信。";
-    in property <string> notice: "";
-    in property <bool> notice-error: false;
-    in property <string> action: "配对手机";
-    in property <bool> attention: false;
-    in property <int> phone-count: 2;
-    in property <bool> startup: true;
-    callback open-pairing();
-    callback open-settings();
-    init => { Palette.color-scheme = ColorScheme.light; }
-    VerticalLayout {
-        padding: 24px;
-        spacing: 16px;
-        Brand {}
-        Separator {}
-        ScrollView {
-            vertical-stretch: 1;
-            VerticalLayout {
-                width: parent.width;
-                padding-right: 4px;
-                spacing: 16px;
-                Heading { text: root.status; }
-                Note { text: root.reason; }
-                if root.notice != "" : Banner { message: root.notice; error: root.notice-error || root.attention; }
-                HorizontalLayout {
-                    Text { text: "已配对手机"; font-weight: 600; }
-                    Rectangle { horizontal-stretch: 1; }
-                    Button { text: root.action; clicked => { root.open-pairing(); } }
+    in property <bool> expanded: false;
+    in property <length> editor-height;
+    in property <string> error;
+    in-out property <string> draft;
+    callback toggle();
+    callback save();
+    callback delete-local();
+    Rectangle {
+        height: 48px;
+        border-radius: 9px;
+        background: disclosure.has-hover ? #edf6f2 : transparent;
+        border-width: disclosure-focus.has-focus ? 1px : 0px;
+        border-color: #006b60;
+        accessible-role: button;
+        accessible-label: (root.expanded ? "收起 " : root.attention ? "展开需要重新配对的设备 " : "编辑名称 ") + root.name;
+        accessible-expanded: root.expanded;
+        accessible-action-default => { root.toggle(); }
+        forward-focus: disclosure-focus;
+        HorizontalLayout {
+            padding-left: 16px; padding-right: 12px;
+            spacing: 12px;
+            Rectangle {
+                width: 20px;
+                Rectangle {
+                    width: 16px; height: 20px; border-radius: 4px;
+                    border-width: 1.5px; border-color: #4c8074;
+                    Rectangle {
+                        y: 14px; width: 5px; height: 1.5px;
+                        border-radius: 1px; background: #4c8074;
+                    }
                 }
-                if root.phone-count > 0 : PhoneRow { name: "手机 · 7C2A"; attention: root.attention; }
-                if root.phone-count > 1 : PhoneRow { name: "手机 · B193"; }
-                if root.phone-count == 0 : Note { text: "还没有已配对的手机，请使用 Android 应用扫码配对。"; }
+            }
+            Text {
+                text: root.name; color: #25322e;
+                horizontal-stretch: 1; overflow: elide; vertical-alignment: center;
+            }
+            if root.attention : Text {
+                text: "需要重新配对";
+                font-size: 12px; color: #805724;
+                vertical-alignment: center;
+            }
+            Rectangle {
+                width: 32px;
+                Path {
+                    width: 12px; height: 8px; viewbox-width: 12; viewbox-height: 8;
+                    commands: root.expanded ? "M 1 6 L 6 2 L 11 6" : "M 1 2 L 6 6 L 11 2";
+                    stroke: #4c8074; stroke-width: 1.5px;
+                }
             }
         }
-        Separator {}
-        HorizontalLayout {
-            CheckBox { text: "开机启动"; checked: root.startup; }
-            Rectangle { horizontal-stretch: 1; }
+        disclosure-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Return || event.text == Key.Space {
+                    root.toggle();
+                    return accept;
+                }
+                return reject;
+            }
         }
-        HorizontalLayout {
-            Note { text: "复制快捷键"; }
-            Rectangle { horizontal-stretch: 1; }
-            Text { text: "未设置"; font-size: 13px; color: #65716e; }
+        disclosure := TouchArea { mouse-cursor: pointer; clicked => { root.toggle(); } }
+    }
+    if root.expanded && root.attention : HorizontalLayout {
+        height: root.editor-height;
+        padding-left: 16px; padding-right: 16px;
+        padding-top: 6px; padding-bottom: 6px;
+        Rectangle { horizontal-stretch: 1; }
+        FilledButton {
+            text: "删除"; destructive: true; width: 56px; height: 32px;
+            clicked => { root.delete-local(); }
         }
-        HorizontalLayout {
-            Note { text: "弹窗显示时长"; }
-            Rectangle { horizontal-stretch: 1; }
-            Text { text: "30 秒"; font-size: 13px; color: #65716e; }
+    }
+    if root.expanded && !root.attention : VerticalLayout {
+        height: root.editor-height;
+        padding-left: 16px; padding-right: 16px; padding-bottom: 12px;
+        spacing: 4px;
+        Text { height: 16px; text: "设备名称"; font-size: 12px; color: #53655d; }
+        LineEdit {
+            height: 32px; text <=> root.draft; accessible-label: "设备名称";
+            accepted => { root.save(); }
         }
+        if root.error != "" : Note { height: 20px; text: root.error; color: #903d34; vertical-alignment: center; }
         HorizontalLayout {
-            Note { text: "不保留短信历史"; font-size: 12px; }
+            spacing: 8px;
             Rectangle { horizontal-stretch: 1; }
-            Button { text: "设置"; clicked => { root.open-settings(); } }
+            Button { text: "取消"; width: 56px; height: 32px; clicked => { root.toggle(); } }
+            FilledButton { text: "保存"; width: 56px; height: 32px; clicked => { root.save(); } }
         }
     }
 }
 
-export component PairingWindow inherits Window {
-    title: "鹊信 · 配对手机";
+export component WelcomeWindow inherits Window {
+    title: "鹊信";
     width: 440px; height: 560px;
     background: #fafcfb;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
-    in property <string> heading: "配对手机";
-    in property <string> detail: "打开 Android 手机上的鹊信，扫描二维码并在手机上确认。";
-    in property <string> progress: "等待手机扫码";
-    in property <string> notice: "";
+    in property <bool> motion-enabled: true;
+    in property <float> preview-seconds: 3.0;
+    private property <duration> started;
+    callback start-pairing();
+    init => {
+        Palette.color-scheme = ColorScheme.light;
+        root.started = animation-tick();
+    }
+    Brand { x: 28px; y: 24px; width: 384px; }
+    WelcomeArt {
+        x: 28px; y: 73px; width: 384px; height: 242px;
+        seconds: root.motion-enabled ? mod(animation-tick() - root.started, 6.4s) / 1s : root.preview-seconds;
+    }
+    Heading { x: 28px; y: 333px; width: 384px; text: "在电脑上接收短信"; font-size: 30px; }
+    Note { x: 28px; y: 384px; width: 384px; text: "新短信自动弹出，验证码一键复制。"; font-size: 15px; }
+    Rectangle {
+        x: 28px; y: 478px; width: 124px; height: 36px;
+        border-radius: 4px;
+        background: press.pressed ? #00574f : press.has-hover ? #087b6e : #006b60;
+        animate background { duration: 120ms; }
+        accessible-role: button;
+        accessible-label: "开始使用";
+        accessible-action-default => { root.start-pairing(); }
+        forward-focus: start-focus;
+        Text { text: "开始使用"; font-weight: 600; color: white; }
+        if start-focus.has-focus : Rectangle {
+            x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px;
+            border-radius: 6px; border-width: 2px; border-color: #19685b;
+        }
+        start-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Return || event.text == Key.Space {
+                    root.start-pairing();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+        press := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.start-pairing(); }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "鹊信";
+    in property <length> preview-height: 576px;
+    width: 400px; height: root.preview-height;
+    background: #f1f8f5;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    in property <string> reason: "";
+    in property <bool> attention: false;
+    in property <[string]> device-names: ["我的设备", "备用设备"];
+    in property <string> rename-error: "";
+    in-out property <int> rename-index: -1;
+    private property <string> rename-text;
+    private property <bool> removed-attention: false;
+    private property <int> visible-device-count: root.device-names.length - (root.removed-attention ? 1 : 0);
+    private property <length> rename-editor-height: root.attention && root.rename-index == 0 ? 44px
+        : root.rename-error == "" ? 100px : 124px;
+    callback open-pairing();
+    callback open-settings();
+    callback rename-device(int, string);
+    function start-rename(index: int, name: string) {
+        if root.rename-index == index {
+            root.rename-index = -1;
+            return;
+        }
+        root.rename-text = name;
+        root.rename-index = index;
+        let row-top = (index - (root.removed-attention ? 1 : 0)) * 49px;
+        device-scroll.content-y = clamp(device-scroll.content-y, -row-top,
+            min(0px, device-scroll.visible-height - row-top - 48px - root.rename-editor-height));
+    }
+    init => { Palette.color-scheme = ColorScheme.light; }
+    VerticalLayout {
+        padding: 24px;
+        padding-bottom: 16px;
+        spacing: 16px;
+        HorizontalLayout {
+            height: 32px;
+            Brand { horizontal-stretch: 1; }
+            Rectangle {
+                width: 32px; height: 32px;
+                Button {
+                    width: parent.width; height: parent.height;
+                    accessible-label: "设置";
+                    clicked => { root.open-settings(); }
+                }
+                Path {
+                    width: 18px; height: 18px;
+                    viewbox-width: 20; viewbox-height: 20;
+                    commands: "M 8 2 L 12 2 L 12.5 4.3 L 14 5.2 L 16.3 4.5 L 18.3 8 L 16.6 9.6 L 16.6 10.4 L 18.3 12 L 16.3 15.5 L 14 14.8 L 12.5 15.7 L 12 18 L 8 18 L 7.5 15.7 L 6 14.8 L 3.7 15.5 L 1.7 12 L 3.4 10.4 L 3.4 9.6 L 1.7 8 L 3.7 4.5 L 6 5.2 L 7.5 4.3 Z";
+                    stroke: #455750; stroke-width: 1.35px;
+                }
+                Rectangle {
+                    width: 5px; height: 5px; border-radius: 2.5px;
+                    border-width: 1.2px; border-color: #455750;
+                }
+            }
+        }
+        Rectangle {
+            height: 152px; border-radius: 12px;
+            border-width: 1px; border-color: #deebe5; background: #fff;
+            Rectangle {
+                y: 16px; width: 128px; height: 68px;
+                Rectangle {
+                    width: 112px; height: 62px; border-radius: 31px;
+                    background: #e8f6ef;
+                }
+                Rectangle {
+                    x: 17px; y: 15px; width: 57px; height: 35px;
+                    border-radius: 5px; border-width: 2px;
+                    border-color: #478e80; background: #f9fffc;
+                    Rectangle { width: 21px; height: 2px; border-radius: 1px; background: #9ad1c2; }
+                }
+                Rectangle {
+                    x: 12px; y: 52px; width: 68px; height: 2px;
+                    border-radius: 1px; background: #478e80;
+                }
+                Rectangle {
+                    x: 86px; y: 22px; width: 24px; height: 38px;
+                    border-radius: 5px; border-width: 2px;
+                    border-color: #478e80; background: #f9fffc;
+                    Rectangle {
+                        y: 29px; width: 7px; height: 2px; border-radius: 1px; background: #9ad1c2;
+                    }
+                }
+                Rectangle {
+                    x: 67px; y: 25px; width: 26px; height: 26px;
+                    border-radius: 13px; background: #c7eade;
+                    Rectangle { width: 12px; height: 2px; border-radius: 1px; background: #006b60; }
+                    Rectangle { width: 2px; height: 12px; border-radius: 1px; background: #006b60; }
+                }
+            }
+            FilledButton {
+                x: 16px; y: 96px; width: parent.width - 32px; height: 40px;
+                text: "配对新设备";
+                clicked => { root.open-pairing(); }
+            }
+        }
+        VerticalLayout {
+            spacing: 8px;
+            vertical-stretch: 1;
+            Text {
+                height: 20px; text: "已配对设备"; font-size: 14px;
+                font-weight: 600; color: #264239; vertical-alignment: center;
+            }
+            device-scroll := ScrollView {
+                vertical-stretch: 1;
+                Rectangle {
+                    y: 0; width: parent.width;
+                    height: root.visible-device-count == 0 ? 48px
+                        : root.visible-device-count * 49px - 1px + (root.rename-index >= 0 ? root.rename-editor-height : 0px);
+                    border-width: 1px; border-color: #deebe5; border-radius: 10px;
+                    background: white;
+                    if root.visible-device-count == 0 : Note {
+                        x: 16px; width: parent.width - 32px;
+                        text: root.removed-attention ? "还没有已配对的设备。" : root.reason;
+                        vertical-alignment: center;
+                    }
+                    if root.device-names.length > 0 : VerticalLayout {
+                        for device-name[index] in root.device-names : VerticalLayout {
+                            if !root.removed-attention || index > 0 : DeviceRow {
+                                name: device-name;
+                                attention: root.attention && index == 0;
+                                expanded: root.rename-index == index;
+                                editor-height: root.rename-editor-height;
+                                draft <=> root.rename-text;
+                                error: root.rename-error;
+                                toggle => { root.start-rename(index, device-name); }
+                                save => { root.rename-device(index, root.rename-text); }
+                                delete-local => {
+                                    root.rename-index = -1;
+                                    root.removed-attention = true;
+                                }
+                            }
+                            if (!root.removed-attention || index > 0) && index + 1 < root.device-names.length : HorizontalLayout {
+                                padding-left: 1px; padding-right: 1px;
+                                Separator {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component QrLoading inherits Rectangle {
+    in property <float> seconds;
+    pure function pulse(offset: float) -> float {
+        let phase = mod(root.seconds + 1.8 - offset, 1.8);
+        let strength = max(0.0, 1.0 - abs(phase - 0.42) / 0.42);
+        return strength * strength * (3 - 2 * strength);
+    }
+
+    for corner[index] in [{ x: 12px, y: 12px }, { x: 108px, y: 12px }, { x: 12px, y: 108px }] : marker := Rectangle {
+        property <float> glow: root.pulse(index * 0.34);
+        x: corner.x; y: corner.y; width: 40px; height: 40px;
+        border-radius: 7px; border-width: 2px; border-color: #deebe5;
+        Rectangle {
+            border-radius: 7px; border-width: 2px; border-color: #79bda9;
+            opacity: marker.glow;
+        }
+        Rectangle {
+            width: 16px; height: 16px; border-radius: 4px;
+            background: #e1efe9;
+            Rectangle {
+                background: #52a68e; border-radius: 4px;
+                opacity: marker.glow;
+            }
+        }
+    }
+
+    for tile in [
+        { x: 72px, y: 24px }, { x: 88px, y: 40px }, { x: 72px, y: 56px },
+        { x: 24px, y: 72px }, { x: 40px, y: 88px }, { x: 56px, y: 72px },
+        { x: 72px, y: 88px }, { x: 88px, y: 72px }, { x: 104px, y: 88px },
+        { x: 120px, y: 72px }, { x: 136px, y: 88px }, { x: 72px, y: 120px },
+        { x: 88px, y: 104px }, { x: 104px, y: 120px }, { x: 120px, y: 104px },
+        { x: 136px, y: 120px }, { x: 88px, y: 136px }, { x: 120px, y: 136px }
+    ] : Rectangle {
+        x: tile.x; y: tile.y; width: 8px; height: 8px; border-radius: 2px;
+        background: #eaf2ee;
+        Rectangle {
+            border-radius: 2px; background: #8ec6b4;
+            opacity: root.pulse((tile.x + tile.y) / 320px);
+        }
+    }
+}
+
+enum QrStage { code, loading, complete, problem }
+
+export component PairingWindow inherits Window {
+    title: "鹊信 · 配对";
+    width: 440px; height: 560px;
+    background: #fafcfb;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    in property <bool> adding-device: false;
+    in property <string> progress: root.qr-stage == QrStage.problem ? "配对失败，请重试。"
+        : root.qr-stage == QrStage.complete ? "配对完成" : "等待扫码";
+    in property <string> detail: "";
     in property <string> action: "";
-    in property <bool> show-qr: true;
-    in property <bool> error: false;
-    in property <bool> complete: false;
-    in property <string> completion-detail: "已可接收新短信，测试短信结果请以实际显示为准。";
+    in property <QrStage> qr-stage: QrStage.code;
+    in property <bool> motion-enabled: true;
+    in property <float> preview-seconds: 0.68;
+    in-out property <string> device-name: "我的设备";
+    in property <string> name-error: "";
     callback primary();
+    callback back();
+    callback name-edited(string);
     init => { Palette.color-scheme = ColorScheme.light; }
     VerticalLayout {
         padding: 24px; spacing: 16px;
-        Brand {}
-        Heading { text: root.heading; }
-        Note { text: root.detail; }
-        if root.show-qr : HorizontalLayout {
+        HorizontalLayout {
+            height: 32px;
+            spacing: 10px;
+            if root.adding-device : BackButton { clicked => { root.back(); } }
+            Heading {
+                text: root.adding-device ? "添加设备" : "配对";
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+        }
+        HorizontalLayout {
+            padding-top: 16px;
             Rectangle { horizontal-stretch: 1; }
-            Image { source: @image-url("assets/qr-placeholder.svg"); width: 160px; height: 160px; }
+            Rectangle {
+                width: 176px; height: 176px;
+                background: white; border-radius: 12px;
+                border-width: 1px; border-color: #dbe8e2;
+                if root.qr-stage == QrStage.loading || root.qr-stage == QrStage.complete : QrLoading {
+                    width: 160px; height: 160px;
+                    seconds: root.motion-enabled && self.opacity > 0
+                        ? mod(animation-tick(), 1.8s) / 1s : root.preview-seconds;
+                    opacity: root.qr-stage == QrStage.loading ? 1 : 0;
+                    animate opacity { duration: root.motion-enabled ? 180ms : 0ms; }
+                }
+                if root.qr-stage == QrStage.code : Image {
+                    source: @image-url("assets/qr-placeholder.svg"); width: 160px; height: 160px;
+                }
+                if root.qr-stage == QrStage.loading || root.qr-stage == QrStage.complete : Rectangle {
+                    width: 64px; height: 64px; border-radius: 32px; background: #e3f3ec;
+                    opacity: root.qr-stage == QrStage.complete ? 1 : 0;
+                    animate opacity { duration: root.motion-enabled ? 180ms : 0ms; }
+                    Path {
+                        width: 28px; height: 28px;
+                        commands: "M 4 14 L 11 21 L 24 8";
+                        stroke: #177761; stroke-width: 2.5px;
+                    }
+                }
+                if root.qr-stage == QrStage.problem : Rectangle {
+                    width: 72px; height: 72px; border-radius: 36px;
+                    background: #fbede7;
+                    Text {
+                        text: "!"; font-size: 32px; font-weight: 600; color: #903d34;
+                    }
+                }
+            }
             Rectangle { horizontal-stretch: 1; }
         }
-        if root.show-qr : Note { text: "演示二维码 · 不可扫描"; font-size: 10px; horizontal-alignment: center; }
-        Text { text: root.progress; font-size: 14px; color: root.error ? #903d34 : #21736b; wrap: word-wrap; }
-        if root.notice != "" : Banner { message: root.notice; error: root.error; }
-        if root.action != "" : Button { text: root.action; clicked => { root.primary(); } }
+        if root.progress != "" : Text {
+            text: root.progress; font-size: 14px;
+            color: root.qr-stage == QrStage.problem ? #903d34 : #21736b;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        if root.qr-stage == QrStage.code || root.detail != "" : Note {
+            text: root.qr-stage == QrStage.code ? "打开目标设备上的鹊信，扫描二维码并确认。" : root.detail;
+            horizontal-alignment: center;
+        }
+        if root.qr-stage == QrStage.problem : HorizontalLayout {
+            Rectangle { horizontal-stretch: 1; }
+            Button {
+                min-width: 120px; height: 36px;
+                text: root.qr-stage == QrStage.problem ? "刷新二维码" : root.action;
+                clicked => { root.primary(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
         Rectangle { vertical-stretch: 1; }
-        Separator {}
+    }
+    if root.qr-stage == QrStage.complete : Rectangle {
+        x: 68px; y: 320px; width: 304px; height: 137px;
+        Text { x: 0; y: 0; height: 20px; text: "设备名称"; color: #22312f; }
+        LineEdit {
+            x: 0; y: 24px; width: parent.width; height: 36px;
+            text <=> root.device-name;
+            placeholder-text: "输入设备名称";
+            accessible-label: "设备名称";
+            edited => { root.name-edited(self.text); }
+            accepted => { root.primary(); }
+        }
+        if root.name-error != "" : Rectangle {
+            x: 0; y: 24px; width: parent.width; height: 36px;
+            border-width: 1px; border-radius: 4px; border-color: #903d34;
+        }
         Note {
-            text: root.complete ? root.completion-detail : "关闭窗口不会取消配对，已有手机仍可继续接收。";
-            font-size: 12px;
+            x: 0; y: 65px; width: parent.width; height: 20px;
+            text: root.name-error; color: #903d34;
+        }
+        Button {
+            x: 192px; y: 101px; width: 112px; height: 36px;
+            text: "完成"; primary: true;
+            clicked => { root.primary(); }
+        }
+    }
+}
+
+component SettingCard inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <string> error;
+    in property <bool> inline-error: false;
+    background: #fff;
+    border-color: #deebe5;
+    border-width: 1px;
+    border-radius: 8px;
+    height: content.preferred-height;
+    content := VerticalLayout {
+        padding-left: 14px; padding-right: 14px;
+        HorizontalLayout {
+            height: 52px;
+            padding-top: 10px; padding-bottom: 10px;
+            spacing: 8px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                Text {
+                    text: root.label; font-weight: 600; color: #25322e;
+                    vertical-alignment: center;
+                }
+                if root.inline-error && root.error != "" : Note {
+                    height: 15px; text: root.error; color: #903d34; font-size: 12px;
+                }
+            }
+            @children
+        }
+        if !root.inline-error && (root.error != "" || root.hint != "") : VerticalLayout {
+            padding-bottom: 10px;
+            Note {
+                text: root.error != "" ? root.error : root.hint;
+                color: root.error != "" ? #903d34 : #65716e;
+                font-size: 12px;
+            }
         }
     }
 }
 
 export component SettingsWindow inherits Window {
     title: "鹊信 · 设置";
-    width: 440px; height: 600px;
-    background: #fafcfb;
+    width: 420px; height: 392px;
+    background: #f1f8f5;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
-    in property <string> notice: "";
     in property <string> shortcut: "未设置";
     in property <string> shortcut-error: "";
-    in property <string> duration-error: "";
+    in-out property <string> duration: "30";
+    in-out property <string> duration-draft: root.duration;
+    in-out property <string> duration-error: "";
+    in property <string> startup-error: "";
     in property <bool> startup: true;
     in property <bool> capturing: false;
     in property <int> language-index: 0;
+    callback back();
     init => { Palette.color-scheme = ColorScheme.light; }
     VerticalLayout {
-        padding: 24px; spacing: 15px;
-        Heading { text: "设置"; }
-        Note { text: "更改保存成功后生效。"; }
+        padding: 20px; spacing: 12px;
+        HorizontalLayout {
+            height: 32px;
+            spacing: 10px;
+            BackButton { clicked => { root.back(); } }
+            Heading { text: "设置"; vertical-alignment: center; horizontal-stretch: 1; }
+        }
         ScrollView {
             vertical-stretch: 1;
             VerticalLayout {
                 width: parent.width;
-                padding-right: 4px;
-                spacing: 15px;
-                if root.notice != "" : Banner { message: root.notice; error: true; }
-                Text { text: "界面语言"; font-weight: 600; }
-                ComboBox {
-                    model: ["跟随系统", "中文", "English"];
-                    current-index: root.language-index;
+                alignment: start;
+                spacing: 8px;
+                SettingCard {
+                    label: "界面语言";
+                    ComboBox {
+                        width: 128px;
+                        model: ["跟随系统", "中文", "English"];
+                        current-index: root.language-index;
+                        accessible-label: "界面语言";
+                    }
                 }
-                Note { text: "默认跟随系统语言，也可手动选择中文或英文。"; font-size: 12px; }
-                Separator {}
-                CheckBox { text: "开机启动"; checked: root.startup; }
-                Note { text: "启动后仅驻留系统托盘。"; font-size: 12px; }
-                Separator {}
-                Text { text: "复制最新验证码"; font-weight: 600; }
-                HorizontalLayout {
-                    LineEdit { text: root.capturing ? "请按下快捷键组合…" : root.shortcut; read-only: true; }
-                    Button { text: "修改"; }
-                    Button { text: "清除"; enabled: root.shortcut != "未设置"; }
+                SettingCard {
+                    label: "开机启动";
+                    error: root.startup-error;
+                    Switch { width: 40px; checked: root.startup; accessible-label: "开机启动"; }
                 }
-                if root.shortcut-error != "" : Note { text: root.shortcut-error; color: #903d34; }
-                if root.capturing : Note { text: "按 Enter 应用，Esc 取消；新快捷键注册成功前保留旧设置。"; }
-                Separator {}
-                Text { text: "弹窗显示时长"; font-weight: 600; }
-                HorizontalLayout {
-                    LineEdit { text: "30"; input-type: number; }
-                    Note { text: "秒"; vertical-stretch: 1; vertical-alignment: center; }
-                    Button { text: "应用"; }
+                SettingCard {
+                    label: "复制验证码快捷键";
+                    error: root.shortcut-error;
+                    hint: root.capturing ? "按下快捷键组合，Enter 应用，Esc 取消。" : "";
+                    LineEdit {
+                        width: 106px;
+                        text: root.capturing ? "等待输入…" : root.shortcut;
+                        read-only: true;
+                        accessible-label: "复制验证码快捷键";
+                    }
+                    Button { text: "修改"; width: 52px; }
+                    Button { text: "清除"; width: 52px; enabled: root.shortcut != "未设置"; }
                 }
-                if root.duration-error != "" : Note { text: root.duration-error; color: #903d34; }
-                Note { text: "新时长仅影响之后的弹窗，关闭弹窗不会清除最新验证码。"; font-size: 12px; }
+                SettingCard {
+                    label: "弹窗显示时长";
+                    error: root.duration-error;
+                    inline-error: true;
+                    LineEdit {
+                        width: 56px; text <=> root.duration-draft; input-type: number;
+                        accessible-label: "弹窗显示时长（秒）";
+                        changed has-focus => {
+                            if !self.has-focus {
+                                if self.text.to-float() > 0 {
+                                    root.duration = self.text;
+                                    root.duration-error = "";
+                                } else {
+                                    root.duration-error = "请输入大于零的整数秒数。";
+                                }
+                            }
+                        }
+                    }
+                    Note { text: "秒"; width: 14px; vertical-alignment: center; }
+                }
             }
         }
-        Separator {}
-        Note { text: "短信和验证码仅保存在内存中，不保留历史。\n版本：由正式构建提供"; font-size: 12px; }
-        Button { text: "返回"; }
     }
 }
 
@@ -228,109 +678,54 @@ export component SmsWindow inherits Window {
     default-font-size: 14px;
     in property <string> otp: "482913";
     in property <string> sms: "\u{3010}\u{9e4a}\u{4fe1}\u{3011}\u{8fd9}\u{662f}\u{4e00}\u{6761}\u{6d4b}\u{8bd5}\u{77ed}\u{4fe1}\u{ff0c}\u{9a8c}\u{8bc1}\u{7801} 482913\u{3002}\u{8bf7}\u{52ff}\u{7528}\u{4e8e}\u{771f}\u{5b9e}\u{767b}\u{5f55}\u{3002}";
-    in property <string> error: "";
-    in property <bool> closed: false;
-    callback copy();
+    in property <string> device-name: "我的设备";
+    callback copy(string);
     callback close-popup();
     init => { Palette.color-scheme = ColorScheme.light; }
     Rectangle {
         border-width: 1px; border-color: #dfe5e3;
+        TouchArea { clicked => { root.close-popup(); } }
         VerticalLayout {
             padding: 20px; spacing: 12px;
             HorizontalLayout {
-                Image { source: @image-url("assets/app-icon.png"); width: 22px; height: 22px; }
-                Text { text: "鹊信"; font-size: 13px; color: #25322e; }
+                height: 22px;
+                Rectangle {
+                    width: 22px;
+                    Image { source: @image-url("assets/app-icon.png"); width: 22px; height: 22px; }
+                }
+                Text { text: "鹊信"; font-size: 13px; color: #25322e; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
-                Button { text: "关闭"; clicked => { root.close-popup(); } }
             }
-            if root.closed : Note { text: "演示：弹窗已关闭，短信原文已释放。"; }
-            if !root.closed && root.otp != "" : ScrollView {
+            if root.otp != "" : Text {
                 height: 48px;
-                Text { x: 0; y: 0; text: root.otp; font-size: 32px; font-weight: 600; color: #25322e; }
+                text: root.otp; font-size: 32px; font-weight: 600; color: #25322e;
+                overflow: elide; vertical-alignment: center;
             }
-            if !root.closed && root.otp != "" : Button { text: "复制验证码"; clicked => { root.copy(); } }
-            if !root.closed && root.otp == "" : Text { text: "新短信"; font-size: 20px; color: #25322e; }
-            if !root.closed : ScrollView {
+            if root.otp != "" : Button {
+                height: 32px; text: "复制验证码";
+                clicked => {
+                    root.copy(root.otp);
+                    root.close-popup();
+                }
+            }
+            if root.otp == "" : Text {
+                height: 24px; text: "新短信"; font-size: 20px; color: #25322e;
+                vertical-alignment: center;
+            }
+            body := ScrollView {
                 vertical-stretch: 1;
-                Text { x: 0; y: 0; width: parent.width; text: root.sms; font-size: 14px; color: #25322e; wrap: word-wrap; }
+                original-text := Text {
+                    x: 0; y: 0; width: body.visible-width;
+                    text: root.sms; font-size: 14px; color: #25322e; wrap: word-wrap;
+                }
+                TouchArea {
+                    x: 0; y: 0; width: body.visible-width;
+                    height: max(body.visible-height, original-text.height);
+                    clicked => { root.close-popup(); }
+                }
             }
-            if !root.closed && root.error != "" : Note { text: root.error; color: #903d34; font-size: 12px; }
             Separator {}
-            Note { text: root.otp == "" ? "手机 · 7C2A／此短信无验证码" : "手机 · 7C2A／默认显示 30 秒"; font-size: 11px; }
+            Note { height: 15px; text: root.device-name; font-size: 11px; overflow: elide; }
         }
-    }
-}
-
-export component FeedbackWindow inherits Window {
-    title: "鹊信";
-    no-frame: true;
-    width: 340px; height: 144px;
-    background: #ffffff;
-    default-font-family: "Microsoft YaHei UI";
-    default-font-size: 14px;
-    in property <string> heading: "暂无可用验证码";
-    in property <string> detail: "当前没有可用验证码，剪贴板内容未改变。";
-    init => { Palette.color-scheme = ColorScheme.light; }
-    Rectangle {
-        border-width: 1px; border-color: #dfe5e3;
-        VerticalLayout {
-            padding: 16px; spacing: 10px;
-            HorizontalLayout {
-                Text { text: root.heading; font-weight: 600; color: #25322e; }
-                Rectangle { horizontal-stretch: 1; }
-                Button { text: "关闭"; }
-            }
-            Note { text: root.detail; }
-            Rectangle { vertical-stretch: 1; }
-        }
-    }
-}
-
-export component ConfirmationWindow inherits Window {
-    title: "鹊信 · 重新注册";
-    width: 440px; height: 280px;
-    background: #fafcfb;
-    default-font-family: "Microsoft YaHei UI";
-    default-font-size: 14px;
-    init => { Palette.color-scheme = ColorScheme.light; }
-    VerticalLayout {
-        padding: 24px; spacing: 16px;
-        Heading { text: "重新注册为新的接收端？"; }
-        Note { text: "无法恢复旧接收端身份。请在每台 Android 手机上移除旧配对，再扫描新二维码。"; }
-        Note { text: "重新注册失败时，会保留原有本地数据。"; }
-        Rectangle { vertical-stretch: 1; }
-        HorizontalLayout {
-            Rectangle { horizontal-stretch: 1; }
-            Button { text: "取消"; }
-            Button { text: "重新注册"; }
-        }
-    }
-}
-
-// Content sketch only: production tray menus are Win32 menus, not Slint buttons.
-export component TrayContentPreview inherits Window {
-    title: "托盘菜单 · 内容示意";
-    width: 360px; height: 392px;
-    background: #f7f9f8;
-    default-font-family: "Microsoft YaHei UI";
-    default-font-size: 14px;
-    in property <bool> ready: true;
-    in property <bool> has-code: true;
-    in property <bool> can-pair: true;
-    in property <bool> can-configure: true;
-    init => { Palette.color-scheme = ColorScheme.light; }
-    VerticalLayout {
-        padding: 20px; spacing: 10px;
-        Brand {}
-        Note { text: root.ready ? "鹊信 · 就绪" : "鹊信 · 未就绪"; }
-        Note { text: "系统托盘菜单 · 内容示意"; font-size: 10px; }
-        Separator {}
-        Button { text: "打开鹊信"; }
-        Button { text: "复制最新验证码"; enabled: root.has-code; }
-        Button { text: "配对手机"; enabled: root.can-pair; }
-        Button { text: "设置"; enabled: root.can-configure; }
-        Separator {}
-        Button { text: "退出"; }
-        Note { text: "实际菜单外观由 Windows 决定。\n图标保持原样，不闪烁、不加角标。"; font-size: 11px; }
     }
 }
