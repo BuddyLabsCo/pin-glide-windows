@@ -1,0 +1,200 @@
+import { Button, Palette } from "std-widgets.slint";
+
+component QrLoading inherits Rectangle {
+    in property <float> seconds;
+    pure function pulse(offset: float) -> float {
+        let phase = mod(root.seconds + 1.8 - offset, 1.8);
+        let strength = max(0.0, 1.0 - abs(phase - 0.42) / 0.42);
+        return strength * strength * (3 - 2 * strength);
+    }
+
+    for corner[index] in [{ x: 12px, y: 12px }, { x: 108px, y: 12px }, { x: 12px, y: 108px }]: marker := Rectangle {
+        property <float> glow: root.pulse(index * 0.34);
+        x: corner.x;
+        y: corner.y;
+        width: 40px;
+        height: 40px;
+        border-radius: 7px;
+        border-width: 2px;
+        border-color: #deebe5;
+        Rectangle {
+            border-radius: 7px;
+            border-width: 2px;
+            border-color: #79bda9;
+            opacity: marker.glow;
+        }
+
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+            background: #e1efe9;
+            Rectangle {
+                background: #52a68e;
+                border-radius: 4px;
+                opacity: marker.glow;
+            }
+        }
+    }
+
+    for tile in [
+        { x: 72px, y: 24px },
+        { x: 88px, y: 40px },
+        { x: 72px, y: 56px },
+        { x: 24px, y: 72px },
+        { x: 40px, y: 88px },
+        { x: 56px, y: 72px },
+        { x: 72px, y: 88px },
+        { x: 88px, y: 72px },
+        { x: 104px, y: 88px },
+        { x: 120px, y: 72px },
+        { x: 136px, y: 88px },
+        { x: 72px, y: 120px },
+        { x: 88px, y: 104px },
+        { x: 104px, y: 120px },
+        { x: 120px, y: 104px },
+        { x: 136px, y: 120px },
+        { x: 88px, y: 136px },
+        { x: 120px, y: 136px }
+    ]: Rectangle {
+        x: tile.x;
+        y: tile.y;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        background: #eaf2ee;
+        Rectangle {
+            border-radius: 2px;
+            background: #8ec6b4;
+            opacity: root.pulse((tile.x + tile.y) / 320px);
+        }
+    }
+}
+
+export enum PairingStage { preparing, waiting, confirming, create-failed, failed, expired, canceled }
+
+export component PairingWindow inherits Window {
+    in property <bool> chinese;
+    in property <bool> motion-enabled;
+    in property <PairingStage> stage;
+    in property <image> qr;
+    in property <string> remaining;
+    callback refresh();
+    private property <bool> loading: stage == PairingStage.preparing || stage == PairingStage.confirming;
+    private property <bool> waiting: stage == PairingStage.waiting;
+    private property <bool> problem: !loading && !waiting;
+    private property <string> progress: stage == PairingStage.preparing ? (chinese ? "正在准备二维码…" : "Preparing QR code…")
+        : stage == PairingStage.waiting ? (chinese ? "等待扫码，剩余 " : "Waiting for scan · ") + remaining
+        : stage == PairingStage.confirming ? (chinese ? "正在配对…" : "Pairing…")
+        : stage == PairingStage.create-failed ? (chinese ? "无法准备配对二维码。" : "Could not prepare the pairing QR code.")
+        : stage == PairingStage.expired ? (chinese ? "二维码已过期。" : "The QR code has expired.")
+        : stage == PairingStage.canceled ? (chinese ? "配对已取消。" : "Pairing was canceled.")
+        : (chinese ? "配对失败，请重试。" : "Pairing failed. Please try again.");
+
+    title: chinese ? "鹊信 · 配对" : "Pin Glide · Pairing";
+    icon: @image-url("assets/app-icon.png");
+    min-width: 440px;
+    max-width: 440px;
+    min-height: 560px;
+    max-height: 560px;
+    background: #fafcfb;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 16px;
+        HorizontalLayout {
+            height: 32px;
+            Text {
+                text: root.chinese ? "配对" : "Pairing";
+                font-size: 22px;
+                font-weight: 600;
+                color: #22312f;
+                wrap: word-wrap;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+        }
+
+        HorizontalLayout {
+            padding-top: 16px;
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            Rectangle {
+                width: 176px;
+                height: 176px;
+                background: white;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #dbe8e2;
+                if root.loading: QrLoading {
+                    width: 160px;
+                    height: 160px;
+                    seconds: root.motion-enabled ? mod(animation-tick(), 1.8s) / 1s : 0.68;
+                }
+                if root.waiting: Image {
+                    source: root.qr;
+                    image-rendering: pixelated;
+                    width: 160px;
+                    height: 160px;
+                }
+                if root.problem: Rectangle {
+                    width: 72px;
+                    height: 72px;
+                    border-radius: 36px;
+                    background: #fbede7;
+                    Text {
+                        text: "!";
+                        font-size: 32px;
+                        font-weight: 600;
+                        color: #903d34;
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        Text {
+            text: root.progress;
+            font-size: 14px;
+            color: root.problem ? #903d34 : #21736b;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+
+        if root.waiting: Text {
+            text: root.chinese ? "打开目标设备上的鹊信，扫描二维码并确认。"
+                : "Open Pin Glide on the other device, scan the QR code, and confirm.";
+            font-size: 13px;
+            color: #65716e;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        if root.problem: HorizontalLayout {
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            Button {
+                min-width: 120px;
+                height: 36px;
+                text: root.chinese ? "刷新二维码" : "Refresh QR code";
+                clicked => { root.refresh(); }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+    }
+}

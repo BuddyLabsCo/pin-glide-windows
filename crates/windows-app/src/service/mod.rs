@@ -5,13 +5,17 @@ use pin_glide_http::{
         Error,
         configuration::Configuration,
         pairing_api::{
-            PostPairingSessionsError, PostPairingSessionsSuccess, post_pairing_sessions,
+            PostPairingSessionsError, PostPairingSessionsSuccess, delete_pairing_session,
+            post_pairing_sessions,
         },
     },
     models::{CreateRequest, create_request, pairing_session_view},
 };
 use reqwest::{Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+mod pairing_events;
+pub use pairing_events::{PairingEventError, PairingEvents};
 
 #[cfg(test)]
 mod tests;
@@ -138,6 +142,15 @@ impl Service {
             )
             .map_err(|_| CreateError::InvalidResponse)?,
         })
+    }
+
+    pub async fn cancel_receiver(&self, session: &NewReceiverSession) -> bool {
+        let mut config = self.config.clone();
+        config.bearer_access_token = Some(session.pairing_token.clone());
+        matches!(
+            delete_pairing_session(&config, &session.session_id).await,
+            Ok(response) if response.status == StatusCode::NO_CONTENT
+        )
     }
 }
 

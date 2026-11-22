@@ -1,9 +1,11 @@
 use std::cell::RefCell;
 
 use slint::winit_030::WinitWindowAccessor;
-use slint::{CloseRequestResponse, ComponentHandle, PlatformError};
+use slint::{CloseRequestResponse, ComponentHandle, PlatformError, Window};
 
 use crate::{WelcomeWindow, platform};
+
+mod pairing;
 
 thread_local! {
     static WELCOME: RefCell<Option<WelcomeWindow>> = const { RefCell::new(None) };
@@ -16,10 +18,12 @@ pub fn open() {
 }
 
 pub fn close() {
+    pairing::shutdown();
     WELCOME.with_borrow_mut(|welcome| *welcome = None);
 }
 
 pub fn update_motion() {
+    pairing::update_motion();
     WELCOME.with_borrow(|welcome| {
         if let Some(window) = welcome {
             let enabled = platform::animations_enabled();
@@ -32,6 +36,9 @@ pub fn update_motion() {
 }
 
 fn show() -> Result<(), PlatformError> {
+    if pairing::reopen()? {
+        return Ok(());
+    }
     let window = WELCOME.with_borrow_mut(|welcome| {
         if let Some(window) = welcome {
             return Ok(window.clone_strong());
@@ -41,6 +48,17 @@ fn show() -> Result<(), PlatformError> {
         window
             .window()
             .on_close_requested(|| CloseRequestResponse::HideWindow);
+        let welcome_window = window.as_weak();
+        window.on_start_pairing(move || {
+            if let Some(window) = welcome_window.upgrade() {
+                match pairing::open(window.get_chinese()) {
+                    Ok(()) => {
+                        let _ = window.hide();
+                    }
+                    Err(error) => eprintln!("Could not open pairing: {error}"),
+                }
+            }
+        });
         *welcome = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
@@ -49,11 +67,15 @@ fn show() -> Result<(), PlatformError> {
         window.invoke_restart_motion();
         window.show()?;
     }
-    window.window().with_winit_window(|native| {
+    focus(window.window());
+    Ok(())
+}
+
+fn focus(window: &Window) {
+    window.with_winit_window(|native| {
         if native.is_minimized() == Some(true) {
             native.set_minimized(false);
         }
         native.focus_window();
     });
-    Ok(())
 }

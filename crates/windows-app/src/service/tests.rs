@@ -140,6 +140,63 @@ async fn creates_a_receiver_anonymously_and_decodes_the_session() {
 }
 
 #[tokio::test]
+async fn cancels_the_receiver_session_using_its_restricted_token() {
+    let (service, creation) = respond(
+        "201 Created",
+        "application/json",
+        json!({
+            "session": {
+                "sessionId": "session-1",
+                "receiverId": "receiver-1",
+                "mode": "new_receiver",
+                "state": "awaiting_authorization",
+                "expiresAt": "2026-01-01T00:05:00Z",
+                "senderConfirmed": false,
+                "receiverConfirmed": false
+            },
+            "pairingToken": "restricted-test-token",
+            "pairingTokenExpiresAt": "2026-01-01T00:05:00Z"
+        }),
+    );
+    let session = service.new_receiver().await.unwrap();
+    creation.join().unwrap();
+    let (listener, origin) = listen("localhost");
+    let service = local_service(&listener, &origin, true);
+    let server = thread::spawn(move || {
+        let stream = accept_loopback(&listener);
+        let mut stream = BufReader::new(acceptor().accept(stream).unwrap());
+        let mut request = String::new();
+        stream.read_line(&mut request).unwrap();
+        assert_eq!(
+            request,
+            "DELETE /v1/pairing-sessions/session-1 HTTP/1.1\r\n"
+        );
+        let mut authorization = None;
+        loop {
+            let mut header = String::new();
+            assert_ne!(stream.read_line(&mut header).unwrap(), 0);
+            if header == "\r\n" {
+                break;
+            }
+            let (name, value) = header.split_once(':').unwrap();
+            if name.eq_ignore_ascii_case("authorization") {
+                authorization = Some(value.trim().to_owned());
+            }
+        }
+        assert_eq!(
+            authorization.as_deref(),
+            Some("Bearer restricted-test-token")
+        );
+        stream
+            .get_mut()
+            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    assert!(service.cancel_receiver(&session).await);
+    server.join().unwrap();
+}
+
+#[tokio::test]
 async fn decodes_a_business_problem_with_its_http_status_and_validation_items() {
     let (service, server) = respond(
         "422 Unprocessable Entity",
