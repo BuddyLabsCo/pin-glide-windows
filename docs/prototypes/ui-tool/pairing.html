@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鹊信／首次配对</title>
+<link rel="stylesheet" href="assets/preview.css">
+</head>
+<body>
+<nav class="feature-links" aria-label="预览页面">
+<a href="welcome.html">首次使用</a>
+<a href="main.html">配对后使用</a>
+<a href="add-phone.html">添加设备</a>
+<a href="settings.html">设置</a>
+<a href="messages.html">短信与复制</a>
+<a href="tray.html">托盘右键菜单</a>
+</nav>
+<main class="stage">
+<p class="steps"><a href="?state=pair-waiting">扫码</a> → <a href="?state=pair-key-check">正在配对</a> → <a href="?state=pair-issued">首次连接</a> → <a href="?state=pair-done">配对完成</a> → <a href="main.html">主窗口</a></p>
+<label for="state">预览状态</label>
+<select id="state" data-initial="pair-waiting" data-prepare="pair-preparing"></select>
+<label class="name-scenario" data-state="pair-done" hidden>输入情景<select id="name-scenario">
+<option value="normal">正常填写</option>
+<option value="empty">留空</option>
+<option value="duplicate">设备重名</option>
+<option value="too-long">超过 40 个字符</option>
+</select></label>
+<div id="render"></div>
+</main>
+<script src="data/pairing.js"></script>
+<script src="assets/device-names.js"></script>
+<script src="assets/gallery.js"></script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鹊信／设置</title>
+<link rel="stylesheet" href="assets/preview.css">
+<link rel="stylesheet" href="assets/settings.css">
+</head>
+<body>
+<nav class="feature-links" aria-label="预览页面">
+<a href="welcome.html">首次使用</a>
+<a href="main.html">配对后使用</a>
+<a href="add-phone.html">添加设备</a>
+<a href="settings.html" aria-current="page">设置</a>
+<a href="messages.html">短信与复制</a>
+<a href="tray.html">托盘右键菜单</a>
+</nav>
+<main class="stage settings-stage">
+<label for="state">预览状态</label>
+<select id="state"></select>
+<div id="render"></div>
+<template id="duration-setting">
+<div class="duration-setting">
+<div class="duration-label">
+<label for="popup-duration">弹窗显示时长</label>
+<span id="duration-error" aria-live="polite"></span>
+</div>
+<input id="popup-duration" type="text" inputmode="numeric" autocomplete="off" aria-label="弹窗显示时长（秒）" aria-describedby="duration-error">
+<span class="duration-unit" aria-hidden="true">秒</span>
+</div>
+</template>
+</main>
+<script src="data/settings.js"></script>
+<script src="assets/settings.js"></script>
+<script src="assets/gallery.js"></script>
+</body>
+</html>

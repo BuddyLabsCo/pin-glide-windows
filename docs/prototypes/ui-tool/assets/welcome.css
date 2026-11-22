@@ -1,0 +1,12 @@
+.welcome-window { position: relative; }
+.welcome-start {
+  position: absolute;
+  top: 478px;
+  left: 28px;
+  width: 124px;
+  height: 36px;
+  border-radius: 4px;
+}
+.welcome-start:hover { background: #ffffff12; }
+.welcome-start:active { background: #00000018; }
+.welcome-start:focus-visible { outline: 2px solid #19685b; outline-offset: 2px; }

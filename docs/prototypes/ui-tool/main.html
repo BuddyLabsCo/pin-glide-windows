@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鹊信／主窗口</title>
+<link rel="stylesheet" href="assets/preview.css">
+</head>
+<body>
+<nav class="feature-links" aria-label="预览页面">
+<a href="welcome.html">首次使用</a>
+<a href="main.html" aria-current="page">配对后使用</a>
+<a href="add-phone.html">添加设备</a>
+<a href="settings.html">设置</a>
+<a href="messages.html">短信与复制</a>
+<a href="tray.html">托盘右键菜单</a>
+</nav>
+<main class="stage">
+<label for="state">预览状态</label>
+<select id="state"></select>
+<div id="render"></div>
+<template id="rename-device">
+<form class="rename-form" id="device-name-editor" aria-label="编辑设备名称">
+<label>设备名称<input type="text" aria-describedby="rename-error" autocomplete="off"></label>
+<p id="rename-error" aria-live="polite"></p>
+<div class="rename-actions">
+<button type="button" value="cancel">取消</button>
+<button value="save">保存</button>
+</div>
+</form>
+</template>
+<template id="delete-device">
+<div class="delete-device rename-actions" id="device-delete-actions">
+<button type="button">删除</button>
+</div>
+</template>
+</main>
+<script src="data/main.js"></script>
+<script src="assets/device-names.js"></script>
+<script src="assets/gallery.js"></script>
+</body>
+</html>
