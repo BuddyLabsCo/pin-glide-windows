@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use super::{
-    PairingOperation, PairingOutcome, PairingProgress, ProgressUpdates, Service, drive, oneshot,
-    watch,
+    Claim, CompletionError, PairingOperation, PairingOutcome, PairingProgress, ProgressUpdates,
+    Service, StatusCode, drive, oneshot, wait_for_confirmation, watch,
 };
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
 
@@ -370,4 +370,37 @@ async fn live_close_publishes_failure_while_cancellation_response_is_pending() {
         PairingProgress::Finished(PairingOutcome::Failed)
     ));
     assert!(matches!(replaced_before_delete, Ok(Ok(()))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn waits_for_cancellation_after_handling_a_closed_session_response() {
+    let claim = Claim {
+        pairing_id: "pairing-1".into(),
+        sender_id: "sender-1".into(),
+    };
+    let (send_milestone, milestone) = oneshot::channel();
+    let report = async {
+        Err(CompletionError::Rejected {
+            status: StatusCode::GONE,
+            code: Some("pairing_session_closed".into()),
+        })
+    };
+    let result = wait_for_confirmation(report, async { milestone.await.unwrap() }, &claim);
+    let mut result = std::pin::pin!(result);
+
+    assert!(
+        result
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+            .is_pending()
+    );
+    tokio::time::advance(Duration::from_secs(3)).await;
+    assert!(
+        result
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+            .is_pending()
+    );
+    send_milestone.send(Some(PairingOutcome::Canceled)).unwrap();
+    assert_eq!(result.await, PairingOutcome::Canceled);
 }

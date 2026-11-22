@@ -76,7 +76,6 @@ export enum PairingStage {
     waiting,
     confirming,
     credential-ready,
-    connecting,
     failed,
     create-failed,
     expired,
@@ -91,14 +90,13 @@ export component PairingWindow inherits Window {
     in property <string> remaining;
     callback refresh();
     private property <bool> loading: stage == PairingStage.preparing || stage == PairingStage.confirming
-        || stage == PairingStage.credential-ready || stage == PairingStage.connecting;
+        || stage == PairingStage.credential-ready;
     private property <bool> waiting: stage == PairingStage.waiting;
     private property <bool> problem: !loading && !waiting;
     private property <string> progress: stage == PairingStage.preparing ? (chinese ? "正在准备二维码…" : "Preparing QR code…")
         : stage == PairingStage.waiting ? (chinese ? "等待扫码，剩余 " : "Waiting for scan · ") + remaining
         : stage == PairingStage.confirming ? (chinese ? "正在配对…" : "Pairing…")
         : stage == PairingStage.credential-ready ? (chinese ? "正在准备接收端…" : "Preparing the Receiver…")
-        : stage == PairingStage.connecting ? (chinese ? "正在连接接收服务…" : "Connecting to the receiving service…")
         : stage == PairingStage.create-failed ? (chinese ? "无法准备配对二维码。" : "Could not prepare the pairing QR code.")
         : stage == PairingStage.expired ? (chinese ? "二维码已过期。" : "The QR code has expired.")
         : stage == PairingStage.canceled ? (chinese ? "配对已取消。" : "Pairing was canceled.")

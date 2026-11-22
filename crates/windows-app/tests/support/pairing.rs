@@ -188,6 +188,10 @@ pub fn credential_ready(socket: &mut Socket, stream: &mut Connection, mut claime
     claimed["senderConfirmed"] = json!(true);
     claimed["state"] = json!("credential_ready");
     send_state(socket, claimed);
+    assert_peer_left(socket);
+}
+
+pub fn assert_peer_left(socket: &mut Socket) {
     use tokio_tungstenite::tungstenite::{Error, error::ProtocolError};
     assert!(matches!(
         socket.read(),

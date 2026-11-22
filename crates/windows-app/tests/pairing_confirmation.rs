@@ -9,6 +9,7 @@ use std::{fs, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 
 use serde_json::{Value, json};
 use tempfile::tempdir;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 use windows_app::service::{PairingOperation, PairingOutcome, PairingProgress, SessionState};
 
 use fixture::*;
@@ -19,6 +20,7 @@ enum Scenario {
     WriteRejected,
     ClosedBeforeCancellation,
     ClosedWithoutTerminalState,
+    UnexpectedCloseDuringReport,
     MissingHttpSenderConfirmation,
     MissingWssSenderConfirmation,
 }
@@ -38,8 +40,19 @@ fn post_claim_cancellation_overrides_an_earlier_http_410() {
 }
 
 #[test]
-fn reports_failure_when_the_service_never_publishes_a_terminal_state() {
-    exercise(Scenario::ClosedWithoutTerminalState, PairingOutcome::Failed);
+fn expires_at_the_session_deadline_without_a_terminal_state() {
+    exercise(
+        Scenario::ClosedWithoutTerminalState,
+        PairingOutcome::Expired,
+    );
+}
+
+#[test]
+fn fails_when_wss_closes_without_a_terminal_state_during_completion() {
+    exercise(
+        Scenario::UnexpectedCloseDuringReport,
+        PairingOutcome::Failed,
+    );
 }
 
 #[test]
@@ -93,7 +106,12 @@ fn confirmation_service(
     let (listener, service) = listen();
     let server = std::thread::spawn(move || {
         let acceptor = acceptor();
-        let waiting = snapshot("session-1", "awaiting_authorization", 30);
+        let lifetime = if matches!(scenario, Scenario::ClosedWithoutTerminalState) {
+            4
+        } else {
+            30
+        };
+        let waiting = snapshot("session-1", "awaiting_authorization", lifetime);
         accept_creation(accept(&acceptor, &listener), &waiting);
         let mut socket = accept_events(accept(&acceptor, &listener), "session-1");
         send_state(&mut socket, &waiting);
@@ -167,8 +185,17 @@ fn finish_scenario(
                 std::thread::sleep(Duration::from_millis(250));
                 cancel(&mut socket, claimed);
             } else {
-                assert_delete(accept(acceptor, listener), "session-1");
+                assert_peer_left(&mut socket);
             }
+        }
+        Scenario::UnexpectedCloseDuringReport => {
+            socket
+                .close(Some(CloseFrame {
+                    code: CloseCode::Policy,
+                    reason: "pairing_session_closed".into(),
+                }))
+                .unwrap();
+            assert_delete(accept(acceptor, listener), "session-1");
         }
         Scenario::MissingHttpSenderConfirmation => {
             claimed["state"] = json!("credential_ready");

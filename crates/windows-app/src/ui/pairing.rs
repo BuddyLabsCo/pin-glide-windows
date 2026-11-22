@@ -149,10 +149,7 @@ impl View {
                 PairingOutcome::Failed => PairingStage::Failed,
                 PairingOutcome::Expired => PairingStage::Expired,
                 PairingOutcome::Canceled => PairingStage::Canceled,
-                PairingOutcome::KeyConfirmed(crate::service::SessionState::CredentialReady) => {
-                    PairingStage::CredentialReady
-                }
-                PairingOutcome::KeyConfirmed(_) => PairingStage::Connecting,
+                PairingOutcome::KeyConfirmed(_) => PairingStage::CredentialReady,
             },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {

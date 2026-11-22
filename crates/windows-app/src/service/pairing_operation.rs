@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 use super::{
     CompletionError, NewReceiverSession, Service, SessionState,
     pairing_events::{PairingEvent, PairingEventError, PairingEvents},
-    pairing_snapshot::Claim,
+    pairing_snapshot::{Claim, Snapshot},
 };
 use crate::storage::{PairingReference, RegistrationStore};
 
@@ -237,7 +237,12 @@ async fn watch_session(
     if let Err(outcome) = verify_and_save(&mut events, session, &claim, material, store).await {
         return outcome;
     }
-    wait_for_confirmation(service, session, &claim, &mut events).await
+    wait_for_confirmation(
+        service.confirm_receiver(session),
+        confirmation_milestone(&mut events, &claim),
+        &claim,
+    )
+    .await
 }
 
 async fn wait_for_claim(
@@ -329,16 +334,15 @@ async fn verify_and_save(
 }
 
 async fn wait_for_confirmation(
-    service: &Service,
-    session: &NewReceiverSession,
+    report: impl Future<Output = Result<Snapshot, CompletionError>>,
+    milestone: impl Future<Output = Option<PairingOutcome>>,
     claim: &Claim,
-    events: &mut PairingEvents,
 ) -> PairingOutcome {
-    let mut milestone = std::pin::pin!(confirmation_milestone(events, claim));
+    let mut milestone = std::pin::pin!(milestone);
     let response = tokio::select! {
         biased;
         state = &mut milestone => return state.unwrap_or(PairingOutcome::Failed),
-        response = service.confirm_receiver(session) => response,
+        response = report => response,
     };
     let fallback = match response {
         Ok(snapshot) if snapshot.matches_claim(claim) && snapshot.receiver_confirmed => {
@@ -346,6 +350,12 @@ async fn wait_for_confirmation(
                 return milestone.await.unwrap_or(PairingOutcome::Failed);
             }
             return outcome(snapshot.state, true);
+        }
+        Err(CompletionError::Rejected {
+            status: StatusCode::GONE,
+            code,
+        }) if code.as_deref() == Some("pairing_session_closed") => {
+            return milestone.await.unwrap_or(PairingOutcome::Failed);
         }
         Err(CompletionError::Rejected {
             status: StatusCode::GONE,
