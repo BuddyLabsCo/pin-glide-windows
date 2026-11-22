@@ -3,3 +3,4 @@
 *.toml text eol=lf
 *.mjs text eol=lf
 Cargo.lock text eol=lf
+/generated/** text eol=lf

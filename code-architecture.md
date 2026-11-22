@@ -86,15 +86,18 @@ within 500 lines.
 | `generated/wss-models/` | `asyncapi.yaml`, AsyncAPI Parser `3.6.6`, named payloads passed to Modelina `5.10.1` |
 
 Use both [Service `v1.0.2` assets][service] from commit
-`fb134954164acfc360816c36beeaec04863958ab`. Keep the tag, commit, asset
-hashes, and generator versions in `scripts/contracts/service.lock.json` when
-generation lands. Regenerate in a clean directory and check for drift in CI.
-Edit generator inputs and keep generated crates and the workspace lockfile
-in Git.
+`fb134954164acfc360816c36beeaec04863958ab`. The tag, commit, asset hashes,
+and generator versions live in `scripts/contracts/service.lock.json`.
+With Node, Java, and authenticated GitHub CLI available, run
+`npm ci --prefix scripts/contracts --ignore-scripts` and
+`node scripts/contracts/generate.mjs --check` to verify the checked-in
+crates against a clean regeneration. Use `--write` to update the crates and
+commit them with the workspace lockfile. CI runs the same drift check.
 
 The app owns WSS transport and checks message type and version. Preserve
-optional wire fields and the required empty-OTP value. Check the chosen TLS
-features and certificate verification on Windows when the adapters land.
+optional wire fields and the required empty-OTP value. The Service adapter
+creates `new_receiver` sessions using the installation's HTTPS origin and
+native certificate and hostname verification.
 
 ## 6. Tests
 
@@ -113,6 +116,7 @@ interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
 | `node scripts/quality/check.mjs core` | Portable core lint and tests |
 | `node scripts/quality/check.mjs build` | Windows x64 MSVC check and release link |
 | `node scripts/quality/check.mjs advisories` | RustSec advisories |
+| `node scripts/quality/check.mjs service` | Windows Service adapter, WSS wire models, and local HTTPS certificate and hostname verification |
 | `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
 | `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
 | `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop with Pin Glide stopped |
