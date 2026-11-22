@@ -83,7 +83,7 @@ The logo is the original Pin Glide launcher asset, copied byte for byte from
 App controls use Fluent standard widgets except for the welcome action.
 That action uses a compact, left-aligned Slint control with the app's accent
 color, a 4 px radius and visible hover, press and focus states. The welcome
-illustration is drawn in `welcome.slint`. Its timeline drives both the live
+illustration is shared from `crates/windows-app/ui/welcome_art.slint`. Its timeline drives both the live
 Slint preview and the generated animation. The production window host should
 set `motion-enabled` to match Windows Animation effects. The prototype uses
 one light appearance and standard window chrome.
