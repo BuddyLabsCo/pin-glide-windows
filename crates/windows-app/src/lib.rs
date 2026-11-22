@@ -11,6 +11,6 @@ mod platform;
 #[cfg(windows)]
 pub mod ui;
 #[cfg(windows)]
-pub use application::launch;
+pub use application::{launch, select_backend};
 #[cfg(all(test, windows))]
 mod startup_tests;

@@ -6,8 +6,10 @@ use slint::{CloseRequestResponse, ComponentHandle, PlatformError, VecModel, Wind
 use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
 
 mod pairing;
+mod sms;
 
 pub use pairing::open_pairing;
+pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
     pairing::resume(platform::chinese())
@@ -43,6 +45,7 @@ pub fn open_settings() {
 
 pub fn close() {
     pairing::shutdown();
+    sms::close_all();
     WELCOME.with_borrow_mut(|welcome| *welcome = None);
     MAIN.with_borrow_mut(|main| *main = None);
 }

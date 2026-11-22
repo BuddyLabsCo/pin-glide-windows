@@ -202,6 +202,8 @@ fn progress_channel() -> (ProgressUpdates, watch::Receiver<PairingProgress>) {
         ProgressUpdates {
             snapshot,
             notify: || {},
+            inbox: Default::default(),
+            notify_sms: drop,
         },
         progress,
     )
@@ -221,6 +223,7 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
         let operation = PairingOperation {
             progress,
             worker: None,
+            inbox: Default::default(),
             #[cfg(windows)]
             store: None,
         };
@@ -306,6 +309,7 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
     let operation = PairingOperation {
         progress,
         worker: None,
+        inbox: Default::default(),
         #[cfg(windows)]
         store: None,
     };

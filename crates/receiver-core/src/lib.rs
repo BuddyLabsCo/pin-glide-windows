@@ -2,4 +2,5 @@
 
 pub const GREETING: &str = "Hello, world!";
 
+pub mod delivery;
 pub mod pairing;

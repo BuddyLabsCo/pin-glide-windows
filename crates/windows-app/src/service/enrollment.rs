@@ -6,7 +6,7 @@ use pin_glide_http::{
 };
 use receiver_core::pairing::{EnrollmentAction, EnrollmentEvent};
 use reqwest::StatusCode;
-use tokio::time::timeout;
+use tokio::{sync::oneshot, time::timeout};
 use zeroize::Zeroizing;
 
 use super::{
@@ -15,7 +15,32 @@ use super::{
 };
 use crate::storage::{Enrollment, RegistrationStore};
 
-pub(super) async fn enroll(
+pub(super) async fn finish_enrollment(
+    service: &Service,
+    store: &RegistrationStore,
+    updates: &ProgressUpdates,
+    mut stopping: oneshot::Receiver<()>,
+    session: Option<&NewReceiverSession>,
+) {
+    let outcome = tokio::select! {
+        biased;
+        _ = &mut stopping => return,
+        outcome = enroll(service, store, updates, session) => outcome,
+    };
+    match outcome {
+        Ok((connection, pairing_id)) => {
+            updates.publish(PairingProgress::Completed { pairing_id });
+            tokio::select! {
+                biased;
+                _ = stopping => {}
+                () = connection.run(store, &updates.inbox, updates.notify_sms) => {}
+            }
+        }
+        Err(outcome) => updates.publish(PairingProgress::Finished(outcome)),
+    }
+}
+
+async fn enroll(
     service: &Service,
     store: &RegistrationStore,
     updates: &ProgressUpdates,
@@ -76,7 +101,7 @@ pub(super) async fn enroll(
     let token = pending.token().map_err(|_| PairingOutcome::Failed)?;
     let result = timeout(
         Duration::from_secs(15),
-        DeliveryConnection::open(service, &token),
+        DeliveryConnection::open(service, &token, &pending.receiver_id),
     )
     .await;
     let connection = match result {

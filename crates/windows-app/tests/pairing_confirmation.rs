@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+#[path = "support/delivery.rs"]
+mod delivery;
 #[path = "support/dpapi.rs"]
 mod dpapi;
 #[path = "support/pairing.rs"]
@@ -150,7 +152,25 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
         assert_rejection_preserves_registration(&path, &active);
     }
     server.join().unwrap();
+    assert_latest_delivery(&operation, scenario, &path);
     operation.shutdown();
+}
+
+fn assert_latest_delivery(
+    operation: &PairingOperation,
+    scenario: Scenario,
+    path: &std::path::Path,
+) {
+    if matches!(scenario, Scenario::Ready | Scenario::ResumeUncertain) {
+        assert_eq!(
+            operation.latest_otp().as_deref().map(String::as_str),
+            Some("A-482913")
+        );
+        assert_eq!(
+            fs::read(path.with_file_name("delivery-rejections.log")).unwrap(),
+            b"InvalidEncoding\nInvalidEnvelope\nAuthenticationFailed\nInvalidPlaintext\n",
+        );
+    }
 }
 
 fn completed_pairing(pairing_id: &str) -> PairingOutcome {
@@ -400,6 +420,8 @@ fn exercise_enrollment(
     delivery.send(Message::Ping(vec![13].into())).unwrap();
     assert_eq!(delivery.read().unwrap(), Message::Pong(vec![13].into()));
     let stored = read_registration(path);
+    let key = dpapi::unprotect(&stored["active_pairings"]["pairing-1"]["protected_key"]);
+    delivery::assert_delivery_receipts(&mut delivery, &key);
     assert!(stored["enrollment"].is_null());
     assert!(stored["provisional_pairing"].is_null());
     assert_eq!(stored["receiver_id"], "receiver-1");
