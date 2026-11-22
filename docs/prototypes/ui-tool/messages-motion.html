@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鹊信／弹窗动效演示</title>
+<link rel="stylesheet" href="assets/preview.css">
+<link rel="stylesheet" href="assets/messages.css">
+</head>
+<body>
+<nav class="feature-links" aria-label="预览页面">
+<a href="welcome.html">首次使用</a>
+<a href="main.html">配对后使用</a>
+<a href="add-phone.html">添加设备</a>
+<a href="settings.html">设置</a>
+<a href="messages.html">短信与复制</a>
+<a href="tray.html">托盘右键菜单</a>
+</nav>
+<main class="stage">
+<div class="sms-motion-controls">
+<button type="button" id="play-new-message">播放新短信弹出</button>
+<button type="button" id="play-timeout">播放底部超时</button>
+<button type="button" id="play-middle">播放关闭中间</button>
+<button type="button" id="play-arrival">模拟新短信 · 空间不足</button>
+<button type="button" id="reset-stack">重置</button>
+</div>
+<p class="sms-motion-status" id="motion-status" role="status"></p>
+<div class="sms-work-area" aria-label="模拟屏幕工作区">
+<div class="sms-stack" id="sms-stack"></div>
+</div>
+</main>
+<script src="data/messages.js"></script>
+<script src="assets/device-names.js"></script>
+<script src="assets/messages.js"></script>
+<script src="assets/messages-motion.js"></script>
+</body>
+</html>

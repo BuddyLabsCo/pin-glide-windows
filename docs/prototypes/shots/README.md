@@ -3,6 +3,9 @@
 Open the [interactive prototype](../ui-tool/index.html) to reproduce the views below.
 Each PNG shows one view or interaction state. The screenshots include the
 application window and omit the browser's preview controls.
+Open the [welcome](../ui-tool/welcome.html), [first pairing](../ui-tool/pairing.html),
+[add-device flow](../ui-tool/add-phone.html), and [SMS motion demo](../ui-tool/messages-motion.html)
+in a browser to review their animations and transitions.
 
 | Area | PNGs | Coverage |
 | --- | ---: | --- |
@@ -11,7 +14,7 @@ application window and omit the browser's preview controls.
 | [Add a device](add-phone/) | 16 | QR and pairing states, including completion with the same name validation cases and the updated device list after saving |
 | [Main window](main/) | 37 | All device list states, expanded rows, name validation, save, scrolling, and deletion of a device that needs to pair again |
 | [Settings](settings/) | 12 | All gallery settings states, including shortcut and startup errors. Also shows empty, negative, fractional, and non-numeric popup durations after the field loses focus, plus a saved duration. |
-| [SMS popups](messages/) | 5 | With and without a code, long code with ellipsis, and long message at the start and end of its scroll area |
+| [SMS popups](messages/) | 5 | Compact short messages with and without a code, long code with ellipsis, and a full-height long message at the start and end of its scroll area |
 | [Tray menu](tray/) | 1 | Open Pin Glide, Settings, and Exit |
 
 Pairing filenames distinguish the selected input (`-input-`) from the result of

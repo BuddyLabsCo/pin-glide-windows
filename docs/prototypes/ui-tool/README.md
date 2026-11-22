@@ -1,7 +1,7 @@
 # Pin Glide Windows UI prototype
 
-The approved design uses compact windows with fixed logical sizes, a single
-light appearance, and the original Pin Glide logo. The product supports
+The approved design uses compact windows, a single light appearance, and the
+original Pin Glide logo. The SMS popup height follows the message. The product supports
 Chinese and English and follows the system language by default. The browser
 prototype uses Chinese.
 
@@ -20,6 +20,7 @@ screens that appear after interacting with the prototype.
 | [Add a device](add-phone.html) | Add a device: QR, expiry and completion |
 | [settings.html](settings.html) | Language, startup, shortcut, popup duration, field feedback |
 | [messages.html](messages.html) | SMS popups with or without a code, scrolling, and copying |
+| [messages-motion.html](messages-motion.html) | SMS arrival, bottom timeout, closing a middle popup, and making room for a new popup |
 | [tray.html](tray.html) | Native tray menu with Open Pin Glide, Settings, and Exit |
 
 Use the state selector and the links between workflow screens. A state is
@@ -31,6 +32,11 @@ the QR after a short delay. The real flow advances when session preparation
 completes. The completion screens accept a device name and show the saved
 name in the device list and SMS source. The browser preview keeps these names
 for the current tab session.
+
+Use the interactive prototype to review animation. Open Welcome for the
+sample SMS animation, follow first pairing and Add a device for QR preparation
+and completion, and use the [SMS motion demo](messages-motion.html) for popup
+arrival, exit, and movement within the stack. Screenshots capture single frames.
 
 The [UI inventory](ui-inventory.md) describes the approved screens and interactions.
 
@@ -46,7 +52,7 @@ python docs/prototypes/ui-tool/build-preview.py
 ```
 
 The command compiles the source with `--style fluent`, renders every state and
-asserts each output matches the prototype's fixed logical dimensions. It writes
+checks the logical dimensions, including the SMS popup's height cap. It writes
 `shots/` and a separate state-data file for each feature under `data/`.
 The HTML files are edited directly.
 

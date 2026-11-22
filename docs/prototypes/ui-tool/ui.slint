@@ -1,5 +1,5 @@
 // Throwaway B-direction surfaces. No real connection, clipboard, tray, or keys.
-// Fixed logical content sizes; native Windows chrome is outside these renders.
+// Logical content sizes. Native Windows chrome is outside these renders.
 import { Button, ComboBox, LineEdit, ScrollView, Switch, Palette } from "std-widgets.slint";
 import { WelcomeArt } from "welcome.slint";
 
@@ -672,13 +672,16 @@ export component SettingsWindow inherits Window {
 export component SmsWindow inherits Window {
     title: "鹊信 · 新短信";
     no-frame: true;
-    width: 380px; height: 320px;
+    width: 380px;
+    height: min(240px, root.body-top + original-text.height + root.footer-height);
     background: #ffffff;
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
     in property <string> otp: "482913";
     in property <string> sms: "\u{3010}\u{9e4a}\u{4fe1}\u{3011}\u{8fd9}\u{662f}\u{4e00}\u{6761}\u{6d4b}\u{8bd5}\u{77ed}\u{4fe1}\u{ff0c}\u{9a8c}\u{8bc1}\u{7801} 482913\u{3002}\u{8bf7}\u{52ff}\u{7528}\u{4e8e}\u{771f}\u{5b9e}\u{767b}\u{5f55}\u{3002}";
     in property <string> device-name: "我的设备";
+    private property <length> body-top: root.otp != "" ? 86px : 42px;
+    private property <length> footer-height: 47px;
     callback copy(string);
     callback close-popup();
     init => { Palette.color-scheme = ColorScheme.light; }
@@ -686,45 +689,49 @@ export component SmsWindow inherits Window {
         border-width: 1px; border-color: #dfe5e3;
         TouchArea { clicked => { root.close-popup(); } }
         VerticalLayout {
-            padding: 20px; spacing: 12px;
+            x: 14px; y: 14px; width: root.width - 28px;
+            height: root.body-top - 22px; spacing: 8px;
             HorizontalLayout {
-                height: 22px;
-                Rectangle {
-                    width: 22px;
-                    Image { source: @image-url("assets/app-icon.png"); width: 22px; height: 22px; }
-                }
+                height: 20px; spacing: 4px;
+                Image { source: @image-url("assets/app-icon.png"); width: 20px; height: 20px; }
                 Text { text: "鹊信"; font-size: 13px; color: #25322e; vertical-alignment: center; }
                 Rectangle { horizontal-stretch: 1; }
             }
-            if root.otp != "" : Text {
-                height: 48px;
-                text: root.otp; font-size: 32px; font-weight: 600; color: #25322e;
-                overflow: elide; vertical-alignment: center;
-            }
-            if root.otp != "" : Button {
-                height: 32px; text: "复制验证码";
-                clicked => {
-                    root.copy(root.otp);
-                    root.close-popup();
+            if root.otp != "" : HorizontalLayout {
+                height: 36px; spacing: 12px;
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.otp; font-size: 30px; font-weight: 600; color: #25322e;
+                    overflow: elide; vertical-alignment: center;
+                }
+                Button {
+                    width: 104px; text: "复制验证码";
+                    clicked => {
+                        root.copy(root.otp);
+                        root.close-popup();
+                    }
                 }
             }
-            if root.otp == "" : Text {
-                height: 24px; text: "新短信"; font-size: 20px; color: #25322e;
-                vertical-alignment: center;
+        }
+        body := ScrollView {
+            x: 14px; y: root.body-top; width: root.width - 28px;
+            height: root.height - root.body-top - root.footer-height;
+            content-height: original-text.height;
+            horizontal-scrollbar-policy: always-off;
+            original-text := Text {
+                x: 0; y: 0; width: body.width - 12px;
+                text: root.sms; font-size: 14px; color: #25322e; wrap: word-wrap;
             }
-            body := ScrollView {
-                vertical-stretch: 1;
-                original-text := Text {
-                    x: 0; y: 0; width: body.visible-width;
-                    text: root.sms; font-size: 14px; color: #25322e; wrap: word-wrap;
-                }
-                TouchArea {
-                    x: 0; y: 0; width: body.visible-width;
-                    height: max(body.visible-height, original-text.height);
-                    clicked => { root.close-popup(); }
-                }
+            TouchArea {
+                x: 0; y: 0; width: body.visible-width;
+                height: max(body.visible-height, original-text.height);
+                clicked => { root.close-popup(); }
             }
-            Separator {}
+        }
+        VerticalLayout {
+            x: 14px; y: root.height - root.footer-height + 8px; width: root.width - 28px;
+            height: 25px; spacing: 8px;
+            Separator { height: 1px; }
             Note { height: 15px; text: root.device-name; font-size: 11px; overflow: elide; }
         }
     }

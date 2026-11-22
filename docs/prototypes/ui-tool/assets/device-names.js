@@ -118,12 +118,6 @@ function renderDeviceNames(content, { key: stateKey, devices, scrollImage }) {
     return;
   }
 
-  if (stateKey.startsWith("sms-") && savedNames[0]) {
-    const label = document.createElement("span");
-    label.className = "sms-device-name";
-    label.textContent = label.title = savedNames[0];
-    content.append(label);
-  }
   if (!devices?.length) return;
 
   // The preview uses slices of the Slint render around the editable section.

@@ -176,7 +176,7 @@ select { margin-left: 8px; padding: 4px; font: inherit; max-width: 100%; }
 }
 .device-name-done:focus-visible { outline: 2px solid #284e79; outline-offset: 2px; }
 .device-name-done:hover { background: #284e7912; }
-.main-device-name, .sms-device-name {
+.main-device-name {
   position: absolute;
   left: 38px;
   width: 364px;
@@ -195,15 +195,6 @@ select { margin-left: 8px; padding: 4px; font: inherit; max-width: 100%; }
 }
 .main-device-name { left: 72px; width: 248px; }
 .main-device-name.needs-repair { width: 160px; }
-.sms-device-name {
-  left: 20px;
-  top: 285px;
-  height: 16px;
-  width: 340px;
-  background: #fff;
-  color: #65716e;
-  font-size: 11px;
-}
 @media (prefers-reduced-motion: reduce) {
   .native-frame .qr-motion { display: none; }
 }
