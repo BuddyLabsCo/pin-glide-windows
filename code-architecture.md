@@ -113,7 +113,9 @@ interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
 | `node scripts/quality/check.mjs core` | Portable core lint and tests |
 | `node scripts/quality/check.mjs build` | Windows x64 MSVC check and release link |
 | `node scripts/quality/check.mjs advisories` | RustSec advisories |
-| `cargo run --locked -p windows-app` | Run the scaffold on Windows |
+| `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
+| `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
+| `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop with Pin Glide stopped |
 
 The source gates cover handwritten files in `receiver-core` and `windows-app`.
 Generated code is checked through regeneration and compilation when added.

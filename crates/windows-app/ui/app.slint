@@ -1,12 +1,120 @@
-export component AppWindow inherits Window {
-    title: "Pin Glide";
-    width: 320px;
-    height: 160px;
-    in property <string> greeting: "Hello, world!";
+import { WelcomeArt } from "../../../docs/prototypes/ui-tool/welcome.slint";
+
+export component WelcomeWindow inherits Window {
+    in property <bool> chinese;
+    in property <bool> motion-enabled;
+    private property <duration> started;
+    private property <string> start-label: root.chinese ? "开始使用" : "Get started";
+    callback start-pairing();
+    public function restart-motion() {
+        root.started = animation-tick();
+    }
+
+    title: root.chinese ? "鹊信" : "Pin Glide";
+    icon: @image-url("../../../docs/prototypes/ui-tool/assets/app-icon.png");
+    min-width: 440px;
+    max-width: 440px;
+    min-height: 560px;
+    max-height: 560px;
+    background: #fafcfb;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+
+    HorizontalLayout {
+        x: 28px;
+        y: 24px;
+        width: 384px;
+        height: 32px;
+        spacing: 10px;
+        Image {
+            source: @image-url("../../../docs/prototypes/ui-tool/assets/app-icon.png");
+            width: 32px;
+            height: 32px;
+        }
+
+        Text {
+            text: root.title;
+            font-size: 18px;
+            font-weight: 600;
+            color: #22312f;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+    }
+
+    WelcomeArt {
+        x: 28px;
+        y: 73px;
+        width: 384px;
+        height: 242px;
+        seconds: root.motion-enabled ? mod(animation-tick() - root.started, 6.4s) / 1s : 3.0;
+        message-label: root.chinese ? "新短信" : "New SMS";
+    }
 
     Text {
-        text: root.greeting;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+        x: 28px;
+        y: 333px;
+        width: 384px;
+        text: root.chinese ? "在电脑上接收短信" : "Receive SMS on your PC";
+        font-size: 30px;
+        font-weight: 600;
+        color: #22312f;
+        wrap: word-wrap;
+    }
+
+    Text {
+        x: 28px;
+        y: 384px;
+        width: 384px;
+        text: root.chinese ? "新短信自动弹出，验证码一键复制。" : "New messages pop up. Copy verification codes in one click.";
+        font-size: 15px;
+        color: #65716e;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        x: 28px;
+        y: 478px;
+        width: 124px;
+        height: 36px;
+        border-radius: 4px;
+        background: press.pressed ? #00574f : press.has-hover ? #087b6e : #006b60;
+        animate background { duration: root.motion-enabled ? 120ms : 0ms; }
+        accessible-role: button;
+        accessible-label: root.start-label;
+        accessible-action-default => { root.start-pairing(); }
+        forward-focus: start-focus;
+        Text {
+            text: root.start-label;
+            font-weight: 600;
+            color: white;
+        }
+
+        if start-focus.has-focus: Rectangle {
+            x: -3px;
+            y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: 6px;
+            border-width: 2px;
+            border-color: #19685b;
+        }
+        start-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Return || event.text == Key.Space {
+                    root.start-pairing();
+                    return accept;
+                }
+                return reject;
+            }
+        }
+
+        press := TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.start-pairing(); }
+        }
     }
 }

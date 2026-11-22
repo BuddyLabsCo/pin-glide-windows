@@ -1,0 +1,218 @@
+use std::io;
+use std::mem::size_of;
+use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
+
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::Shell::{
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CreateIconFromResourceEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+    DestroyIcon, DestroyMenu, DestroyWindow, GetCursorPos, HICON, KillTimer, MF_SEPARATOR,
+    MF_STRING, PostMessageW, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_APP, WM_LBUTTONDBLCLK,
+    WM_NULL, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSW, WS_POPUP,
+};
+
+use super::{wide, win32_result};
+
+const TRAY_EVENT: u32 = WM_APP + 1;
+const OPEN: u32 = 1;
+const SETTINGS: u32 = 2;
+const EXIT: u32 = 3;
+const ICON_RETRY: usize = 1;
+static EXPLORER_RESTART: OnceLock<u32> = OnceLock::new();
+
+pub struct Tray {
+    window: HWND,
+}
+
+impl Tray {
+    pub fn new(window_name: &[u16]) -> io::Result<Self> {
+        let class = wide("BuddyLabsCo.PinGlide.Tray");
+        // SAFETY: the current module handle and terminated strings remain valid for registration
+        // and synchronous window creation. No Rust data is passed to the window procedure.
+        let window = unsafe {
+            let module = GetModuleHandleW(null());
+            let window_class = WNDCLASSW {
+                hInstance: module,
+                lpszClassName: class.as_ptr(),
+                lpfnWndProc: Some(window_proc),
+                ..Default::default()
+            };
+            if RegisterClassW(&window_class) == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            EXPLORER_RESTART
+                .get_or_init(|| RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()));
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                window_name.as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                null_mut(),
+                null_mut(),
+                module,
+                null(),
+            )
+        };
+        if window.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let tray = Self { window };
+        register_icon(window)?;
+        Ok(tray)
+    }
+}
+
+impl Drop for Tray {
+    fn drop(&mut self) {
+        // SAFETY: Tray is dropped on the thread that created its window.
+        unsafe {
+            Shell_NotifyIconW(NIM_DELETE, &icon_data(self.window));
+            DestroyWindow(self.window);
+        }
+    }
+}
+
+fn load_icon() -> io::Result<HICON> {
+    let mut image =
+        include_bytes!("../../../../docs/prototypes/ui-tool/assets/app-icon.png").to_vec();
+    // SAFETY: the original app icon is a trusted PNG in writable memory for this call.
+    let icon = unsafe {
+        CreateIconFromResourceEx(image.as_mut_ptr(), image.len() as u32, 1, 0x30000, 0, 0, 0)
+    };
+    if icon.is_null() {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(icon)
+    }
+}
+
+fn icon_data(window: HWND) -> NOTIFYICONDATAW {
+    NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: window,
+        uID: 1,
+        ..Default::default()
+    }
+}
+
+fn add_icon(window: HWND, icon: HICON, chinese: bool) -> io::Result<()> {
+    let mut data = icon_data(window);
+    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    data.uCallbackMessage = TRAY_EVENT;
+    data.hIcon = icon;
+    let title = wide(if chinese { "鹊信" } else { "Pin Glide" });
+    data.szTip[..title.len()].copy_from_slice(&title);
+    // SAFETY: data describes the live tray window and icon and remains valid for the call.
+    win32_result(unsafe { Shell_NotifyIconW(NIM_ADD, &data) })
+}
+
+fn register_icon(window: HWND) -> io::Result<()> {
+    let icon = load_icon()?;
+    let result = add_icon(window, icon, crate::ui::chinese());
+    // SAFETY: Shell_NotifyIconW copies the icon. The retry timer belongs to this tray window.
+    unsafe {
+        DestroyIcon(icon);
+        if result.is_ok() {
+            KillTimer(window, ICON_RETRY);
+        } else if SetTimer(window, ICON_RETRY, 1000, None) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+unsafe extern "system" fn window_proc(
+    window: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        TRAY_EVENT => {
+            tray_event(window, lparam as u32);
+            0
+        }
+        WM_SETTINGCHANGE => {
+            crate::ui::update_motion();
+            0
+        }
+        WM_TIMER if wparam == ICON_RETRY => {
+            let _ = register_icon(window);
+            0
+        }
+        _ if EXPLORER_RESTART
+            .get()
+            .is_some_and(|restart| *restart != 0 && *restart == message) =>
+        {
+            let _ = register_icon(window);
+            0
+        }
+        // SAFETY: unhandled Windows messages use the default procedure with the original arguments.
+        _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
+    }
+}
+
+fn tray_event(window: HWND, event: u32) {
+    let choice = match event {
+        WM_LBUTTONDBLCLK => OPEN,
+        WM_RBUTTONUP => show_menu(window, crate::ui::chinese()),
+        _ => return,
+    };
+    match choice {
+        OPEN | SETTINGS => {
+            let _ = slint::invoke_from_event_loop(crate::ui::open);
+        }
+        EXIT => {
+            let _ = slint::quit_event_loop();
+        }
+        _ => {}
+    }
+}
+
+fn show_menu(window: HWND, chinese: bool) -> u32 {
+    let (open, settings, exit) = if chinese {
+        ("打开鹊信", "设置", "退出")
+    } else {
+        ("Open Pin Glide", "Settings", "Exit")
+    };
+    // SAFETY: the menu belongs to this thread and label pointers live through each AppendMenuW.
+    unsafe {
+        let menu = CreatePopupMenu();
+        if menu.is_null() {
+            return 0;
+        }
+        let choice = if AppendMenuW(menu, MF_STRING, OPEN as usize, wide(open).as_ptr()) != 0
+            && AppendMenuW(menu, MF_STRING, SETTINGS as usize, wide(settings).as_ptr()) != 0
+            && AppendMenuW(menu, MF_SEPARATOR, 0, null()) != 0
+            && AppendMenuW(menu, MF_STRING, EXIT as usize, wide(exit).as_ptr()) != 0
+        {
+            let mut position = POINT::default();
+            GetCursorPos(&raw mut position);
+            SetForegroundWindow(window);
+            let choice = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
+                position.x,
+                position.y,
+                0,
+                window,
+                null(),
+            );
+            PostMessageW(window, WM_NULL, 0, 0);
+            choice as u32
+        } else {
+            0
+        };
+        DestroyMenu(menu);
+        choice
+    }
+}

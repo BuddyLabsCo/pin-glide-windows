@@ -8,6 +8,7 @@ component Envelope inherits Path {
 
 export component WelcomeArt inherits Rectangle {
     in property <float> seconds;
+    in property <string> message-label: "新短信";
     pure function ease(start: float, end: float) -> float {
         let t = min(1.0, max(0.0, (root.seconds - start) / (end - start)));
         return t * t * (3 - 2 * t);
@@ -133,7 +134,7 @@ export component WelcomeArt inherits Rectangle {
             background: #dcf2e9;
             Image { source: @image-url("assets/app-icon.png"); width: 19px; height: 19px; }
         }
-        Text { x: 47px; y: 13px; text: "新短信"; font-size: 12px; color: #426058; }
+        Text { x: 47px; y: 13px; text: root.message-label; font-size: 12px; color: #426058; }
         Text { x: 47px; y: 32px; text: "482913"; font-size: 24px; font-weight: 600; color: #173a31; }
         Rectangle {
             x: 136px; y: 36px; width: 23px; height: 23px; border-radius: 12px;
