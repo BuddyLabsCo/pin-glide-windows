@@ -4,20 +4,21 @@ This inventory describes the approved Windows UI prototype. The
 [screenshot archive](../shots/README.md) includes the interaction states as
 well as the gallery presets.
 
-| Surface | Fixed logical content size | Entry and layout |
+| Surface | Logical content size | Entry and layout |
 | --- | --- | --- |
 | [Welcome](welcome.html) | 440 × 560 | First explicit open before pairing. The sample SMS travels to the computer. Show the settled frame when motion is reduced. Start begins QR preparation. |
 | [First pairing](pairing.html) | 440 × 560 | Page title above a fixed square that holds the QR, progress animation, success check mark, or error icon. Status and actions appear underneath. |
 | [Add a device](add-phone.html) | 440 × 560 | Shares the pairing layout and QR error treatments. The arrow to the left of the title goes back to the main window. |
 | [Main window](main.html) | 400 × 576 | Pair a new device above the list. The Settings icon sits at the top right. The device list scrolls separately from its heading. |
 | [Settings](settings.html) | 420 × 392 | The arrow to the left of the title returns to the main window. |
-| [SMS popup](messages.html) | 380 × 320 | Separate borderless window with the app name, message, and source. A code and Copy code appear when the SMS contains a code. |
+| [SMS popup](messages.html) | 380 wide, up to 240 high | Separate borderless window that grows with the message. The code and Copy code share a row when a code is available. |
 | [Tray context menu](tray.html) | Native menu | Open Pin Glide, Settings, then a separator and Exit. |
 
 The windows use one light appearance, the original Pin Glide logo, and
-standard Windows chrome. They have fixed sizes in logical pixels and scale
-with Windows DPI. The main window offers minimize and close. Closing it hides
-it to the tray and keeps reception running. SMS popups do not take focus on
+standard Windows chrome. Sizes use logical pixels and scale with Windows DPI.
+The main, setup, and settings windows have fixed sizes. The main window
+offers minimize and close. Closing it hides it to the tray and keeps reception
+running. SMS popups do not take focus on
 arrival or appear in the taskbar. The archive shows the window chrome as
 represented by the browser prototype.
 
@@ -70,10 +71,23 @@ paired devices unusable.
 
 ## SMS and tray
 
-Long SMS bodies scroll vertically inside the popup. Long codes end in an
-ellipsis, and Copy code copies the original full value. Clicking anywhere
-in the popup dismisses it. Clicking Copy code also dismisses it. Scrolling
-keeps it open. The popup shows the device name as the source.
+The popup grows with the wrapped message. At the height limit, the message
+body scrolls while the code, copy action and device name stay in place. When
+there is no code, the message starts directly below the app name. Long codes
+end in an ellipsis. Copy code attempts to copy the original full value and
+dismisses the popup. Clicking anywhere else in the popup also dismisses it.
+The popup shows the device name as the source.
+
+Popups stack upward from the lower right, newest at the top. The stack shows
+at most five popups. When a new popup cannot fit within the work area or the
+five-popup limit, expire the oldest visible popup until the new one fits.
+Measure the space using the rendered popup heights and gaps.
+
+Review [popup motion](messages-motion.html) in a browser. A new popup fades in
+with a short slide from the right. A closing popup fades out with a short slide
+to the right. Popups above the gap slide down to fill it. Popups below the
+gap keep their positions. With reduced motion, the demo applies the final
+positions immediately.
 
 A tray single-click does nothing. A double-click opens Pin Glide. The native
 right-click menu can open Pin Glide, open Settings directly, or exit.

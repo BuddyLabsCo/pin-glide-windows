@@ -125,10 +125,10 @@ case("sms-otp", "短信与复制", "含验证码的短信", "SmsWindow",
      "完整保留固定测试短信原文；按钮复制完整验证码后关闭弹窗。",
      sms="【鹊信】这是一条测试短信，验证码 482913。请勿用于真实登录。")
 case("sms-no-otp", "短信与复制", "不含验证码的短信", "SmsWindow",
-     "显示完整原文；提案是隐藏复制按钮；保留之前的最新有效验证码。",
+     "标识下直接显示完整短信正文，保留之前的最新有效验证码。",
      otp="", sms="【鹊信】您的包裹已送达前台。\n请于 20:00 前领取。")
 case("sms-long", "短信与复制", "较长的短信原文", "SmsWindow",
-     "窗口尺寸固定，短信原文换行并可上下滚动。",
+     "弹窗随短信正文增高，达到上限后只滚动正文。",
      sms="【鹊信】验证码 482913。\n\n" +
      "\n\n".join(f"短信原文第 {i} 段。这里用于展示较长短信，所有内容按收到的原文显示，不省略、不改写。"
                  for i in range(1, 9)))
@@ -189,7 +189,7 @@ def build():
     assert {"pair-credential-ready", "pair-issued", "pair-uncertain",
             "sms-no-otp", "main-one-key", "add-waiting", "main-two-phones"} <= set(keys)
     dimensions = dict(WelcomeWindow=(440, 560), MainWindow=(400, 576), PairingWindow=(440, 560),
-                      SettingsWindow=(420, 392), SmsWindow=(380, 320))
+                      SettingsWindow=(420, 392))
     source = ROOT / "ui.slint"
     subprocess.run(["slint-viewer", "--check", "--style", "fluent", str(source)], check=True)
     shots = ROOT / "shots"
@@ -205,9 +205,14 @@ def build():
             render(source, item["component"], item["properties"], props, output)
             header = output.read_bytes()[:24]
             assert header[:8] == b"\x89PNG\r\n\x1a\n", output
-            assert struct.unpack(">II", header[16:24]) == dimensions[item["component"]], output
+            size = struct.unpack(">II", header[16:24])
+            if item["component"] == "SmsWindow":
+                width, height = size
+                assert width == 380 and 89 <= height <= 240, output
+            else:
+                assert size == dimensions[item["component"]], output
             item["image"] = f"shots/{item['key']}.png"
-            item["size"] = dimensions[item["component"]]
+            item["size"] = size
             if item["component"] == "MainWindow":
                 props = item["properties"]
                 item["devices"] = props.get("device-names", ["我的设备", "备用设备"])
