@@ -15,7 +15,9 @@ use reqwest::{Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod pairing_events;
-pub use pairing_events::{PairingEventError, PairingEvents};
+mod pairing_operation;
+pub use pairing_operation::{PairingOperation, PairingProgress};
+pub use receiver_core::pairing::{PairingOutcome, SessionState};
 
 #[cfg(test)]
 mod tests;
@@ -35,18 +37,6 @@ pub struct NewReceiverSession {
     pub expires_at: OffsetDateTime,
     pub pairing_token: String,
     pub pairing_token_expires_at: OffsetDateTime,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SessionState {
-    AwaitingAuthorization,
-    AwaitingConfirmation,
-    CredentialReady,
-    CredentialIssued,
-    Completed,
-    Canceled,
-    Expired,
-    Superseded,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -130,7 +120,7 @@ impl Service {
             receiver_id: session.receiver_id,
             pairing_id: session.pairing_id,
             sender_id: session.sender_id,
-            state: SessionState::from_wire(session.state),
+            state: session_state(session.state),
             receiver_confirmed: session.receiver_confirmed,
             sender_confirmed: session.sender_confirmed,
             expires_at: OffsetDateTime::parse(&session.expires_at, &Rfc3339)
@@ -154,20 +144,18 @@ impl Service {
     }
 }
 
-impl SessionState {
-    fn from_wire(state: pairing_session_view::State) -> Self {
-        use pairing_session_view::State;
+fn session_state(state: pairing_session_view::State) -> SessionState {
+    use pairing_session_view::State;
 
-        match state {
-            State::AwaitingAuthorization => Self::AwaitingAuthorization,
-            State::AwaitingConfirmation => Self::AwaitingConfirmation,
-            State::CredentialReady => Self::CredentialReady,
-            State::CredentialIssued => Self::CredentialIssued,
-            State::Completed => Self::Completed,
-            State::Canceled => Self::Canceled,
-            State::Expired => Self::Expired,
-            State::Superseded => Self::Superseded,
-        }
+    match state {
+        State::AwaitingAuthorization => SessionState::AwaitingAuthorization,
+        State::AwaitingConfirmation => SessionState::AwaitingConfirmation,
+        State::CredentialReady => SessionState::CredentialReady,
+        State::CredentialIssued => SessionState::CredentialIssued,
+        State::Completed => SessionState::Completed,
+        State::Canceled => SessionState::Canceled,
+        State::Expired => SessionState::Expired,
+        State::Superseded => SessionState::Superseded,
     }
 }
 

@@ -17,6 +17,12 @@ pub fn open() {
     }
 }
 
+pub fn open_settings() {
+    if let Err(error) = show_welcome().and_then(|()| pairing::hide()) {
+        eprintln!("Could not open Welcome: {error}");
+    }
+}
+
 pub fn close() {
     pairing::shutdown();
     WELCOME.with_borrow_mut(|welcome| *welcome = None);
@@ -37,8 +43,16 @@ pub fn update_motion() {
 
 fn show() -> Result<(), PlatformError> {
     if pairing::reopen()? {
+        WELCOME.with_borrow(|welcome| match welcome {
+            Some(window) => window.hide(),
+            None => Ok(()),
+        })?;
         return Ok(());
     }
+    show_welcome()
+}
+
+fn show_welcome() -> Result<(), PlatformError> {
     let window = WELCOME.with_borrow_mut(|welcome| {
         if let Some(window) = welcome {
             return Ok(window.clone_strong());

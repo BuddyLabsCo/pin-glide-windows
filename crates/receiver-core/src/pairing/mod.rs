@@ -3,6 +3,9 @@ use p256::{SecretKey, elliptic_curve::sec1::ToEncodedPoint};
 use rand_core::{OsRng, RngCore};
 use zeroize::Zeroizing;
 
+mod state;
+pub use state::{PairingOutcome, PairingPhase, SessionState, pairing_lifetime};
+
 pub struct PairingMaterial {
     recipient_key: SecretKey,
     psk: Zeroizing<[u8; 32]>,

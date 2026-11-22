@@ -1,13 +1,13 @@
 use futures_util::{SinkExt, StreamExt};
 use pin_glide_wss::{AnonymousSchema26, AnonymousSchema33, PairingState};
+use reqwest::{Response, StatusCode, Version, header};
 use serde_json::Value;
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async_with_config,
+    WebSocketStream,
     tungstenite::{
         Message,
-        client::IntoClientRequest,
-        http::{HeaderValue, header},
-        protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode},
+        handshake::{client::generate_key, derive_accept_key},
+        protocol::{CloseFrame, Role, WebSocketConfig, frame::coding::CloseCode},
     },
 };
 
@@ -15,52 +15,112 @@ use super::{NewReceiverSession, Service, SessionState};
 
 const PROTOCOL: &str = "pin-glide.v1";
 
-pub struct PairingEvents {
-    socket: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+pub(super) struct PairingEvents {
+    socket: WebSocketStream<reqwest::Upgraded>,
     session_id: String,
     receiver_id: String,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum PairingEventError {
+pub(super) enum PairingEventError {
     #[error("pairing event transport failed")]
     Transport,
     #[error("invalid pairing event protocol")]
     Protocol,
+    #[error("Service rejected pairing subscription with HTTP {status}")]
+    Rejected {
+        status: StatusCode,
+        code: Option<String>,
+    },
 }
 
 impl Service {
-    pub async fn pairing_events(
+    pub(super) async fn pairing_events(
         &self,
         session: &NewReceiverSession,
     ) -> Result<PairingEvents, PairingEventError> {
-        let path = self.config.base_path.replacen("https://", "wss://", 1);
+        let path = &self.config.base_path;
         let session_id = pin_glide_http::apis::urlencode(&session.session_id);
-        let mut request = format!("{path}/v1/pairing-sessions/{session_id}/events")
-            .into_client_request()
-            .map_err(|_| PairingEventError::Protocol)?;
-        let mut authorization = HeaderValue::from_str(&format!("Bearer {}", session.pairing_token))
-            .map_err(|_| PairingEventError::Protocol)?;
-        authorization.set_sensitive(true);
-        request
-            .headers_mut()
-            .insert(header::AUTHORIZATION, authorization);
-        request.headers_mut().insert(
-            header::SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static(PROTOCOL),
-        );
+        let key = generate_key();
+        let response = self
+            .config
+            .client
+            .get(format!("{path}/v1/pairing-sessions/{session_id}/events"))
+            .version(Version::HTTP_11)
+            .bearer_auth(&session.pairing_token)
+            .header(header::CONNECTION, "Upgrade")
+            .header(header::UPGRADE, "websocket")
+            .header(header::SEC_WEBSOCKET_VERSION, "13")
+            .header(header::SEC_WEBSOCKET_KEY, &key)
+            .header(header::SEC_WEBSOCKET_PROTOCOL, PROTOCOL)
+            .send()
+            .await
+            .map_err(|_| PairingEventError::Transport)?;
+        if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+            return Err(subscription_error(response).await);
+        }
+        verify_upgrade(&response, &key)?;
+        let stream = response
+            .upgrade()
+            .await
+            .map_err(|_| PairingEventError::Transport)?;
         let config = WebSocketConfig::default()
             .max_message_size(Some(64 * 1024))
             .max_frame_size(Some(64 * 1024));
-        let (socket, _) = connect_async_with_config(request, Some(config), false)
-            .await
-            .map_err(|_| PairingEventError::Transport)?;
         Ok(PairingEvents {
-            socket,
+            socket: WebSocketStream::from_raw_socket(stream, Role::Client, Some(config)).await,
             session_id: session.session_id.clone(),
             receiver_id: session.receiver_id.clone(),
         })
     }
+}
+
+fn verify_upgrade(response: &Response, key: &str) -> Result<(), PairingEventError> {
+    let headers = response.headers();
+    let has_token = |name, token: &str| {
+        headers
+            .get_all(name)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .any(|value| {
+                value
+                    .split(',')
+                    .any(|part| part.trim().eq_ignore_ascii_case(token))
+            })
+    };
+    let accept = derive_accept_key(key.as_bytes());
+    if !has_token(header::CONNECTION, "upgrade")
+        || !has_token(header::UPGRADE, "websocket")
+        || !headers
+            .get(header::SEC_WEBSOCKET_ACCEPT)
+            .is_some_and(|value| value == accept.as_str())
+        || !headers
+            .get(header::SEC_WEBSOCKET_PROTOCOL)
+            .is_some_and(|value| value == PROTOCOL)
+        || headers.contains_key(header::SEC_WEBSOCKET_EXTENSIONS)
+    {
+        return Err(PairingEventError::Protocol);
+    }
+    Ok(())
+}
+
+async fn subscription_error(mut response: Response) -> PairingEventError {
+    let status = response.status();
+    let mut body = Vec::new();
+    let code = loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if body.len() + chunk.len() <= 16 * 1024 => {
+                body.extend_from_slice(&chunk)
+            }
+            Ok(None) => {
+                break serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|problem| problem["code"].as_str().map(str::to_owned));
+            }
+            _ => break None,
+        }
+    };
+    PairingEventError::Rejected { status, code }
 }
 
 impl PairingEvents {

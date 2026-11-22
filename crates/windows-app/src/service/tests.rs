@@ -9,17 +9,17 @@ use native_tls::{Identity, TlsAcceptor};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-use super::{CreateError, Service, SessionState, client_builder};
+use super::{CreateError, NewReceiverSession, Service, SessionState, client_builder};
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
-fn listen(host: &str) -> (TcpListener, String) {
+pub(super) fn listen(host: &str) -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("https://{host}:{}", listener.local_addr().unwrap().port());
     (listener, origin)
 }
 
-fn accept_loopback(listener: &TcpListener) -> TcpStream {
+pub(super) fn accept_loopback(listener: &TcpListener) -> TcpStream {
     let timeout = Duration::from_secs(5);
     let deadline = Instant::now() + timeout;
     listener.set_nonblocking(true).unwrap();
@@ -42,7 +42,11 @@ fn accept_loopback(listener: &TcpListener) -> TcpStream {
     stream
 }
 
-fn local_service(listener: &TcpListener, origin: &str, trust_fixture_ca: bool) -> Service {
+pub(super) fn local_service(
+    listener: &TcpListener,
+    origin: &str,
+    trust_fixture_ca: bool,
+) -> Service {
     let mut service = Service::new(origin).unwrap();
     let mut client = client_builder()
         .no_proxy()
@@ -54,7 +58,7 @@ fn local_service(listener: &TcpListener, origin: &str, trust_fixture_ca: bool) -
     service
 }
 
-fn acceptor() -> TlsAcceptor {
+pub(super) fn acceptor() -> TlsAcceptor {
     let identity = Identity::from_pkcs12(
         include_bytes!("../../tests/fixtures/service/server.p12"),
         "pin-glide-test",
@@ -141,25 +145,19 @@ async fn creates_a_receiver_anonymously_and_decodes_the_session() {
 
 #[tokio::test]
 async fn cancels_the_receiver_session_using_its_restricted_token() {
-    let (service, creation) = respond(
-        "201 Created",
-        "application/json",
-        json!({
-            "session": {
-                "sessionId": "session-1",
-                "receiverId": "receiver-1",
-                "mode": "new_receiver",
-                "state": "awaiting_authorization",
-                "expiresAt": "2026-01-01T00:05:00Z",
-                "senderConfirmed": false,
-                "receiverConfirmed": false
-            },
-            "pairingToken": "restricted-test-token",
-            "pairingTokenExpiresAt": "2026-01-01T00:05:00Z"
-        }),
-    );
-    let session = service.new_receiver().await.unwrap();
-    creation.join().unwrap();
+    let deadline = time::OffsetDateTime::now_utc() + Duration::from_secs(300);
+    let session = NewReceiverSession {
+        session_id: "session-1".into(),
+        receiver_id: "receiver-1".into(),
+        pairing_id: None,
+        sender_id: None,
+        state: SessionState::AwaitingAuthorization,
+        receiver_confirmed: false,
+        sender_confirmed: false,
+        expires_at: deadline,
+        pairing_token: "restricted-test-token".into(),
+        pairing_token_expires_at: deadline,
+    };
     let (listener, origin) = listen("localhost");
     let service = local_service(&listener, &origin, true);
     let server = thread::spawn(move || {
