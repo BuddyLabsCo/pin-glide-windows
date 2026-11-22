@@ -1,0 +1,12 @@
+export component AppWindow inherits Window {
+    title: "Pin Glide";
+    width: 320px;
+    height: 160px;
+    in property <string> greeting: "Hello, world!";
+
+    Text {
+        text: root.greeting;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
