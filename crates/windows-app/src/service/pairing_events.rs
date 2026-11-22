@@ -1,5 +1,8 @@
 use futures_util::{SinkExt, StreamExt};
-use pin_glide_wss::{AnonymousSchema26, AnonymousSchema33, PairingState};
+use pin_glide_wss::{
+    AnonymousSchema26, AnonymousSchema33, CredentialReady, PairingRelayIn, PairingRelayOut,
+    PairingState, WssError,
+};
 use reqwest::{Response, StatusCode, Version, header};
 use serde_json::Value;
 use tokio_tungstenite::{
@@ -11,7 +14,7 @@ use tokio_tungstenite::{
     },
 };
 
-use super::{NewReceiverSession, Service, SessionState};
+use super::{NewReceiverSession, Service, SessionState, pairing_snapshot::Snapshot};
 
 const PROTOCOL: &str = "pin-glide.v1";
 
@@ -19,6 +22,13 @@ pub(super) struct PairingEvents {
     socket: WebSocketStream<reqwest::Upgraded>,
     session_id: String,
     receiver_id: String,
+}
+
+pub(super) enum PairingEvent {
+    State(Snapshot),
+    Relay(String),
+    CredentialReady,
+    Error,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -124,12 +134,11 @@ async fn subscription_error(mut response: Response) -> PairingEventError {
 }
 
 impl PairingEvents {
-    pub async fn next_state(&mut self) -> Result<SessionState, PairingEventError> {
+    pub async fn next_event(&mut self) -> Result<PairingEvent, PairingEventError> {
         while let Some(frame) = self.socket.next().await {
             match frame.map_err(|_| PairingEventError::Transport)? {
                 Message::Text(text) => match self.parse(&text) {
-                    Ok(Some(state)) => return Ok(state),
-                    Ok(None) => {}
+                    Ok(event) => return Ok(event),
                     Err(error) => {
                         self.protocol_close().await;
                         return Err(error);
@@ -154,6 +163,20 @@ impl PairingEvents {
         Err(PairingEventError::Transport)
     }
 
+    pub async fn send_relay(&mut self, payload: String) -> Result<(), PairingEventError> {
+        let frame = PairingRelayIn {
+            version: 1,
+            reserved_type: "pairing_relay".into(),
+            session_id: self.session_id.clone(),
+            payload,
+        };
+        let text = serde_json::to_string(&frame).map_err(|_| PairingEventError::Protocol)?;
+        self.socket
+            .send(Message::text(text))
+            .await
+            .map_err(|_| PairingEventError::Transport)
+    }
+
     async fn protocol_close(&mut self) {
         let _ = self
             .socket
@@ -164,44 +187,69 @@ impl PairingEvents {
             .await;
     }
 
-    fn parse(&self, text: &str) -> Result<Option<SessionState>, PairingEventError> {
+    fn parse(&self, text: &str) -> Result<PairingEvent, PairingEventError> {
         let event: Value = serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
         if event["version"].as_i64() != Some(1) {
             return Err(PairingEventError::Protocol);
         }
         match event["type"].as_str() {
-            Some("pairing_state") => {
-                let state: PairingState =
+            Some("pairing_state") => self.parse_state(event),
+            Some("pairing_relay") => {
+                let relay: PairingRelayOut =
                     serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
-                if state.session.session_id != self.session_id
-                    || state.session.receiver_id != self.receiver_id
-                    || *state.session.mode != AnonymousSchema26::NewReceiver
-                {
+                if relay.session_id != self.session_id || relay.side != "sender" {
                     return Err(PairingEventError::Protocol);
                 }
-                Ok(Some(match *state.session.state {
-                    AnonymousSchema33::AwaitingAuthorization => SessionState::AwaitingAuthorization,
-                    AnonymousSchema33::AwaitingConfirmation => SessionState::AwaitingConfirmation,
-                    AnonymousSchema33::CredentialReady => SessionState::CredentialReady,
-                    AnonymousSchema33::CredentialIssued => SessionState::CredentialIssued,
-                    AnonymousSchema33::Completed => SessionState::Completed,
-                    AnonymousSchema33::Canceled => SessionState::Canceled,
-                    AnonymousSchema33::Expired => SessionState::Expired,
-                    AnonymousSchema33::Superseded => SessionState::Superseded,
-                }))
+                Ok(PairingEvent::Relay(relay.payload))
             }
-            Some("pairing_relay" | "credential_ready")
-                if event["sessionId"].as_str() == Some(self.session_id.as_str()) =>
-            {
-                Ok(None)
+            Some("credential_ready") => {
+                let ready: CredentialReady =
+                    serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
+                if ready.session_id != self.session_id || ready.receiver_id != self.receiver_id {
+                    return Err(PairingEventError::Protocol);
+                }
+                Ok(PairingEvent::CredentialReady)
             }
-            Some("error")
-                if event.get("sessionId").is_none()
-                    || event["sessionId"].as_str() == Some(self.session_id.as_str()) =>
-            {
-                Ok(None)
+            Some("error") => {
+                let error: WssError =
+                    serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
+                if error.session_id.is_some_and(|id| id != self.session_id) {
+                    return Err(PairingEventError::Protocol);
+                }
+                Ok(PairingEvent::Error)
             }
             _ => Err(PairingEventError::Protocol),
         }
+    }
+
+    fn parse_state(&self, event: Value) -> Result<PairingEvent, PairingEventError> {
+        let state: PairingState =
+            serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
+        let session = state.session;
+        if *session.mode != AnonymousSchema26::NewReceiver {
+            return Err(PairingEventError::Protocol);
+        }
+        let phase = match *session.state {
+            AnonymousSchema33::AwaitingAuthorization => SessionState::AwaitingAuthorization,
+            AnonymousSchema33::AwaitingConfirmation => SessionState::AwaitingConfirmation,
+            AnonymousSchema33::CredentialReady => SessionState::CredentialReady,
+            AnonymousSchema33::CredentialIssued => SessionState::CredentialIssued,
+            AnonymousSchema33::Completed => SessionState::Completed,
+            AnonymousSchema33::Canceled => SessionState::Canceled,
+            AnonymousSchema33::Expired => SessionState::Expired,
+            AnonymousSchema33::Superseded => SessionState::Superseded,
+        };
+        Snapshot {
+            session_id: session.session_id,
+            receiver_id: session.receiver_id,
+            pairing_id: session.pairing_id,
+            sender_id: session.sender_id,
+            state: phase,
+            receiver_confirmed: session.receiver_confirmed,
+            sender_confirmed: session.sender_confirmed,
+        }
+        .validated(&self.session_id, &self.receiver_id)
+        .map(PairingEvent::State)
+        .ok_or(PairingEventError::Protocol)
     }
 }

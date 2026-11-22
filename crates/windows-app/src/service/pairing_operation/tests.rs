@@ -12,8 +12,8 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use super::{
-    PairingOperation, PairingOutcome, PairingProgress, ProgressUpdates, Service, drive, oneshot,
-    watch,
+    Claim, CompletionError, PairingOperation, PairingOutcome, PairingProgress, ProgressUpdates,
+    Service, StatusCode, drive, oneshot, wait_for_confirmation, watch,
 };
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
 
@@ -36,18 +36,7 @@ fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
     let service = local_service(&listener, &origin, true);
     let server = std::thread::spawn(move || {
         let acceptor = acceptor();
-        let mut creation = BufReader::new(acceptor.accept(accept_loopback(&listener)).unwrap());
-        assert_eq!(
-            read_request(&mut creation),
-            "POST /v1/pairing-sessions HTTP/1.1\r\n"
-        );
-        let created = json!({
-            "session": snapshot("awaiting_authorization"),
-            "pairingToken": TOKEN,
-            "pairingTokenExpiresAt": EXPIRY,
-        });
-        write_response(creation.get_mut(), "201 Created", &created);
-        drop(creation);
+        accept_creation(acceptor.accept(accept_loopback(&listener)).unwrap());
 
         let connection = acceptor.accept(accept_loopback(&listener)).unwrap();
         match script {
@@ -85,10 +74,30 @@ fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
     (service, server)
 }
 
+fn accept_creation(connection: impl Read + Write) {
+    let mut creation = BufReader::new(connection);
+    assert_eq!(
+        read_request(&mut creation),
+        "POST /v1/pairing-sessions HTTP/1.1\r\n"
+    );
+    let created = json!({
+        "session": snapshot("awaiting_authorization"),
+        "pairingToken": TOKEN,
+        "pairingTokenExpiresAt": EXPIRY,
+    });
+    write_response(creation.get_mut(), "201 Created", &created);
+}
+
 pub(crate) fn read_request(stream: &mut impl BufRead) -> String {
+    let (request, _, _) = read_request_parts(stream);
+    request
+}
+
+fn read_request_parts(stream: &mut impl BufRead) -> (String, Vec<String>, Vec<u8>) {
     let mut request = String::new();
     stream.read_line(&mut request).unwrap();
     let mut size = 0;
+    let mut headers = Vec::new();
     loop {
         let mut header = String::new();
         assert_ne!(stream.read_line(&mut header).unwrap(), 0);
@@ -99,9 +108,11 @@ pub(crate) fn read_request(stream: &mut impl BufRead) -> String {
         if name.eq_ignore_ascii_case("content-length") {
             size = value.trim().parse().unwrap();
         }
+        headers.push(header);
     }
-    stream.read_exact(&mut vec![0; size]).unwrap();
-    request
+    let mut body = vec![0; size];
+    stream.read_exact(&mut body).unwrap();
+    (request, headers, body)
 }
 
 pub(crate) fn write_response(stream: &mut impl Write, status: &str, body: &Value) {
@@ -171,16 +182,21 @@ pub(crate) fn send_state(
     socket: &mut tokio_tungstenite::tungstenite::WebSocket<impl Read + Write>,
     state: Value,
 ) {
-    socket
-        .send(Message::text(
-            json!({
-                "type": "pairing_state",
-                "version": 1,
-                "session": state,
-            })
-            .to_string(),
-        ))
-        .unwrap();
+    send_event(
+        socket,
+        json!({
+            "type": "pairing_state",
+            "version": 1,
+            "session": state,
+        }),
+    );
+}
+
+pub(crate) fn send_event(
+    socket: &mut tokio_tungstenite::tungstenite::WebSocket<impl Read + Write>,
+    event: Value,
+) {
+    socket.send(Message::text(event.to_string())).unwrap();
 }
 
 async fn wait_for(operation: &PairingOperation, matches: impl Fn(&PairingProgress) -> bool) {
@@ -221,8 +237,9 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
             progress,
             worker: None,
         };
-        let worker =
-            tokio::spawn(async move { drive(&service, &updates, stopping, || clock(START)).await });
+        let worker = tokio::spawn(async move {
+            drive(&service, &updates, stopping, || clock(START), None).await
+        });
         send.send(Some("awaiting_authorization")).unwrap();
         wait_for(&operation, |state| {
             matches!(state, PairingProgress::Waiting { .. })
@@ -269,7 +286,7 @@ async fn upgrade_rejection_distinguishes_expiry_from_other_failures() {
         let (service, server) = script_service(Script::Rejected(status, code));
         let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
-        drive(&service, &updates, stopping, || clock(START)).await;
+        drive(&service, &updates, stopping, || clock(START), None).await;
         assert!(
             matches!(*progress.borrow(), PairingProgress::Finished(outcome) if outcome == expected)
         );
@@ -288,7 +305,9 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
         worker: None,
     };
     let worker =
-        tokio::spawn(async move { drive(&service, &updates, stopping, || clock(START)).await });
+        tokio::spawn(
+            async move { drive(&service, &updates, stopping, || clock(START), None).await },
+        );
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })
@@ -351,4 +370,37 @@ async fn live_close_publishes_failure_while_cancellation_response_is_pending() {
         PairingProgress::Finished(PairingOutcome::Failed)
     ));
     assert!(matches!(replaced_before_delete, Ok(Ok(()))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn waits_for_cancellation_after_handling_a_closed_session_response() {
+    let claim = Claim {
+        pairing_id: "pairing-1".into(),
+        sender_id: "sender-1".into(),
+    };
+    let (send_milestone, milestone) = oneshot::channel();
+    let report = async {
+        Err(CompletionError::Rejected {
+            status: StatusCode::GONE,
+            code: Some("pairing_session_closed".into()),
+        })
+    };
+    let result = wait_for_confirmation(report, async { milestone.await.unwrap() }, &claim);
+    let mut result = std::pin::pin!(result);
+
+    assert!(
+        result
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+            .is_pending()
+    );
+    tokio::time::advance(Duration::from_secs(3)).await;
+    assert!(
+        result
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+            .is_pending()
+    );
+    send_milestone.send(Some(PairingOutcome::Canceled)).unwrap();
+    assert_eq!(result.await, PairingOutcome::Canceled);
 }

@@ -1,11 +1,10 @@
 use std::{
-    io::{self, BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
-use native_tls::{Identity, TlsAcceptor};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
@@ -13,34 +12,9 @@ use super::{CreateError, NewReceiverSession, Service, SessionState, client_build
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
-pub(crate) fn listen(host: &str) -> (TcpListener, String) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let origin = format!("https://{host}:{}", listener.local_addr().unwrap().port());
-    (listener, origin)
-}
-
-pub(crate) fn accept_loopback(listener: &TcpListener) -> TcpStream {
-    let timeout = Duration::from_secs(5);
-    let deadline = Instant::now() + timeout;
-    listener.set_nonblocking(true).unwrap();
-    let stream = loop {
-        match listener.accept() {
-            Ok((stream, _)) => break stream,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                assert!(
-                    Instant::now() < deadline,
-                    "client did not reach the TLS fixture"
-                );
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("TLS fixture accept failed: {error}"),
-        }
-    };
-    stream.set_nonblocking(false).unwrap();
-    stream.set_read_timeout(Some(timeout)).unwrap();
-    stream.set_write_timeout(Some(timeout)).unwrap();
-    stream
-}
+#[path = "../../tests/support/tls.rs"]
+mod tls;
+pub(crate) use tls::{accept_loopback, acceptor, listen};
 
 pub(crate) fn local_service(
     listener: &TcpListener,
@@ -56,15 +30,6 @@ pub(crate) fn local_service(
     }
     service.config.client = client.build().unwrap();
     service
-}
-
-pub(crate) fn acceptor() -> TlsAcceptor {
-    let identity = Identity::from_pkcs12(
-        include_bytes!("../../tests/fixtures/service/server.p12"),
-        "pin-glide-test",
-    )
-    .unwrap();
-    TlsAcceptor::new(identity).unwrap()
 }
 
 fn respond(

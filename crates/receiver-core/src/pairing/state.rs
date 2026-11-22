@@ -13,32 +13,12 @@ pub enum SessionState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PairingPhase {
-    Preparing,
-    Waiting,
-    Confirming,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PairingOutcome {
     CreateFailed,
     Failed,
     Expired,
     Canceled,
-}
-
-impl PairingPhase {
-    pub fn advance(self, state: SessionState) -> Result<Self, PairingOutcome> {
-        match state {
-            SessionState::AwaitingAuthorization if self != Self::Confirming => Ok(Self::Waiting),
-            SessionState::AwaitingAuthorization | SessionState::AwaitingConfirmation => {
-                Ok(Self::Confirming)
-            }
-            SessionState::Canceled => Err(PairingOutcome::Canceled),
-            SessionState::Expired => Err(PairingOutcome::Expired),
-            _ => Err(PairingOutcome::Failed),
-        }
-    }
+    KeyConfirmed(SessionState),
 }
 
 pub fn pairing_lifetime(

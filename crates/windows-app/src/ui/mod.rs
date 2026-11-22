@@ -7,6 +7,8 @@ use crate::{WelcomeWindow, platform};
 
 mod pairing;
 
+pub use pairing::open_pairing;
+
 thread_local! {
     static WELCOME: RefCell<Option<WelcomeWindow>> = const { RefCell::new(None) };
 }

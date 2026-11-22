@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostThreadMessageW, WM_APP, WM_CANCELMODE, WM_KEYDOWN, WM_QUIT, WM_RBUTTONUP,
 };
 
-use super::{platform, run};
+use super::{application::run, platform};
 
 #[path = "../tests/support/mod.rs"]
 mod support;

@@ -71,6 +71,12 @@ within 500 lines.
 - Use one writer. Stage and flush the new file before replacing the current
   one. Keep the previous committed data on failure. Read supported older
   formats and leave unreadable or newer unsupported files intact.
+- Store Receiver registration in `Pin Glide/registration.json` under Local
+  AppData. Version 2 adds `provisional_pairing` with the session, Receiver,
+  Sender and Pairing IDs and the protected key blob. Preserve the active
+  Receiver credential and Pairings when staging a provisional key. The version
+  1 reader accepts the same active fields without `provisional_pairing` and
+  migrates them on the next successful write.
 - Scope key loss and Pairing removal to the affected Pairing. Receiver
   revocation clears registration and Pairing state while keeping settings.
   Missing R requires explicit new registration. Installation upgrades
@@ -120,6 +126,7 @@ interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
 | `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
 | `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
 | `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop with Pin Glide stopped |
+| `cargo test --locked -p windows-app --test pairing_desktop -- --ignored` | Check key-check motion, QR removal and terminal states on an interactive Windows desktop |
 
 The source gates cover handwritten files in `receiver-core` and `windows-app`.
 Generated code is checked through regeneration and compilation when added.
