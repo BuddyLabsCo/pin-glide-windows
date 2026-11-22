@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+#[path = "support/delivery.rs"]
+mod delivery;
 #[path = "support/dpapi.rs"]
 mod dpapi;
 #[path = "support/pairing.rs"]
@@ -7,8 +9,6 @@ mod fixture;
 
 use std::{fs, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
@@ -152,15 +152,23 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
         assert_rejection_preserves_registration(&path, &active);
     }
     server.join().unwrap();
-    assert_latest_delivery(&operation, scenario);
+    assert_latest_delivery(&operation, scenario, &path);
     operation.shutdown();
 }
 
-fn assert_latest_delivery(operation: &PairingOperation, scenario: Scenario) {
+fn assert_latest_delivery(
+    operation: &PairingOperation,
+    scenario: Scenario,
+    path: &std::path::Path,
+) {
     if matches!(scenario, Scenario::Ready | Scenario::ResumeUncertain) {
         assert_eq!(
             operation.latest_otp().as_deref().map(String::as_str),
             Some("A-482913")
+        );
+        assert_eq!(
+            fs::read(path.with_file_name("delivery-rejections.log")).unwrap(),
+            b"InvalidEncoding\nInvalidEnvelope\nAuthenticationFailed\nInvalidPlaintext\n",
         );
     }
 }
@@ -412,7 +420,8 @@ fn exercise_enrollment(
     delivery.send(Message::Ping(vec![13].into())).unwrap();
     assert_eq!(delivery.read().unwrap(), Message::Pong(vec![13].into()));
     let stored = read_registration(path);
-    assert_delivery_receipts(&mut delivery, &stored);
+    let key = dpapi::unprotect(&stored["active_pairings"]["pairing-1"]["protected_key"]);
+    delivery::assert_delivery_receipts(&mut delivery, &key);
     assert!(stored["enrollment"].is_null());
     assert!(stored["provisional_pairing"].is_null());
     assert_eq!(stored["receiver_id"], "receiver-1");
@@ -425,51 +434,6 @@ fn exercise_enrollment(
         "sender-1"
     );
     assert_eq!(stored["active_pairings"]["pairing-1"]["name"], "未命名设备");
-}
-
-fn assert_delivery_receipts(delivery: &mut Socket, stored: &Value) {
-    use tokio_tungstenite::tungstenite::Message;
-    let key = dpapi::unprotect(&stored["active_pairings"]["pairing-1"]["protected_key"]);
-    let nonce = [17; 12];
-    let sms = br#"{"type":"verification_message","smsText":"Synthetic SMS","otp":"A-482913"}"#;
-    let ciphertext = Aes256Gcm::new_from_slice(&key)
-        .unwrap()
-        .encrypt(&Nonce::from(nonce), sms.as_slice())
-        .unwrap();
-    for envelope in [
-        json!({
-            "type":"delivery", "version":1, "senderId":"sender-1", "messageId":"bad-body",
-            "receiverId":"receiver-1", "pairingId":"pairing-1", "cryptoVersion":1,
-            "nonce":"not-base64", "ciphertext":"not-base64",
-        }),
-        json!({
-            "type":"delivery", "version":1, "senderId":"sender-1", "messageId":"missing-body",
-        }),
-        json!({
-            "type":"delivery", "version":1, "senderId":"sender-1", "messageId":"valid-body",
-            "receiverId":"receiver-1", "pairingId":"pairing-1", "cryptoVersion":1,
-            "nonce":STANDARD.encode(nonce), "ciphertext":STANDARD.encode(ciphertext),
-        }),
-    ] {
-        send_event(delivery, envelope.clone());
-        let receipt: Value =
-            serde_json::from_str(delivery.read().unwrap().to_text().unwrap()).unwrap();
-        assert_eq!(
-            receipt,
-            json!({
-                "type":"receipt", "version":1,
-                "senderId":"sender-1", "messageId":envelope["messageId"],
-            }),
-        );
-    }
-    send_event(
-        delivery,
-        json!({"type":"delivery", "version":1, "messageId":"no-sender"}),
-    );
-    assert!(matches!(
-        delivery.read().unwrap(),
-        Message::Close(Some(frame)) if frame.code == CloseCode::Protocol
-    ));
 }
 
 fn decode_qr(code: &qrcode::QrCode) -> Value {

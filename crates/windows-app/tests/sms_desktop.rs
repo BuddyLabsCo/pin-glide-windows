@@ -90,14 +90,8 @@ async fn check_sample(inbox: &mut Inbox, sample: Sample) {
             click(window, LogicalPosition::new(30.0, 95.0));
         }
         "sms-long-code" => {
-            check_copy(inbox, window, &otp);
-            let message = deliver(inbox, &sms, &otp);
-            let busy_popup = show_sms(message, SENDER_NAME.into(), true)
-                .await
-                .unwrap()
-                .unwrap();
-            dismiss_with_clipboard_busy(busy_popup.window());
-            assert!(!busy_popup.window().is_visible());
+            dismiss_with_clipboard_busy(window);
+            check_copy(inbox, &sms, &otp).await;
         }
         _ => click(window, LogicalPosition::new(30.0, 95.0)),
     }
@@ -167,7 +161,16 @@ fn dismiss_with_clipboard_busy(window: &slint::Window) {
     owner.join().unwrap();
 }
 
-fn check_copy(inbox: &mut Inbox, window: &Window, expected: &str) {
+async fn check_copy(inbox: &mut Inbox, sms: &str, long_code: &str) {
+    let mut nonce = [0; 16];
+    getrandom::fill(&mut nonce).unwrap();
+    let expected = format!("{long_code}-{}", STANDARD.encode(nonce));
+    let message = deliver(inbox, sms, &expected);
+    let popup = show_sms(message, SENDER_NAME.into(), true)
+        .await
+        .unwrap()
+        .unwrap();
+    let window = popup.window();
     deliver(inbox, "New SMS", "newest-code");
     assert_eq!(inbox.latest(), Some("newest-code"));
     click(window, LogicalPosition::new(318.0, 60.0));
@@ -218,15 +221,20 @@ fn check_body_only_scroll(window: &Window) {
     });
     let after = window.take_snapshot().unwrap();
     let scale = window.scale_factor();
-    let row = |position: f32| (position * scale).round() as usize * before.width() as usize;
+    let pixel = |position: f32| (position * scale).round() as usize;
+    let width = before.width() as usize;
+    let row = |position| pixel(position) * width;
     let frames = (before.as_slice(), after.as_slice());
     assert!(
         frames.0[..row(86.0)] == frames.1[..row(86.0)],
         "the code row moved"
     );
     assert!(
-        frames.0[row(86.0)..row(193.0)] != frames.1[row(86.0)..row(193.0)],
-        "the body did not scroll"
+        (pixel(86.0)..pixel(193.0)).any(|line| {
+            let text_only = line * width + pixel(14.0)..line * width + pixel(356.0);
+            frames.0[text_only.clone()] != frames.1[text_only]
+        }),
+        "the SMS text did not scroll"
     );
     assert!(
         frames.0[row(193.0)..] == frames.1[row(193.0)..],

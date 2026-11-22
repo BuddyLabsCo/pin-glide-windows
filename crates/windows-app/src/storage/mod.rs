@@ -9,6 +9,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+mod diagnostics;
+pub(crate) use diagnostics::DeliveryRejection;
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
 mod sender_names;

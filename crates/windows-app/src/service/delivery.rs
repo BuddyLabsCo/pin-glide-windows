@@ -14,7 +14,7 @@ use super::{
     pairing_events::{PairingEventError, Socket},
 };
 
-use crate::storage::RegistrationStore;
+use crate::storage::{DeliveryRejection, RegistrationStore};
 
 #[cfg(test)]
 mod tests;
@@ -101,16 +101,22 @@ impl DeliveryConnection {
             let result = match frame {
                 Message::Text(text) => {
                     order += 1;
-                    handle_text(&mut self.socket, &text, &self.receiver_id, |delivery| {
-                        authenticate(
-                            &self.receiver_id,
-                            delivery,
-                            Arrival { time, order },
-                            store,
-                            inbox,
-                            notify,
-                        );
-                    })
+                    handle_text(
+                        &mut self.socket,
+                        &text,
+                        &self.receiver_id,
+                        store,
+                        |delivery| {
+                            authenticate(
+                                &self.receiver_id,
+                                delivery,
+                                Arrival { time, order },
+                                store,
+                                inbox,
+                                notify,
+                            )
+                        },
+                    )
                     .await
                 }
                 Message::Ping(_) | Message::Pong(_) => self
@@ -144,7 +150,8 @@ async fn handle_text(
     socket: &mut (impl Sink<Message, Error = SocketError> + Unpin),
     text: &str,
     receiver_id: &str,
-    authenticate: impl FnOnce(Delivery),
+    store: &RegistrationStore,
+    authenticate: impl FnOnce(Delivery) -> Result<(), DeliveryRejection>,
 ) -> Result<(), PairingEventError> {
     let header: EventHeader =
         serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
@@ -164,10 +171,13 @@ async fn handle_text(
     };
     let receipt = serde_json::to_string(&receipt).map_err(|_| PairingEventError::Protocol)?;
     let sent = socket.send(Message::text(receipt)).await;
-    match serde_json::from_str::<Delivery>(text) {
+    let authenticated = match serde_json::from_str::<Delivery>(text) {
         Ok(delivery) if delivery.receiver_id == receiver_id => authenticate(delivery),
-        Ok(_) => eprintln!("SMS delivery rejected: ReceiverMismatch"),
-        Err(_) => eprintln!("SMS delivery rejected: InvalidEnvelope"),
+        Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
+        Err(_) => Err(DeliveryRejection::InvalidEnvelope),
+    };
+    if let Err(category) = authenticated {
+        let _ = store.record_delivery_rejection(category);
     }
     sent.map_err(|_| PairingEventError::Transport)
 }
@@ -179,12 +189,11 @@ fn authenticate(
     store: &RegistrationStore,
     inbox: &Mutex<Inbox>,
     notify: fn(ReceivedSms),
-) {
+) -> Result<(), DeliveryRejection> {
     let mut sender_name = String::new();
-    let Ok(mut inbox) = inbox.lock() else {
-        eprintln!("SMS delivery rejected: InboxUnavailable");
-        return;
-    };
+    let mut inbox = inbox
+        .lock()
+        .map_err(|_| DeliveryRejection::InboxUnavailable)?;
     let result = inbox.receive(
         arrival,
         Envelope {
@@ -200,10 +209,9 @@ fn authenticate(
         },
     );
     drop(inbox);
-    match result {
-        Ok(sms) => notify(ReceivedSms { sms, sender_name }),
-        Err(category) => eprintln!("SMS delivery rejected: {category:?}"),
-    }
+    let sms = result.map_err(DeliveryRejection::Receive)?;
+    notify(ReceivedSms { sms, sender_name });
+    Ok(())
 }
 
 fn correlation(value: Option<String>) -> Result<String, PairingEventError> {

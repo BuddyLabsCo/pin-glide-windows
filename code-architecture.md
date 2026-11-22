@@ -88,6 +88,8 @@ within 500 lines.
   preserve data. Uninstall removes app-owned data and registrations.
 - Keep SMS bodies in their popups and the latest OTP in memory. Keep both
   out of persistent storage and logs. Leave the OS clipboard alone on cleanup.
+- Write fixed delivery rejection categories to `Pin Glide/delivery-rejections.log`
+  under Local AppData. Reset the log at 16 KiB and keep the newest record.
 
 ## 5. Generated code
 

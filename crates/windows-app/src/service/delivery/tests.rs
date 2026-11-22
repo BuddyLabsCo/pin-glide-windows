@@ -4,6 +4,8 @@ use super::*;
 
 #[tokio::test]
 async fn attempts_the_receipt_before_authentication_even_when_sending_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let delivery = r#"{"type":"delivery","version":1,"cryptoVersion":1,"senderId":"sender",
         "messageId":"message","receiverId":"receiver","pairingId":"pairing","nonce":"","ciphertext":""}"#;
     for fails in [false, true] {
@@ -23,12 +25,13 @@ async fn attempts_the_receipt_before_authentication_even_when_sending_fails() {
                     Ok(frame)
                 })
             });
-        let result = handle_text(&mut socket, delivery, "receiver", |_| {
+        let result = handle_text(&mut socket, delivery, "receiver", &store, |_| {
             assert!(
                 attempted.get(),
                 "authenticate only after attempting the Receipt"
             );
             authenticated.set(true);
+            Ok(())
         })
         .await;
         assert!(authenticated.get());
