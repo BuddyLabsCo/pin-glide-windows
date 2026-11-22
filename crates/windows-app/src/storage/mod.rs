@@ -158,30 +158,32 @@ impl RegistrationStore {
         let Version { version } = serde_json::from_reader(BufReader::new(&file))?;
         use io::Seek;
         file.rewind()?;
-        match version {
+        let mut stored = match version {
             1 => {
                 let legacy: LegacyRegistration = serde_json::from_reader(BufReader::new(file))?;
                 if legacy.version != 1 {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
-                Ok(Registration {
+                Registration {
                     version: CURRENT_VERSION,
                     receiver_id: legacy.receiver_id,
                     protected_receiver_token: legacy.protected_receiver_token,
                     active_pairings: legacy.active_pairings,
                     provisional_pairing: None,
                     enrollment: None,
-                })
+                }
             }
             2..=CURRENT_VERSION => {
                 let stored: Registration = serde_json::from_reader(BufReader::new(file))?;
                 if stored.version != version || (version == 2 && stored.enrollment.is_some()) {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
-                Ok(stored)
+                stored
             }
-            _ => Err(io::ErrorKind::InvalidData.into()),
-        }
+            _ => return Err(io::ErrorKind::InvalidData.into()),
+        };
+        stored.backfill_sender_names();
+        Ok(stored)
     }
 }
 

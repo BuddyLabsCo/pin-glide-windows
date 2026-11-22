@@ -1,21 +1,31 @@
 import { Button, Palette } from "std-widgets.slint";
 
+struct NamePaste {
+    text: string,
+    caret: int,
+    error: string,
+    invalid-text: bool,
+}
+
 component SenderNameForm inherits Rectangle {
     in property <bool> chinese;
     in-out property <string> name;
     in-out property <string> error;
     in-out property <bool> invalid-paste;
-    callback validate-paste() -> bool;
+    callback read-paste(string, int, int) -> NamePaste;
     callback done();
     public function focus-name() {
         field.focus();
     }
     function paste-name() {
-        root.invalid-paste = !root.validate-paste();
-        root.error = "";
-        if !root.invalid-paste {
-            field.paste();
+        let pasted = root.read-paste(root.name, field.anchor-position-byte-offset, field.cursor-position-byte-offset);
+        root.invalid-paste = pasted.invalid-text;
+        root.error = pasted.error;
+        if pasted.caret >= 0 {
+            root.name = pasted.text;
+            field.set-selection-offsets(pasted.caret, pasted.caret);
         }
+        field.focus();
     }
 
     Text {
@@ -140,7 +150,7 @@ component SenderNameForm inherits Rectangle {
         height: 36px;
         property <string> label: root.chinese ? "完成" : "Done";
         border-radius: 4px;
-        background: done-touch.pressed ? #004a8e : done-touch.has-hover ? #165fa4 : #005fb8;
+        background: #005fb8;
         accessible-role: button;
         accessible-label: self.label;
         accessible-action-default => { root.done(); }
@@ -150,6 +160,11 @@ component SenderNameForm inherits Rectangle {
             text: parent.label;
             color: white;
             font-weight: 600;
+        }
+
+        Rectangle {
+            border-radius: 4px;
+            background: done-touch.has-hover ? #284e7912 : transparent;
         }
 
         if done-focus.has-focus: Rectangle {
@@ -275,7 +290,7 @@ export component PairingWindow inherits Window {
     in-out property <bool> invalid-paste;
     callback refresh();
     callback finish-naming();
-    callback validate-name-paste() -> bool;
+    callback read-name-paste(string, int, int) -> NamePaste;
     public function focus-name() {
         name-form.focus-name();
     }
@@ -337,30 +352,33 @@ export component PairingWindow inherits Window {
                 border-radius: 12px;
                 border-width: 1px;
                 border-color: #dbe8e2;
-                if root.loading || (root.completed && root.motion-enabled && root.completion-motion): Rectangle {
-                    width: 160px;
-                    height: 160px;
-                    opacity: root.loading ? 1 : 0;
-                    animate opacity { duration: root.motion-enabled && root.completed ? 180ms : 0ms; }
-                    QrLoading {
-                        width: 160px;
-                        height: 160px;
-                        seconds: root.motion-enabled && parent.opacity > 0 ? mod(animation-tick(), 1.8s) / 1s : 0.68;
-                    }
-                }
-                if root.completed || root.loading: Rectangle {
+                if root.completed: Rectangle {
                     width: 64px;
                     height: 64px;
                     border-radius: 32px;
                     background: #e3f3ec;
-                    opacity: root.completed ? 1 : 0;
-                    animate opacity { duration: root.motion-enabled && root.completion-motion ? 180ms : 0ms; }
                     Path {
                         width: 28px;
                         height: 28px;
                         commands: "M 4 14 L 11 21 L 24 8";
                         stroke: #177761;
                         stroke-width: 2.5px;
+                    }
+                }
+                if root.loading || (root.completed && root.motion-enabled && root.completion-motion): Rectangle {
+                    border-radius: 12px;
+                    border-width: 1px;
+                    border-color: #dbe8e2;
+                    background: white;
+                    opacity: root.loading ? 1 : 0;
+                    animate opacity {
+                        duration: root.motion-enabled && root.completed ? 180ms : 0ms;
+                        easing: linear;
+                    }
+                    QrLoading {
+                        width: 160px;
+                        height: 160px;
+                        seconds: root.motion-enabled && parent.opacity > 0 ? mod(animation-tick(), 1.8s) / 1s : 0.68;
                     }
                 }
                 if root.waiting: Image {
@@ -435,7 +453,7 @@ export component PairingWindow inherits Window {
         name <=> root.sender-name;
         error <=> root.name-error;
         invalid-paste <=> root.invalid-paste;
-        validate-paste => { root.validate-name-paste() }
+        read-paste(name, anchor, cursor) => { root.read-name-paste(name, anchor, cursor) }
         done => { root.finish-naming(); }
     }
 }

@@ -1,31 +1,45 @@
 use std::{ptr, slice};
 
 use windows_sys::Win32::System::{
-    DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard},
+    DataExchange::{CloseClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard},
     Memory::{GlobalLock, GlobalSize, GlobalUnlock},
     Ole::CF_UNICODETEXT,
 };
 
-pub(crate) fn unicode_clipboard_is_valid() -> bool {
-    // SAFETY: the clipboard stays open and the handle stays locked while its buffer is borrowed.
+pub(crate) enum ClipboardError {
+    Unavailable,
+    InvalidText,
+}
+
+pub(crate) fn read_unicode_clipboard() -> Result<Option<String>, ClipboardError> {
+    let format = u32::from(CF_UNICODETEXT);
+    // SAFETY: read only while the clipboard is open, and keep its memory locked through decoding.
     unsafe {
         if OpenClipboard(ptr::null_mut()) == 0 {
-            return false;
+            return Err(ClipboardError::Unavailable);
         }
-        let handle = GetClipboardData(u32::from(CF_UNICODETEXT));
-        let mut valid = true;
-        if !handle.is_null() {
+        let result = if IsClipboardFormatAvailable(format) == 0 {
+            Ok(None)
+        } else {
+            let handle = GetClipboardData(format);
             let data = GlobalLock(handle).cast::<u16>();
-            valid = !data.is_null();
-            if valid {
-                let count = GlobalSize(handle) / size_of::<u16>();
-                let units = slice::from_raw_parts(data, count);
-                valid = char::decode_utf16(units.iter().copied().take_while(|&unit| unit != 0))
-                    .all(|character| character.is_ok());
+            if data.is_null() {
+                Err(ClipboardError::Unavailable)
+            } else {
+                let capacity = GlobalSize(handle) / size_of::<u16>();
+                let result = (0..capacity)
+                    .find(|&index| data.add(index).read() == 0)
+                    .ok_or(ClipboardError::InvalidText)
+                    .and_then(|length| {
+                        String::from_utf16(slice::from_raw_parts(data, length))
+                            .map(Some)
+                            .map_err(|_| ClipboardError::InvalidText)
+                    });
                 GlobalUnlock(handle);
+                result
             }
-        }
+        };
         CloseClipboard();
-        valid
+        result
     }
 }

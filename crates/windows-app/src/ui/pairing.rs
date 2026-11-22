@@ -2,7 +2,7 @@ use std::{cell::RefCell, sync::Arc};
 
 use crate::service::{PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service};
 use crate::storage::SenderNameError;
-use crate::{PairingStage, PairingWindow, platform};
+use crate::{NamePaste, PairingStage, PairingWindow, platform};
 use qrcode::{Color, QrCode};
 use slint::{
     CloseRequestResponse, ComponentHandle, Image, PlatformError, Rgb8Pixel, SharedPixelBuffer,
@@ -58,7 +58,8 @@ fn create_view(
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     window.on_refresh(refresh);
     window.on_finish_naming(finish_naming);
-    window.on_validate_name_paste(platform::unicode_clipboard_is_valid);
+    window
+        .on_read_name_paste(move |name, anchor, cursor| paste_name(chinese, name, anchor, cursor));
     if visible {
         window.show()?;
         super::focus(window.window());
@@ -78,11 +79,22 @@ fn create_view(
 }
 
 pub(super) fn reopen() -> Result<bool, PlatformError> {
+    reopen_view(false)
+}
+
+pub(super) fn reopen_pending_name() -> Result<bool, PlatformError> {
+    reopen_view(true)
+}
+
+fn reopen_view(pending_name_only: bool) -> Result<bool, PlatformError> {
     PAIRING.with_borrow_mut(|pairing| {
         let Some(view) = pairing else {
             return Ok(false);
         };
         view.render();
+        if pending_name_only && (view.named || view.window.get_stage() != PairingStage::Completed) {
+            return Ok(false);
+        }
         if view.named {
             if let Some(store) = view.operation.registration() {
                 return super::show_registered(store, view.window.get_chinese());
@@ -151,6 +163,40 @@ fn refresh() {
     });
 }
 
+fn paste_name(chinese: bool, name: slint::SharedString, anchor: i32, cursor: i32) -> NamePaste {
+    let mut pasted = NamePaste {
+        caret: -1,
+        ..Default::default()
+    };
+    match platform::read_unicode_clipboard() {
+        Ok(Some(text)) if !text.is_empty() => {
+            let mut name = name.to_string();
+            let start = anchor.min(cursor) as usize;
+            let end = anchor.max(cursor) as usize;
+            if name.get(start..end).is_some() {
+                let text = text.replace("\r\n", " ").replace(['\r', '\n'], " ");
+                name.replace_range(start..end, &text);
+                pasted.text = name.into();
+                pasted.caret = i32::try_from(start + text.len()).unwrap_or(i32::MAX);
+            }
+        }
+        Ok(_) => {}
+        Err(platform::ClipboardError::InvalidText) => {
+            pasted.invalid_text = true;
+            pasted.error = name_error(chinese, SenderNameError::InvalidCharacter).into();
+        }
+        Err(platform::ClipboardError::Unavailable) => {
+            pasted.error = if chinese {
+                "无法读取剪贴板，请重试。"
+            } else {
+                "Could not read the clipboard. Try again."
+            }
+            .into();
+        }
+    }
+    pasted
+}
+
 fn finish_naming() {
     PAIRING.with_borrow_mut(|pairing| {
         let Some(view) = pairing else { return };
@@ -180,27 +226,25 @@ fn finish_naming() {
             },
             Err(error) => error,
         };
-        view.window.set_name_error(
-            match (view.window.get_chinese(), error) {
-                (true, SenderNameError::Empty) => "请填写设备名称。",
-                (true, SenderNameError::TooLong) => "设备名称最多 40 个字符。",
-                (true, SenderNameError::InvalidCharacter) => "名称包含无效字符，请重新输入。",
-                (true, SenderNameError::Duplicate) => "已有一台同名设备，请换一个名称。",
-                (true, SenderNameError::Storage) => "无法保存设备名称，请重试。",
-                (false, SenderNameError::Empty) => "Enter a device name.",
-                (false, SenderNameError::TooLong) => "Use at most 40 characters.",
-                (false, SenderNameError::InvalidCharacter) => {
-                    "The name contains an invalid character."
-                }
-                (false, SenderNameError::Duplicate) => {
-                    "A device already uses this name. Choose another."
-                }
-                (false, SenderNameError::Storage) => "Could not save the device name. Try again.",
-            }
-            .into(),
-        );
+        view.window
+            .set_name_error(name_error(view.window.get_chinese(), error).into());
         view.window.invoke_focus_name();
     });
+}
+
+fn name_error(chinese: bool, error: SenderNameError) -> &'static str {
+    match (chinese, error) {
+        (true, SenderNameError::Empty) => "请填写设备名称。",
+        (true, SenderNameError::TooLong) => "设备名称最多 40 个字符。",
+        (true, SenderNameError::InvalidCharacter) => "名称包含无效字符，请重新输入。",
+        (true, SenderNameError::Duplicate) => "已有一台同名设备，请换一个名称。",
+        (true, SenderNameError::Storage) => "无法保存设备名称，请重试。",
+        (false, SenderNameError::Empty) => "Enter a device name.",
+        (false, SenderNameError::TooLong) => "Use at most 40 characters.",
+        (false, SenderNameError::InvalidCharacter) => "The name contains an invalid character.",
+        (false, SenderNameError::Duplicate) => "A device already uses this name. Choose another.",
+        (false, SenderNameError::Storage) => "Could not save the device name. Try again.",
+    }
 }
 
 impl View {
@@ -243,11 +287,9 @@ impl View {
             self.window.set_completion_motion(visible);
             if visible
                 && let PairingProgress::Completed { pairing_id } = progress
-                && let Some(store) = self.operation.registration()
-                && let Ok(names) = store.sender_names()
-                && let Some(name) = names.get(&pairing_id)
+                && let Ok(Some(name)) = self.operation.sender_label(&pairing_id)
             {
-                self.window.set_sender_name(name.as_str().into());
+                self.window.set_sender_name(name.into());
             }
         }
         self.window.set_stage(stage);

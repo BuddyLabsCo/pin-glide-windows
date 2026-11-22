@@ -161,6 +161,14 @@ impl PairingOperation {
         self.store.as_ref()
     }
 
+    #[cfg(windows)]
+    pub fn sender_label(&self, pairing_id: &str) -> std::io::Result<Option<String>> {
+        match self.registration() {
+            Some(store) => super::delivery::sender_label(store, pairing_id),
+            None => Ok(None),
+        }
+    }
+
     pub fn current(&self) -> PairingProgress {
         self.progress.borrow().clone()
     }

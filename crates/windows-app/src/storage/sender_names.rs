@@ -3,6 +3,19 @@ use super::Registration;
 pub(super) const UNNAMED: &str = "未命名设备";
 
 impl Registration {
+    pub(super) fn backfill_sender_names(&mut self) {
+        let missing: Vec<_> = self
+            .active_pairings
+            .iter()
+            .filter(|(_, pairing)| pairing.name.is_none())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in missing {
+            let name = self.first_available_name();
+            self.active_pairings.get_mut(&id).unwrap().name = Some(name);
+        }
+    }
+
     pub(super) fn first_available_name(&self) -> String {
         std::iter::once(UNNAMED.to_owned())
             .chain((2..).map(|suffix| format!("{UNNAMED}-{suffix}")))
@@ -13,7 +26,11 @@ impl Registration {
     fn has_sender_name(&self, except: &str, name: &str) -> bool {
         let key = match_key(name);
         self.active_pairings.iter().any(|(id, pairing)| {
-            id != except && match_key(pairing.name.as_deref().unwrap_or(UNNAMED)) == key
+            id != except
+                && pairing
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| match_key(name) == key)
         })
     }
 }
@@ -37,7 +54,7 @@ fn match_key(name: &str) -> String {
 mod windows_names {
     use std::{collections::BTreeMap, io};
 
-    use super::{super::RegistrationStore, UNNAMED};
+    use super::super::RegistrationStore;
 
     #[derive(Debug, PartialEq, Eq)]
     pub(crate) enum SenderNameError {
@@ -55,12 +72,20 @@ mod windows_names {
     }
 
     impl RegistrationStore {
+        pub(crate) fn sender_name(&self, id: &str) -> io::Result<Option<String>> {
+            Ok(self
+                .read()?
+                .active_pairings
+                .remove(id)
+                .and_then(|pairing| pairing.name))
+        }
+
         pub(crate) fn sender_names(&self) -> io::Result<BTreeMap<String, String>> {
             Ok(self
                 .read()?
                 .active_pairings
                 .into_iter()
-                .map(|(id, pairing)| (id, pairing.name.unwrap_or_else(|| UNNAMED.into())))
+                .filter_map(|(id, pairing)| pairing.name.map(|name| (id, name)))
                 .collect())
         }
 

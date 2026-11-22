@@ -1,15 +1,21 @@
-use std::{fs, io::Write, path::Path, ptr};
+use std::{
+    fs,
+    io::Write,
+    path::Path,
+    ptr,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use serde_json::json;
 use windows_sys::Win32::{
-    Foundation::{HWND, LPARAM, RECT},
+    Foundation::{HWND, LPARAM},
     Graphics::Gdi::{
         BI_RGB, BITMAPINFO, BitBlt, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
         DeleteObject, GetDC, ReleaseDC, SRCCOPY, SelectObject,
     },
-    UI::WindowsAndMessaging::{
-        EnumWindows, GetClientRect, GetWindowThreadProcessId, IsWindowVisible,
-    },
+    UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
 };
 
 const WIDTH: i32 = 400;
@@ -40,15 +46,78 @@ pub(super) fn seed_sender_names(path: &Path, duplicate: bool, hidden: bool) {
     .unwrap();
 }
 
-pub(super) fn verify_main(evidence: Option<&Path>) {
+pub(super) fn main_window() -> Option<HWND> {
     let mut main: HWND = ptr::null_mut();
     // SAFETY: the output pointer is valid for the synchronous enumeration.
     unsafe {
         EnumWindows(Some(find_main), (&raw mut main) as LPARAM);
     }
-    assert!(!main.is_null(), "a visible 400 × 576 Main window");
+    (!main.is_null()).then_some(main)
+}
+
+pub(super) fn check_main(
+    opened_at: Instant,
+    label: &mut Option<mpsc::Receiver<bool>>,
+    expected: &str,
+    evidence: Option<&Path>,
+) {
+    if let Some(label) = label {
+        match label.try_recv() {
+            Ok(found) => {
+                assert!(found, "Main exposes the saved Sender label");
+                slint::quit_event_loop().unwrap();
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(error) => panic!("{error}"),
+        }
+    } else if opened_at.elapsed() >= Duration::from_millis(250) {
+        *label = Some(verify_main(expected, evidence));
+    }
+}
+
+fn verify_main(expected: &str, evidence: Option<&Path>) -> mpsc::Receiver<bool> {
+    let main = main_window().expect("a visible 400 × 576 Main window");
     if let Some(directory) = evidence {
         capture_main(main, &directory.join("main-ready.ppm"));
+    }
+    let expected = expected.to_owned();
+    let handle = main as usize;
+    let (send, result) = mpsc::channel();
+    thread::spawn(move || {
+        let found = accessible_name(handle, &expected).unwrap();
+        send.send(found).unwrap();
+    });
+    result
+}
+
+fn accessible_name(handle: usize, expected: &str) -> windows::core::Result<bool> {
+    use windows::Win32::{
+        Foundation::HWND,
+        System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+            CoUninitialize,
+        },
+        UI::Accessibility::{CUIAutomation, IUIAutomation, TreeScope_Descendants},
+    };
+    // SAFETY: this fresh thread uses COM only between initialization and teardown.
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+        let result = (|| {
+            let automation: IUIAutomation =
+                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+            let root = automation.ElementFromHandle(HWND(handle as *mut _))?;
+            let children =
+                root.FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
+            for index in 0..children.Length()? {
+                let element = children.GetElement(index)?;
+                if !element.CurrentIsOffscreen()?.as_bool() && element.CurrentName()? == expected {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })();
+        CoUninitialize();
+        result
     }
 }
 
@@ -57,20 +126,19 @@ unsafe extern "system" fn find_main(window: HWND, output: LPARAM) -> i32 {
     unsafe {
         let mut process = 0;
         GetWindowThreadProcessId(window, &mut process);
-        if process == std::process::id() && IsWindowVisible(window) != 0 {
-            let mut client = RECT::default();
-            if GetClientRect(window, &raw mut client) != 0
-                && (client.right, client.bottom) == (WIDTH, HEIGHT)
-            {
-                *(output as *mut HWND) = window;
-                return 0;
-            }
+        if process == std::process::id()
+            && IsWindowVisible(window) != 0
+            && super::window_size::client_size(window, WIDTH, HEIGHT).is_some()
+        {
+            *(output as *mut HWND) = window;
+            return 0;
         }
     }
     1
 }
 
 fn capture_main(window: HWND, path: &Path) {
+    let (width, height) = super::window_size::client_size(window, WIDTH, HEIGHT).unwrap();
     // SAFETY: the window is live and the DIB buffer stays allocated until its pixels are copied.
     let rgb = unsafe {
         let client = GetDC(window);
@@ -79,8 +147,8 @@ fn capture_main(window: HWND, path: &Path) {
         assert!(!target.is_null());
         let mut info = BITMAPINFO::default();
         info.bmiHeader.biSize = size_of_val(&info.bmiHeader) as u32;
-        info.bmiHeader.biWidth = WIDTH;
-        info.bmiHeader.biHeight = -HEIGHT;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
         info.bmiHeader.biPlanes = 1;
         info.bmiHeader.biBitCount = 32;
         info.bmiHeader.biCompression = BI_RGB;
@@ -95,8 +163,8 @@ fn capture_main(window: HWND, path: &Path) {
         );
         assert!(!image.is_null() && !pixels.is_null());
         let previous = SelectObject(target, image);
-        let copied = BitBlt(target, 0, 0, WIDTH, HEIGHT, client, 0, 0, SRCCOPY);
-        let rgb = std::slice::from_raw_parts(pixels.cast::<u8>(), (WIDTH * HEIGHT * 4) as usize)
+        let copied = BitBlt(target, 0, 0, width, height, client, 0, 0, SRCCOPY);
+        let rgb = std::slice::from_raw_parts(pixels.cast::<u8>(), (width * height * 4) as usize)
             .as_chunks::<4>()
             .0
             .iter()
@@ -110,6 +178,6 @@ fn capture_main(window: HWND, path: &Path) {
         rgb
     };
     let mut file = fs::File::create(path).unwrap();
-    write!(file, "P6\n{WIDTH} {HEIGHT}\n255\n").unwrap();
+    write!(file, "P6\n{width} {height}\n255\n").unwrap();
     file.write_all(&rgb).unwrap();
 }

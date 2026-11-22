@@ -67,7 +67,9 @@ fn verify_migration(version: u32) {
         "receiver_id": "active-receiver",
         "protected_receiver_token": [66, 77],
         "active_pairings": {
-            "active-pairing": {"sender_id": "active-sender", "protected_key": [55, 66]}
+            "active-pairing": {"sender_id": "active-sender", "protected_key": [55, 66]},
+            "named-pairing": {"sender_id": "named-sender", "protected_key": [77, 88], "name": "未命名设备-2"},
+            "other-pairing": {"sender_id": "other-sender", "protected_key": [99, 11]}
         }
     });
     if version == 2 {
@@ -82,6 +84,15 @@ fn verify_migration(version: u32) {
     let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
     fs::write(&path, &legacy_bytes).unwrap();
     let store = RegistrationStore::new(path.clone());
+    let expected = [
+        ("active-pairing", "未命名设备"),
+        ("named-pairing", "未命名设备-2"),
+        ("other-pairing", "未命名设备-3"),
+    ];
+    let names = store.sender_names().unwrap();
+    for (id, name) in expected {
+        assert_eq!(names[id], name);
+    }
     let locked = OpenOptions::new()
         .read(true)
         .share_mode(1)
@@ -101,8 +112,13 @@ fn verify_migration(version: u32) {
         .unwrap();
     let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(current["version"], 4);
-    for field in ["receiver_id", "protected_receiver_token", "active_pairings"] {
+    for field in ["receiver_id", "protected_receiver_token"] {
         assert_eq!(current[field], legacy[field]);
+    }
+    for (id, name) in expected {
+        let pairing = &mut legacy["active_pairings"][id];
+        pairing["name"] = json!(name);
+        assert_eq!(&current["active_pairings"][id], pairing);
     }
     let pending = &current["provisional_pairing"];
     assert_eq!(pending["session_id"], "first");

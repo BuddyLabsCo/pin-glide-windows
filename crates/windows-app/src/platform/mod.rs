@@ -2,12 +2,16 @@ mod clipboard;
 mod instance;
 mod tray;
 
-pub(crate) use clipboard::unicode_clipboard_is_valid;
+pub(crate) use clipboard::{ClipboardError, read_unicode_clipboard};
 pub use instance::{ActivationListener, Instance};
 pub use tray::Tray;
 
 use std::io;
 
+use slint::{
+    Window,
+    winit_030::{WinitWindowAccessor, winit::window::WindowButtons},
+};
 use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
@@ -40,6 +44,12 @@ pub fn chinese() -> bool {
 
 pub fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain([0]).collect()
+}
+
+pub(crate) fn configure_main_chrome(window: &Window) {
+    window.with_winit_window(|native| {
+        native.set_enabled_buttons(WindowButtons::MINIMIZE | WindowButtons::CLOSE);
+    });
 }
 
 fn win32_result(result: i32) -> io::Result<()> {

@@ -97,11 +97,11 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
     let directory = tempdir().unwrap();
     let path = directory.path().join("registration.json");
     let active = json!({
-        "version": 3,
+        "version": 4,
         "receiver_id": "previous-receiver",
         "protected_receiver_token": [66, 77],
         "active_pairings": {
-            "previous-pairing": {"sender_id": "previous-sender", "protected_key": [55, 66]}
+            "previous-pairing": {"sender_id": "previous-sender", "protected_key": [55, 66], "name": "Previous"}
         }
     });
     if matches!(scenario, Scenario::WriteRejected) {

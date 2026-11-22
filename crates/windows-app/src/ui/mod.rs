@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use slint::winit_030::{WinitWindowAccessor, winit::window::WindowButtons};
+use slint::winit_030::WinitWindowAccessor;
 use slint::{CloseRequestResponse, ComponentHandle, PlatformError, VecModel, Window};
 
 use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
@@ -26,6 +26,9 @@ pub fn open() {
 
 pub fn open_settings() {
     let result = (|| {
+        if pairing::reopen_pending_name()? {
+            return hide_welcome();
+        }
         if let Ok(store) = RegistrationStore::for_current_user()
             && show_registered(&store, platform::chinese())?
         {
@@ -59,11 +62,7 @@ pub fn update_motion() {
 
 fn show() -> Result<(), PlatformError> {
     if pairing::reopen()? {
-        WELCOME.with_borrow(|welcome| match welcome {
-            Some(window) => window.hide(),
-            None => Ok(()),
-        })?;
-        return Ok(());
+        return hide_welcome();
     }
     if let Ok(store) = RegistrationStore::for_current_user()
         && show_registered(&store, platform::chinese())?
@@ -71,6 +70,10 @@ fn show() -> Result<(), PlatformError> {
         return Ok(());
     }
     show_welcome()
+}
+
+fn hide_welcome() -> Result<(), PlatformError> {
+    WELCOME.with_borrow(|welcome| welcome.as_ref().map_or(Ok(()), ComponentHandle::hide))
 }
 
 fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, PlatformError> {
@@ -95,9 +98,7 @@ fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, Pla
     let names = names.into_values().map(Into::into).collect::<Vec<_>>();
     window.set_sender_names(VecModel::from_slice(&names));
     window.show()?;
-    window.window().with_winit_window(|native| {
-        native.set_enabled_buttons(WindowButtons::MINIMIZE | WindowButtons::CLOSE);
-    });
+    platform::configure_main_chrome(window.window());
     focus(window.window());
     Ok(true)
 }
