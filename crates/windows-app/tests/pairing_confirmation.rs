@@ -6,6 +6,8 @@ mod delivery;
 mod dpapi;
 #[path = "support/pairing.rs"]
 mod fixture;
+#[path = "support/reconnect.rs"]
+mod reconnect;
 
 use std::{fs, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 
@@ -21,6 +23,7 @@ use fixture::*;
 #[derive(Clone, Copy)]
 enum Scenario {
     Ready,
+    Occupied,
     WriteRejected,
     ClosedBeforeCancellation,
     ClosedWithoutTerminalState,
@@ -51,6 +54,14 @@ fn completes_only_after_the_exported_key_is_committed() {
 fn resumes_the_uncertain_redemption_once_after_restart() {
     exercise(
         Scenario::ResumeUncertain,
+        PairingOutcome::KeyConfirmed(SessionState::Completed),
+    );
+}
+
+#[test]
+fn retries_an_occupied_delivery_slot_without_redeeming_again() {
+    exercise(
+        Scenario::Occupied,
         PairingOutcome::KeyConfirmed(SessionState::Completed),
     );
 }
@@ -161,7 +172,10 @@ fn assert_latest_delivery(
     scenario: Scenario,
     path: &std::path::Path,
 ) {
-    if matches!(scenario, Scenario::Ready | Scenario::ResumeUncertain) {
+    if matches!(
+        scenario,
+        Scenario::Ready | Scenario::Occupied | Scenario::ResumeUncertain
+    ) {
         assert_eq!(
             operation.latest_otp().as_deref().map(String::as_str),
             Some("A-482913")
@@ -220,6 +234,7 @@ fn confirmation_service(
         if matches!(
             scenario,
             Scenario::Ready
+                | Scenario::Occupied
                 | Scenario::ResumeUncertain
                 | Scenario::RejectRedemption
                 | Scenario::RejectUpgrade
@@ -285,6 +300,7 @@ fn finish_scenario(
     claimed["receiverConfirmed"] = json!(true);
     match scenario {
         Scenario::Ready
+        | Scenario::Occupied
         | Scenario::ResumeUncertain
         | Scenario::RejectRedemption
         | Scenario::RejectUpgrade => {
@@ -415,6 +431,12 @@ fn exercise_enrollment(
         );
         return;
     }
+    let connection = if matches!(scenario, Scenario::Occupied) {
+        reconnect::reject_occupied_slot(connection);
+        accept(acceptor, listener)
+    } else {
+        connection
+    };
     let mut delivery = accept_delivery(connection);
     use tokio_tungstenite::tungstenite::Message;
     delivery.send(Message::Ping(vec![13].into())).unwrap();

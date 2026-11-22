@@ -56,12 +56,18 @@ within 500 lines.
   followed by Close `1008`.
 - The delivery adapter captures arrival time and order, then attempts the
   Receipt before decryption. It owns reconnect, heartbeat, and Close handling.
+  The same worker owns first enrollment and subsequent reconnects, or starts
+  directly with the stored Receiver credential on launch. Windows power and
+  connectivity notifications drive retry timing. The tray tooltip shows
+  readiness and its current reason.
   Core `delivery/` selects the key by Pairing ID and orders OTPs by `receivedAt`
   with arrival time as fallback and arrival order as the tiebreaker. An empty
   OTP still allows the full SMS popup and leaves the latest OTP alone.
 - Slint renders state and emits actions. Rust owns popup copy and shortcut
   copy decisions. Send worker results through the Slint event loop. Keep
   clipboard writes and system events in `platform/`.
+  A Windows lock clears visible SMS popups and invalidates pending display
+  callbacks. Delivery still updates the latest OTP while locked.
 
 ## 4. Persistent state
 

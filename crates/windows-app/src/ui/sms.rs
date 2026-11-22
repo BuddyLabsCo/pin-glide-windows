@@ -19,12 +19,13 @@ thread_local! {
 }
 
 pub(super) fn receive(message: ReceivedSms) {
-    if platform::session_unlocked() {
+    if platform::popup_epoch() == Some(message.epoch) {
         let _ = slint::invoke_from_event_loop(move || {
-            let _ = slint::spawn_local(show_sms(
+            let _ = slint::spawn_local(show_sms_for_session(
                 message.sms,
                 message.sender_name,
                 platform::chinese(),
+                message.epoch,
             ));
         });
     }
@@ -35,18 +36,30 @@ pub async fn show_sms(
     sender_name: String,
     chinese: bool,
 ) -> Result<Option<SmsWindow>, PlatformError> {
-    if !platform::session_unlocked() {
+    let Some(epoch) = platform::popup_epoch() else {
+        return Ok(None);
+    };
+    show_sms_for_session(sms, sender_name, chinese, epoch).await
+}
+
+async fn show_sms_for_session(
+    sms: Sms,
+    sender_name: String,
+    chinese: bool,
+    epoch: u64,
+) -> Result<Option<SmsWindow>, PlatformError> {
+    if platform::popup_epoch() != Some(epoch) {
         return Ok(None);
     }
     let window = platform::new_popup()?;
     window.set_chinese(chinese);
+    let native = window.window().winit_window().await?;
+    if platform::popup_epoch() != Some(epoch) {
+        return Ok(None);
+    }
     window.set_otp(sms.otp.into());
     window.set_sms(sms.body.into());
     window.set_sender_name(sender_name.into());
-    let native = window.window().winit_window().await?;
-    if !platform::session_unlocked() {
-        return Ok(None);
-    }
     let native_error = |error| {
         PlatformError::OtherError(format!("Could not configure the SMS popup: {error}").into())
     };
@@ -55,6 +68,10 @@ pub async fn show_sms(
     if let Err(error) = platform::place_popup(&native, owner) {
         let _ = window.hide();
         return Err(native_error(error));
+    }
+    if platform::popup_epoch() != Some(epoch) {
+        clear(window);
+        return Ok(None);
     }
 
     let id = NEXT_ID.get();

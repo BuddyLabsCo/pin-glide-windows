@@ -14,10 +14,7 @@ use super::{
     Claim, CompletionError, PairingOperation, PairingOutcome, PairingProgress, ProgressUpdates,
     Service, StatusCode, drive, oneshot, wait_for_confirmation, watch,
 };
-use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
-
-#[path = "../../../tests/support/socket.rs"]
-mod socket;
+use crate::service::tests::{accept_loopback, acceptor, listen, local_service, socket};
 
 pub(crate) const TOKEN: &str = "fixture-pairing-b";
 const EXPIRY: &str = "2030-01-01T00:01:00Z";
@@ -196,11 +193,13 @@ fn clock(seconds: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(seconds)
 }
 
-fn progress_channel() -> (ProgressUpdates, watch::Receiver<PairingProgress>) {
+pub(in crate::service) fn progress_channel() -> (ProgressUpdates, watch::Receiver<PairingProgress>)
+{
     let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
     (
         ProgressUpdates {
             snapshot,
+            delivery: watch::channel(super::DeliveryStatus::Unregistered).0,
             notify: || {},
             inbox: Default::default(),
             notify_sms: drop,
@@ -221,6 +220,7 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
         let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
         let operation = PairingOperation {
+            delivery: updates.delivery.subscribe(),
             progress,
             worker: None,
             inbox: Default::default(),
@@ -307,6 +307,7 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
     let (updates, progress) = progress_channel();
     let (_stop, stopping) = oneshot::channel();
     let operation = PairingOperation {
+        delivery: updates.delivery.subscribe(),
         progress,
         worker: None,
         inbox: Default::default(),

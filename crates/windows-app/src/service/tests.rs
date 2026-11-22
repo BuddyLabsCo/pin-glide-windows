@@ -12,6 +12,9 @@ use super::{CreateError, NewReceiverSession, Service, SessionState, client_build
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
+#[path = "../../tests/support/socket.rs"]
+pub(super) mod socket;
+
 #[path = "../../tests/support/tls.rs"]
 mod tls;
 pub(crate) use tls::{accept_loopback, acceptor, listen};
