@@ -10,7 +10,9 @@ use std::{fs, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
-use windows_app::service::{PairingOperation, PairingOutcome, PairingProgress, SessionState};
+use windows_app::service::{
+    PairingOperation, PairingOutcome, PairingProgress, PairingStart, SessionState,
+};
 
 use fixture::*;
 
@@ -23,15 +25,39 @@ enum Scenario {
     UnexpectedCloseDuringReport,
     MissingHttpSenderConfirmation,
     MissingWssSenderConfirmation,
+    ResumeUncertain,
+    RejectRedemption,
+    RejectUpgrade,
+}
+
+impl Scenario {
+    fn definitive_rejection(self) -> bool {
+        matches!(self, Self::RejectRedemption | Self::RejectUpgrade)
+    }
 }
 
 #[test]
 fn completes_only_after_the_exported_key_is_committed() {
     exercise(
         Scenario::Ready,
-        PairingOutcome::KeyConfirmed(SessionState::CredentialReady),
+        PairingOutcome::KeyConfirmed(SessionState::Completed),
     );
     exercise(Scenario::WriteRejected, PairingOutcome::Failed);
+}
+
+#[test]
+fn resumes_the_uncertain_redemption_once_after_restart() {
+    exercise(
+        Scenario::ResumeUncertain,
+        PairingOutcome::KeyConfirmed(SessionState::Completed),
+    );
+}
+
+#[test]
+fn rejects_definitive_failures_during_enrollment() {
+    for scenario in [Scenario::RejectRedemption, Scenario::RejectUpgrade] {
+        exercise(scenario, PairingOutcome::Failed);
+    }
 }
 
 #[test]
@@ -70,13 +96,34 @@ fn an_activated_snapshot_requires_both_confirmations_on_each_transport() {
 fn exercise(scenario: Scenario, expected: PairingOutcome) {
     let directory = tempdir().unwrap();
     let path = directory.path().join("registration.json");
+    let active = json!({
+        "version": 3,
+        "receiver_id": "previous-receiver",
+        "protected_receiver_token": [66, 77],
+        "active_pairings": {
+            "previous-pairing": {"sender_id": "previous-sender", "protected_key": [55, 66]}
+        }
+    });
     if matches!(scenario, Scenario::WriteRejected) {
         fs::write(&path, br#"{"version":99}"#).unwrap();
+    } else if scenario.definitive_rejection() {
+        fs::write(&path, serde_json::to_vec(&active).unwrap()).unwrap();
     }
     let (send_qr, qr) = mpsc::channel();
-    let (service, server) = confirmation_service(qr, path.clone(), scenario);
-    let operation =
-        PairingOperation::start_with_registration(move || Some(service), || {}, path.clone());
+    let (attempt_sent, first_attempt) = mpsc::channel();
+    let (finished, terminal) = mpsc::channel();
+    let (service, server) =
+        confirmation_service(qr, path.clone(), scenario, attempt_sent, terminal);
+    let start = || {
+        let service = service.clone();
+        PairingOperation::start_with_registration(
+            move || Some(service),
+            || {},
+            path.clone(),
+            PairingStart::ResumePending,
+        )
+    };
+    let mut operation = start();
     let until = std::time::Instant::now() + Duration::from_secs(10);
     let mut send_qr = Some(send_qr);
     let actual = loop {
@@ -87,21 +134,39 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
             PairingProgress::Finished(outcome) => break outcome,
             _ => {}
         }
+        if first_attempt.try_recv().is_ok() {
+            operation.shutdown();
+            operation = start();
+        }
         assert!(std::time::Instant::now() < until, "pairing did not finish");
         std::thread::sleep(Duration::from_millis(10));
     };
+    let _ = finished.send(());
     assert_eq!(actual, expected);
     if matches!(scenario, Scenario::WriteRejected) {
         assert_eq!(fs::read(&path).unwrap(), br#"{"version":99}"#);
+    } else if scenario.definitive_rejection() {
+        assert_rejection_preserves_registration(&path, &active);
     }
-    operation.shutdown();
     server.join().unwrap();
+    operation.shutdown();
+}
+
+fn assert_rejection_preserves_registration(path: &std::path::Path, active: &Value) {
+    let stored = read_registration(path);
+    assert!(stored["enrollment"].is_null());
+    assert!(stored["provisional_pairing"].is_null());
+    for field in ["receiver_id", "protected_receiver_token", "active_pairings"] {
+        assert_eq!(stored[field], active[field]);
+    }
 }
 
 fn confirmation_service(
     qr: mpsc::Receiver<Value>,
     path: PathBuf,
     scenario: Scenario,
+    attempt_sent: mpsc::Sender<()>,
+    terminal: mpsc::Receiver<()>,
 ) -> (windows_app::service::Service, std::thread::JoinHandle<()>) {
     let (listener, service) = listen();
     let server = std::thread::spawn(move || {
@@ -119,42 +184,68 @@ fn confirmation_service(
         let claimed = claim(waiting);
         send_state(&mut socket, claimed.clone());
         let key = sender_handshake(&mut socket, &qr);
-        let mut complete = BufReader::new(accept(&acceptor, &listener));
-        let (request, headers, body) = read_request_parts(&mut complete);
-        assert_bearer(&headers);
+        let connection = accept(&acceptor, &listener);
         if matches!(scenario, Scenario::WriteRejected) {
-            assert_eq!(
-                request,
-                "DELETE /v1/pairing-sessions/session-1 HTTP/1.1\r\n"
-            );
-            no_content(complete.get_mut());
+            assert_delete(connection, "session-1");
             return;
         }
-        assert_eq!(
-            request,
-            "POST /v1/pairing-sessions/session-1/complete HTTP/1.1\r\n"
-        );
-        assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"keyConfirmation":"confirmed"})
-        );
-        let stored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        let pending = &stored["provisional_pairing"];
-        assert_eq!(pending["session_id"], "session-1");
-        assert_eq!(pending["pairing_id"], "pairing-1");
-        assert_eq!(pending["sender_id"], "sender-1");
-        assert_eq!(pending["receiver_id"], "receiver-1");
-        assert!(dpapi::unprotect(&pending["protected_key"]) == key);
-        finish_scenario(
+        let complete = accept_completion(connection, &path, &key);
+        finish_scenario(scenario, &acceptor, &listener, complete, socket, claimed);
+        if matches!(
             scenario,
-            &acceptor,
-            &listener,
-            complete.into_inner(),
-            socket,
-            claimed,
-        );
+            Scenario::Ready
+                | Scenario::ResumeUncertain
+                | Scenario::RejectRedemption
+                | Scenario::RejectUpgrade
+        ) {
+            exercise_enrollment(&acceptor, &listener, &path, scenario, attempt_sent);
+            if scenario.definitive_rejection() {
+                assert_no_further_requests(&listener, terminal);
+            }
+        }
     });
     (service, server)
+}
+
+fn assert_no_further_requests(listener: &std::net::TcpListener, terminal: mpsc::Receiver<()>) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let finished = terminal.try_recv().is_ok();
+        match listener.accept() {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            _ => panic!("unexpected request after a definitive enrollment rejection"),
+        }
+        if finished {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "client did not finish enrollment"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn accept_completion(connection: Connection, path: &std::path::Path, key: &[u8; 32]) -> Connection {
+    let mut complete = BufReader::new(connection);
+    let (request, headers, body) = read_request_parts(&mut complete);
+    assert_bearer(&headers);
+    assert_eq!(
+        request,
+        "POST /v1/pairing-sessions/session-1/complete HTTP/1.1\r\n"
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"keyConfirmation":"confirmed"})
+    );
+    let stored = read_registration(path);
+    let pending = &stored["provisional_pairing"];
+    assert_eq!(pending["session_id"], "session-1");
+    assert_eq!(pending["pairing_id"], "pairing-1");
+    assert_eq!(pending["sender_id"], "sender-1");
+    assert_eq!(pending["receiver_id"], "receiver-1");
+    assert!(dpapi::unprotect(&pending["protected_key"]) == key);
+    complete.into_inner()
 }
 
 fn finish_scenario(
@@ -167,7 +258,10 @@ fn finish_scenario(
 ) {
     claimed["receiverConfirmed"] = json!(true);
     match scenario {
-        Scenario::Ready => {
+        Scenario::Ready
+        | Scenario::ResumeUncertain
+        | Scenario::RejectRedemption
+        | Scenario::RejectUpgrade => {
             credential_ready(&mut socket, &mut complete, claimed);
         }
         Scenario::ClosedBeforeCancellation | Scenario::ClosedWithoutTerminalState => {
@@ -208,8 +302,109 @@ fn finish_scenario(
             send_state(&mut socket, claimed);
             assert_delete(accept(acceptor, listener), "session-1");
         }
-        Scenario::WriteRejected => unreachable!(),
+        _ => unreachable!(),
     }
+}
+
+fn read_registration(path: &std::path::Path) -> Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn accept_redemption(
+    acceptor: &native_tls::TlsAcceptor,
+    listener: &std::net::TcpListener,
+    path: &std::path::Path,
+    attempt: i32,
+) -> (Connection, Value) {
+    let mut redemption = BufReader::new(accept(acceptor, listener));
+    let (request, headers, body) = read_request_parts(&mut redemption);
+    assert_eq!(
+        request,
+        "POST /v1/pairing-sessions/session-1/receiver-token HTTP/1.1\r\n"
+    );
+    assert_bearer(&headers);
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["attempt"], attempt);
+    assert!(!body["operationId"].as_str().unwrap().is_empty());
+    let stored = read_registration(path);
+    let enrollment = &stored["enrollment"];
+    assert_eq!(enrollment["operation_id"], body["operationId"]);
+    assert_eq!(
+        dpapi::unprotect(&enrollment["phase"][format!("Attempt{attempt}")]),
+        TOKEN.as_bytes()
+    );
+    (redemption.into_inner(), body["operationId"].clone())
+}
+
+fn exercise_enrollment(
+    acceptor: &native_tls::TlsAcceptor,
+    listener: &std::net::TcpListener,
+    path: &std::path::Path,
+    scenario: Scenario,
+    attempt_sent: mpsc::Sender<()>,
+) {
+    let (mut redemption, operation) = accept_redemption(acceptor, listener, path, 0);
+    if matches!(scenario, Scenario::ResumeUncertain) {
+        attempt_sent.send(()).unwrap();
+        let (retry, same_operation) = accept_redemption(acceptor, listener, path, 1);
+        assert_eq!(same_operation, operation);
+        redemption = retry;
+    }
+    if matches!(scenario, Scenario::RejectRedemption) {
+        use std::io::Write;
+        redemption
+            .write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 50\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        redemption.flush().unwrap();
+        return;
+    }
+    write_response(
+        &mut redemption,
+        "200 OK",
+        &json!({
+            "receiverId":"receiver-1", "receiverToken": RECEIVER_TOKEN,
+        }),
+    );
+    let connection = accept(acceptor, listener);
+    let stored = read_registration(path);
+    if matches!(scenario, Scenario::RejectUpgrade) {
+        assert_eq!(stored["receiver_id"], "previous-receiver");
+    } else {
+        assert!(stored["receiver_id"].is_null());
+    }
+    assert_eq!(
+        dpapi::unprotect(&stored["enrollment"]["phase"]["Issued"]),
+        RECEIVER_TOKEN.as_bytes()
+    );
+    if matches!(scenario, Scenario::RejectUpgrade) {
+        let mut connection = BufReader::new(connection);
+        assert_eq!(
+            read_request_parts(&mut connection).0,
+            "GET /v1/receiver/events HTTP/1.1\r\n"
+        );
+        write_response(
+            connection.get_mut(),
+            "401 Unauthorized",
+            &json!({"code":"credential_invalid"}),
+        );
+        return;
+    }
+    let mut delivery = accept_delivery(connection);
+    use tokio_tungstenite::tungstenite::Message;
+    delivery.send(Message::Ping(vec![13].into())).unwrap();
+    assert_eq!(delivery.read().unwrap(), Message::Pong(vec![13].into()));
+    let stored = read_registration(path);
+    assert!(stored["enrollment"].is_null());
+    assert!(stored["provisional_pairing"].is_null());
+    assert_eq!(stored["receiver_id"], "receiver-1");
+    assert_eq!(
+        dpapi::unprotect(&stored["protected_receiver_token"]),
+        RECEIVER_TOKEN.as_bytes()
+    );
+    assert_eq!(
+        stored["active_pairings"]["pairing-1"]["sender_id"],
+        "sender-1"
+    );
 }
 
 fn decode_qr(code: &qrcode::QrCode) -> Value {

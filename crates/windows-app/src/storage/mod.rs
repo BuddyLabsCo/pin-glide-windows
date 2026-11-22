@@ -8,12 +8,15 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+mod enrollment;
+pub(crate) use enrollment::Enrollment;
+
 #[cfg(all(test, windows))]
 mod tests;
 #[cfg(windows)]
 mod windows;
 
-const CURRENT_VERSION: u32 = 2;
+const CURRENT_VERSION: u32 = 3;
 static WRITER: Mutex<()> = Mutex::new(());
 
 pub(crate) struct RegistrationStore {
@@ -52,6 +55,8 @@ struct Registration {
     protected_receiver_token: Option<Vec<u8>>,
     active_pairings: BTreeMap<String, ProtectedPairing>,
     provisional_pairing: Option<ProvisionalPairing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enrollment: Option<Enrollment>,
 }
 
 #[derive(Deserialize)]
@@ -84,21 +89,29 @@ impl RegistrationStore {
         reference: &PairingReference<'_>,
         key: &[u8; 32],
     ) -> io::Result<()> {
-        let _writer = WRITER
-            .lock()
-            .map_err(|_| io::Error::other("registration writer is unavailable"))?;
-        let mut next = self.read()?;
-        #[cfg(windows)]
-        let protected_key = windows::protect(key)?;
-        #[cfg(not(windows))]
-        let protected_key = unsupported_protection(key)?;
-        next.provisional_pairing = Some(ProvisionalPairing {
+        let pairing = ProvisionalPairing {
             session_id: reference.session_id.into(),
             receiver_id: reference.receiver_id.into(),
             pairing_id: reference.pairing_id.into(),
             sender_id: reference.sender_id.into(),
-            protected_key,
-        });
+            protected_key: protect(key)?,
+        };
+        self.update(|next| {
+            if next.enrollment.is_some() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            next.provisional_pairing = Some(pairing);
+            Ok(())
+        })
+    }
+
+    fn update(&self, change: impl FnOnce(&mut Registration) -> io::Result<()>) -> io::Result<()> {
+        let _writer = WRITER
+            .lock()
+            .map_err(|_| io::Error::other("registration writer is unavailable"))?;
+        let mut next = self.read()?;
+        change(&mut next)?;
+        next.version = CURRENT_VERSION;
         let directory = self.path.parent().ok_or(io::ErrorKind::InvalidInput)?;
         fs::create_dir_all(directory)?;
         let mut stage = tempfile::NamedTempFile::new_in(directory)?;
@@ -118,6 +131,7 @@ impl RegistrationStore {
                     protected_receiver_token: None,
                     active_pairings: BTreeMap::new(),
                     provisional_pairing: None,
+                    enrollment: None,
                 });
             }
             Err(error) => return Err(error),
@@ -141,11 +155,12 @@ impl RegistrationStore {
                     protected_receiver_token: legacy.protected_receiver_token,
                     active_pairings: legacy.active_pairings,
                     provisional_pairing: None,
+                    enrollment: None,
                 })
             }
-            CURRENT_VERSION => {
+            2 | CURRENT_VERSION => {
                 let stored: Registration = serde_json::from_reader(BufReader::new(file))?;
-                if stored.version != CURRENT_VERSION {
+                if stored.version != version || (version == 2 && stored.enrollment.is_some()) {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
                 Ok(stored)
@@ -155,7 +170,15 @@ impl RegistrationStore {
     }
 }
 
+#[cfg(windows)]
+use windows::{protect, unprotect};
+
 #[cfg(not(windows))]
-fn unsupported_protection(_: &[u8; 32]) -> io::Result<Vec<u8>> {
+fn protect(_: &[u8]) -> io::Result<Vec<u8>> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(not(windows))]
+fn unprotect(_: &[u8]) -> io::Result<zeroize::Zeroizing<Vec<u8>>> {
     Err(io::ErrorKind::Unsupported.into())
 }

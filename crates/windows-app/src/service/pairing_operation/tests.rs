@@ -6,8 +6,7 @@ use std::{
 
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{
-    Message, accept_hdr,
-    handshake::server::{Request, Response},
+    Message, WebSocket,
     protocol::{CloseFrame, frame::coding::CloseCode},
 };
 
@@ -16,6 +15,9 @@ use super::{
     Service, StatusCode, drive, oneshot, wait_for_confirmation, watch,
 };
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
+
+#[path = "../../../tests/support/socket.rs"]
+mod socket;
 
 pub(crate) const TOKEN: &str = "fixture-pairing-b";
 const EXPIRY: &str = "2030-01-01T00:01:00Z";
@@ -157,25 +159,8 @@ fn send_events(connection: impl Read + Write, frames: &mpsc::Receiver<Option<&st
 pub(crate) fn accept_events<Stream: Read + Write>(
     connection: Stream,
     path: &str,
-) -> tokio_tungstenite::tungstenite::WebSocket<Stream> {
-    #[expect(
-        clippy::result_large_err,
-        reason = "tungstenite fixes the callback error type"
-    )]
-    let socket = accept_hdr(connection, |request: &Request, mut response: Response| {
-        assert_eq!(request.uri().path(), path);
-        assert_eq!(
-            request.headers()["authorization"],
-            format!("Bearer {TOKEN}")
-        );
-        assert_eq!(request.headers()["sec-websocket-protocol"], "pin-glide.v1");
-        response
-            .headers_mut()
-            .insert("sec-websocket-protocol", "pin-glide.v1".parse().unwrap());
-        Ok(response)
-    })
-    .unwrap();
-    socket
+) -> WebSocket<Stream> {
+    socket::accept_socket(connection, path, TOKEN)
 }
 
 pub(crate) fn send_state(
@@ -238,7 +223,15 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
             worker: None,
         };
         let worker = tokio::spawn(async move {
-            drive(&service, &updates, stopping, || clock(START), None).await
+            drive(
+                &service,
+                &updates,
+                stopping,
+                || clock(START),
+                None,
+                super::PairingStart::Fresh,
+            )
+            .await
         });
         send.send(Some("awaiting_authorization")).unwrap();
         wait_for(&operation, |state| {
@@ -286,7 +279,15 @@ async fn upgrade_rejection_distinguishes_expiry_from_other_failures() {
         let (service, server) = script_service(Script::Rejected(status, code));
         let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
-        drive(&service, &updates, stopping, || clock(START), None).await;
+        drive(
+            &service,
+            &updates,
+            stopping,
+            || clock(START),
+            None,
+            super::PairingStart::Fresh,
+        )
+        .await;
         assert!(
             matches!(*progress.borrow(), PairingProgress::Finished(outcome) if outcome == expected)
         );
@@ -304,10 +305,17 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
         progress,
         worker: None,
     };
-    let worker =
-        tokio::spawn(
-            async move { drive(&service, &updates, stopping, || clock(START), None).await },
-        );
+    let worker = tokio::spawn(async move {
+        drive(
+            &service,
+            &updates,
+            stopping,
+            || clock(START),
+            None,
+            super::PairingStart::Fresh,
+        )
+        .await
+    });
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })
@@ -343,7 +351,11 @@ async fn live_close_publishes_failure_while_cancellation_response_is_pending() {
         received,
         release: hold,
     });
-    let operation = PairingOperation::start(move || Some(service), || {});
+    let operation = PairingOperation::start(
+        move || Some(service),
+        || {},
+        super::PairingStart::ResumePending,
+    );
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })

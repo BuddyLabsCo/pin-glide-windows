@@ -1,6 +1,6 @@
 use std::{cell::RefCell, sync::Arc};
 
-use crate::service::{PairingOperation, PairingOutcome, PairingProgress, Service};
+use crate::service::{PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service};
 use crate::{PairingStage, PairingWindow, platform};
 use qrcode::{Color, QrCode};
 use slint::{
@@ -25,13 +25,28 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
     open_pairing(chinese, start_operation).map(drop)
 }
 
+pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
+    if PairingOperation::has_pending_enrollment() {
+        create_view(chinese, start_operation, false)?;
+    }
+    Ok(())
+}
+
 pub fn open_pairing(
     chinese: bool,
-    start: impl Fn(fn()) -> PairingOperation + 'static,
+    start: impl Fn(fn(), PairingStart) -> PairingOperation + 'static,
 ) -> Result<PairingWindow, PlatformError> {
     if reopen()? {
         return Ok(PAIRING.with_borrow(|pairing| pairing.as_ref().unwrap().window.clone_strong()));
     }
+    create_view(chinese, start, true)
+}
+
+fn create_view(
+    chinese: bool,
+    start: impl Fn(fn(), PairingStart) -> PairingOperation + 'static,
+    visible: bool,
+) -> Result<PairingWindow, PlatformError> {
     let window = PairingWindow::new()?;
     window.set_chinese(chinese);
     window.set_motion_enabled(platform::animations_enabled());
@@ -40,14 +55,16 @@ pub fn open_pairing(
         .window()
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     window.on_refresh(refresh);
-    window.show()?;
-    super::focus(window.window());
+    if visible {
+        window.show()?;
+        super::focus(window.window());
+    }
     PAIRING.with_borrow_mut(|pairing| {
         let mut view = View {
             window: window.clone_strong(),
-            operation: start(notify_progress),
+            operation: start(notify_progress, PairingStart::ResumePending),
             rendered_code: None,
-            start: Box::new(move || start(notify_progress)),
+            start: Box::new(move || start(notify_progress, PairingStart::Fresh)),
         };
         view.render();
         *pairing = Some(view);
@@ -93,14 +110,14 @@ pub(super) fn shutdown() {
     }
 }
 
-fn start_operation(notify: fn()) -> PairingOperation {
+fn start_operation(notify: fn(), start: PairingStart) -> PairingOperation {
     #[cfg(test)]
     if let Some(service) = tests::connect() {
-        return PairingOperation::start(move || Some(service), notify);
+        return PairingOperation::start(move || Some(service), notify, start);
     }
     let connect =
         || option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok());
-    PairingOperation::start(connect, notify)
+    PairingOperation::start(connect, notify, start)
 }
 
 fn notify_progress() {
@@ -144,16 +161,23 @@ impl View {
                 PairingStage::Waiting
             }
             PairingProgress::Confirming => PairingStage::Confirming,
+            PairingProgress::CredentialReady => PairingStage::CredentialReady,
+            PairingProgress::Checking => PairingStage::Checking,
+            PairingProgress::Connecting => PairingStage::Connecting,
             PairingProgress::Finished(outcome) => match outcome {
                 PairingOutcome::CreateFailed => PairingStage::CreateFailed,
                 PairingOutcome::Failed => PairingStage::Failed,
                 PairingOutcome::Expired => PairingStage::Expired,
                 PairingOutcome::Canceled => PairingStage::Canceled,
-                PairingOutcome::KeyConfirmed(_) => PairingStage::CredentialReady,
+                PairingOutcome::KeyConfirmed(_) => PairingStage::Completed,
             },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {
             self.window.set_qr(Image::default());
+        }
+        if stage == PairingStage::Completed && self.window.get_stage() != stage {
+            self.window
+                .set_completion_motion(self.window.window().is_visible());
         }
         self.window.set_stage(stage);
     }

@@ -53,6 +53,7 @@ pub(crate) fn run(
                 select_backend()?;
                 backend_ready = true;
             }
+            ui::resume_pairing()?;
             if explicit {
                 ui::open();
             }

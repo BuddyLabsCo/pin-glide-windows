@@ -76,6 +76,9 @@ export enum PairingStage {
     waiting,
     confirming,
     credential-ready,
+    checking,
+    connecting,
+    completed,
     failed,
     create-failed,
     expired,
@@ -85,18 +88,24 @@ export enum PairingStage {
 export component PairingWindow inherits Window {
     in property <bool> chinese;
     in property <bool> motion-enabled;
+    in property <bool> completion-motion;
     in property <PairingStage> stage;
     in property <image> qr;
     in property <string> remaining;
     callback refresh();
     private property <bool> loading: stage == PairingStage.preparing || stage == PairingStage.confirming
-        || stage == PairingStage.credential-ready;
+        || stage == PairingStage.credential-ready || stage == PairingStage.checking
+        || stage == PairingStage.connecting;
     private property <bool> waiting: stage == PairingStage.waiting;
-    private property <bool> problem: !loading && !waiting;
+    private property <bool> completed: stage == PairingStage.completed;
+    private property <bool> problem: !loading && !waiting && !completed;
     private property <string> progress: stage == PairingStage.preparing ? (chinese ? "正在准备二维码…" : "Preparing QR code…")
         : stage == PairingStage.waiting ? (chinese ? "等待扫码，剩余 " : "Waiting for scan · ") + remaining
         : stage == PairingStage.confirming ? (chinese ? "正在配对…" : "Pairing…")
         : stage == PairingStage.credential-ready ? (chinese ? "正在准备接收端…" : "Preparing the Receiver…")
+        : stage == PairingStage.checking ? (chinese ? "正在核实注册结果…" : "Checking the registration result…")
+        : stage == PairingStage.connecting ? (chinese ? "正在连接接收服务…" : "Connecting to the delivery service…")
+        : stage == PairingStage.completed ? (chinese ? "配对完成" : "Pairing complete")
         : stage == PairingStage.create-failed ? (chinese ? "无法准备配对二维码。" : "Could not prepare the pairing QR code.")
         : stage == PairingStage.expired ? (chinese ? "二维码已过期。" : "The QR code has expired.")
         : stage == PairingStage.canceled ? (chinese ? "配对已取消。" : "Pairing was canceled.")
@@ -142,10 +151,30 @@ export component PairingWindow inherits Window {
                 border-radius: 12px;
                 border-width: 1px;
                 border-color: #dbe8e2;
-                if root.loading: QrLoading {
+                if root.completed: Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 32px;
+                    background: #e3f3ec;
+                    Path {
+                        width: 28px;
+                        height: 28px;
+                        commands: "M 4 14 L 11 21 L 24 8";
+                        stroke: #177761;
+                        stroke-width: 2.5px;
+                    }
+                }
+                if root.loading || (root.completed && root.motion-enabled && root.completion-motion): Rectangle {
                     width: 160px;
                     height: 160px;
-                    seconds: root.motion-enabled ? mod(animation-tick(), 1.8s) / 1s : 0.68;
+                    background: white;
+                    opacity: root.loading ? 1 : 0;
+                    animate opacity { duration: root.motion-enabled && root.completed ? 180ms : 0ms; }
+                    QrLoading {
+                        width: 160px;
+                        height: 160px;
+                        seconds: root.motion-enabled && parent.opacity > 0 ? mod(animation-tick(), 1.8s) / 1s : 0.68;
+                    }
                 }
                 if root.waiting: Image {
                     source: root.qr;

@@ -10,11 +10,13 @@ use native_tls::{TlsAcceptor, TlsStream};
 use serde_json::{Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio_tungstenite::tungstenite::{
-    Message, WebSocket, accept_hdr,
-    handshake::server::{Request, Response},
+    Message, WebSocket,
     protocol::{CloseFrame, frame::coding::CloseCode},
 };
 use windows_app::service::Service;
+
+mod socket;
+use socket::accept_socket;
 
 #[path = "sender.rs"]
 mod sender;
@@ -25,7 +27,8 @@ pub use tls::acceptor;
 
 pub type Connection = TlsStream<TcpStream>;
 pub type Socket = WebSocket<Connection>;
-const TOKEN: &str = "fixture-pairing-b";
+pub const TOKEN: &str = "fixture-pairing-b";
+pub const RECEIVER_TOKEN: &str = "fixture-receiver-r";
 
 pub fn listen() -> (TcpListener, Service) {
     let (listener, origin) = tls::listen("localhost");
@@ -117,26 +120,15 @@ pub fn accept_creation(connection: Connection, snapshot: &Value) {
 }
 
 pub fn accept_events(connection: Connection, session: &str) -> Socket {
-    #[expect(
-        clippy::result_large_err,
-        reason = "tungstenite fixes the callback error type"
-    )]
-    let result = accept_hdr(connection, |request: &Request, mut response: Response| {
-        assert_eq!(
-            request.uri().path(),
-            format!("/v1/pairing-sessions/{session}/events")
-        );
-        assert_eq!(
-            request.headers()["authorization"],
-            format!("Bearer {TOKEN}")
-        );
-        assert_eq!(request.headers()["sec-websocket-protocol"], "pin-glide.v1");
-        response
-            .headers_mut()
-            .insert("sec-websocket-protocol", "pin-glide.v1".parse().unwrap());
-        Ok(response)
-    });
-    result.unwrap()
+    accept_socket(
+        connection,
+        &format!("/v1/pairing-sessions/{session}/events"),
+        TOKEN,
+    )
+}
+
+pub fn accept_delivery(connection: Connection) -> Socket {
+    accept_socket(connection, "/v1/receiver/events", RECEIVER_TOKEN)
 }
 
 pub fn snapshot(session: &str, state: &str, lifetime: u64) -> Value {

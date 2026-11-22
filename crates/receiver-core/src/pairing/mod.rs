@@ -5,7 +5,10 @@ use zeroize::Zeroizing;
 mod confirmation;
 mod state;
 pub use confirmation::{ConfirmationError, PairingKey, PendingConfirmation};
-pub use state::{PairingOutcome, SessionState, pairing_lifetime};
+pub use state::{
+    EnrollmentAction, EnrollmentEvent, EnrollmentPhase, PairingOutcome, SessionState,
+    pairing_lifetime,
+};
 
 type P256 = DhP256HkdfSha256;
 
