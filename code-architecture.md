@@ -52,14 +52,17 @@ within 500 lines.
   completes enrollment. The service adapter uses R for add-Sender creation and
   delivery, and B for pairing WSS, completion, cancellation, and first-R
   redemption. Persist the operation ID and attempt before redemption, and R
-  before first use. A terminal pairing state determines the outcome when
-  followed by Close `1008`.
+  before first use. Resume a persisted R with a bounded delivery handshake
+  independent of the redemption deadline. A terminal pairing state determines
+  the outcome when followed by Close `1008`.
 - The delivery adapter captures arrival time and order, then attempts the
   Receipt before decryption. It owns reconnect, heartbeat, and Close handling.
   The same worker owns first enrollment and subsequent reconnects, or starts
   directly with the stored Receiver credential on launch. Windows power and
-  connectivity notifications drive retry timing. The tray tooltip shows
-  readiness and its current reason.
+  connectivity notifications drive retry timing. A failed resume probe
+  triggers an immediate replacement attempt. Keep control frames responsive
+  during Receipt writes and authentication. The tray tooltip shows Ready
+  only while connected with at least one active Pairing.
   Core `delivery/` selects the key by Pairing ID and orders OTPs by `receivedAt`
   with arrival time as fallback and arrival order as the tiebreaker. An empty
   OTP still allows the full SMS popup and leaves the latest OTP alone.

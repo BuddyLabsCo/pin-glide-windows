@@ -8,6 +8,8 @@ mod dpapi;
 mod fixture;
 #[path = "support/reconnect.rs"]
 mod reconnect;
+#[path = "support/mod.rs"]
+mod support;
 
 use std::{fs, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 
@@ -176,12 +178,17 @@ fn assert_latest_delivery(
         scenario,
         Scenario::Ready | Scenario::Occupied | Scenario::ResumeUncertain
     ) {
+        let log = path.with_file_name("delivery-rejections.log");
+        support::wait_for(
+            || fs::read(&log).is_ok_and(|diagnostics| diagnostics.ends_with(b"InvalidPlaintext\n")),
+            "the delivery worker did not finish processing the fixture messages",
+        );
         assert_eq!(
             operation.latest_otp().as_deref().map(String::as_str),
             Some("A-482913")
         );
         assert_eq!(
-            fs::read(path.with_file_name("delivery-rejections.log")).unwrap(),
+            fs::read(log).unwrap(),
             b"InvalidEncoding\nInvalidEnvelope\nAuthenticationFailed\nInvalidPlaintext\n",
         );
     }

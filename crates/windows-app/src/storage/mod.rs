@@ -158,6 +158,10 @@ impl RegistrationStore {
         Ok((id, Zeroizing::new(token.to_owned())))
     }
 
+    pub(crate) fn has_pairings(&self) -> io::Result<bool> {
+        self.read().map(|stored| !stored.active_pairings.is_empty())
+    }
+
     #[cfg(windows)]
     pub(crate) fn has_registration(&self) -> bool {
         self.read()

@@ -21,7 +21,7 @@ use super::{application::run, platform};
 
 #[path = "../tests/support/mod.rs"]
 mod support;
-use support::wait_for;
+pub(crate) use support::wait_for;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const DUPLICATE: &str = "PIN_GLIDE_TEST_DUPLICATE";

@@ -18,7 +18,7 @@ thread_local! {
     static NEXT_ID: Cell<u64> = const { Cell::new(0) };
 }
 
-pub(super) fn receive(message: ReceivedSms) {
+pub(crate) fn receive(message: ReceivedSms) {
     if platform::popup_epoch() == Some(message.epoch) {
         let _ = slint::invoke_from_event_loop(move || {
             let _ = slint::spawn_local(show_sms_for_session(
@@ -29,6 +29,11 @@ pub(super) fn receive(message: ReceivedSms) {
             ));
         });
     }
+}
+
+#[cfg(test)]
+pub(crate) fn popup_count() -> usize {
+    POPUPS.with_borrow(BTreeMap::len)
 }
 
 pub async fn show_sms(

@@ -8,6 +8,8 @@ use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
 
 mod pairing;
 mod sms;
+#[cfg(test)]
+pub(crate) use sms::{popup_count, receive as receive_sms};
 
 pub use pairing::open_pairing;
 pub use sms::show_sms;

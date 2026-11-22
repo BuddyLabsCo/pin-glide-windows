@@ -1,7 +1,4 @@
-use std::{
-    sync::LazyLock,
-    time::{Duration, SystemTime},
-};
+use std::{sync::LazyLock, time::Duration};
 
 use reqwest::StatusCode;
 use tokio::{
@@ -14,6 +11,9 @@ use super::{
     pairing_operation::ProgressUpdates,
 };
 use crate::storage::RegistrationStore;
+
+#[cfg(test)]
+mod tests;
 
 const BACKOFF: [u64; 6] = [1, 2, 4, 8, 16, 30];
 
@@ -88,20 +88,8 @@ impl<'a> Reconnect<'a> {
 
     pub(super) async fn open(
         &mut self,
-        expires_at: Option<SystemTime>,
+        enrolling: bool,
     ) -> Result<DeliveryConnection, PairingEventError> {
-        match expires_at {
-            Some(expiry) => timeout(
-                expiry.duration_since(SystemTime::now()).unwrap_or_default(),
-                self.connect(true),
-            )
-            .await
-            .unwrap_or(Err(PairingEventError::Transport)),
-            None => self.connect(false).await,
-        }
-    }
-
-    async fn connect(&mut self, enrolling: bool) -> Result<DeliveryConnection, PairingEventError> {
         loop {
             let power = *self.state.borrow_and_update();
             if power.suspended {
@@ -142,14 +130,16 @@ impl<'a> Reconnect<'a> {
     ) {
         let mut order = 0;
         loop {
-            self.updates.delivery_status(DeliveryStatus::Ready);
-            let reason = connection
+            self.updates.delivery_status(connected_status(store));
+            let loss = connection
                 .run(store, self.updates, &mut self.state, &mut order)
                 .await;
-            self.updates.delivery_status(reason);
-            let power = *self.state.borrow_and_update();
-            self.delay(power).await;
-            let Ok(next) = self.open(None).await else {
+            self.updates.delivery_status(loss.status);
+            if !loss.resume_failed {
+                let power = *self.state.borrow_and_update();
+                self.delay(power).await;
+            }
+            let Ok(next) = self.open(false).await else {
                 return;
             };
             connection = next;
@@ -169,6 +159,14 @@ impl<'a> Reconnect<'a> {
                     || state.improvements != previous.improvements
             }) => {}
         }
+    }
+}
+
+pub(super) fn connected_status(store: &RegistrationStore) -> DeliveryStatus {
+    match store.has_pairings() {
+        Ok(true) => DeliveryStatus::Ready,
+        Ok(false) => DeliveryStatus::Unregistered,
+        Err(_) => DeliveryStatus::Credential,
     }
 }
 

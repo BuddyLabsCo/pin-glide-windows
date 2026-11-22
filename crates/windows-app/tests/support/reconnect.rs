@@ -4,10 +4,99 @@ use serde_json::json;
 use tokio_tungstenite::tungstenite::{Message, protocol::frame::coding::CloseCode};
 use windows_app::service::{DeliveryStatus, PairingOperation, PairingStart};
 
-use super::{dpapi, fixture::*};
+use super::{dpapi, fixture::*, support};
 
-#[path = "mod.rs"]
-mod support;
+#[test]
+fn startup_keeps_the_empty_receiver_connected_but_not_ready() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("registration.json");
+    std::fs::write(
+        &path,
+        json!({
+            "version": 4, "receiver_id": "receiver-1",
+            "protected_receiver_token": dpapi::protect(RECEIVER_TOKEN.as_bytes()),
+            "active_pairings": {},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (listener, service) = listen();
+    let (pong, ready) = mpsc::channel();
+    let (stop, stopped) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut socket = accept_delivery(accept(&acceptor(), &listener));
+        socket.send(Message::Ping(vec![17].into())).unwrap();
+        assert_eq!(socket.read().unwrap(), Message::Pong(vec![17].into()));
+        pong.send(()).unwrap();
+        stopped.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+    let operation = PairingOperation::start_with_registration(
+        move || Some(service),
+        || {},
+        path,
+        PairingStart::Registered,
+    );
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(operation.delivery_status(), DeliveryStatus::Unregistered);
+    operation.shutdown();
+    stop.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn promotes_the_issued_credential_on_restart_after_the_pairing_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("registration.json");
+    let (listener, service) = listen();
+    let origin = format!(
+        "https://localhost:{}",
+        listener.local_addr().unwrap().port()
+    );
+    std::fs::write(
+        &path,
+        json!({
+            "version": 4,
+            "active_pairings": {},
+            "provisional_pairing": {
+                "session_id": "session-1", "receiver_id": "receiver-1",
+                "pairing_id": "pairing-1", "sender_id": "sender-1",
+                "protected_key": dpapi::protect(&[11; 32]),
+            },
+            "enrollment": {
+                "origin": origin, "session_id": "session-1", "receiver_id": "receiver-1",
+                "operation_id": "fixture-issue-16",
+                "expires_at": {"secs_since_epoch": 1, "nanos_since_epoch": 0},
+                "phase": {"Issued": dpapi::protect(RECEIVER_TOKEN.as_bytes())},
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (stop, stopped) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let _socket = accept_delivery(accept(&acceptor(), &listener));
+        stopped.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+    let operation = PairingOperation::start_with_registration(
+        move || Some(service),
+        || {},
+        path.clone(),
+        PairingStart::ResumePending,
+    );
+    support::wait_for(
+        || operation.delivery_status() == DeliveryStatus::Ready,
+        "Restart did not recover the accepted Receiver credential",
+    );
+    let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(stored["enrollment"].is_null() && stored["provisional_pairing"].is_null());
+    assert_eq!(
+        stored["active_pairings"]["pairing-1"]["sender_id"],
+        "sender-1"
+    );
+    operation.shutdown();
+    stop.send(()).unwrap();
+    server.join().unwrap();
+}
 
 pub(super) fn reject_occupied_slot(connection: Connection) {
     let mut occupied = BufReader::new(connection);

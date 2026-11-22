@@ -109,7 +109,7 @@ async fn connect_and_promote(
     let result = async {
         let token = pending.token().map_err(|_| PairingOutcome::Failed)?;
         let mut receiver = Reconnect::new(service, &token, &pending.receiver_id, updates);
-        let connection = match receiver.open(Some(pending.expires_at)).await {
+        let connection = match receiver.open(true).await {
             Ok(connection) => connection,
             Err(PairingEventError::Rejected { .. }) => return reject(store, &pending.operation_id),
             Err(_) => return Err(PairingOutcome::Failed),

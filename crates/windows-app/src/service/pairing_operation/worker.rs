@@ -22,7 +22,7 @@ async fn receive_registered(
         return;
     };
     let mut receiver = Reconnect::new(service, &token, &receiver_id, updates);
-    if let Ok(connection) = receiver.open(None).await {
+    if let Ok(connection) = receiver.open(false).await {
         receiver.receive(store, connection).await;
     }
 }

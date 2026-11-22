@@ -1,18 +1,10 @@
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use futures_util::{Sink, SinkExt, StreamExt};
 use pin_glide_wss::{Delivery, Receipt};
 use receiver_core::delivery::{Arrival, Envelope, Sms};
 use serde::Deserialize;
-use tokio::{
-    sync::watch,
-    time::{Instant, timeout, timeout_at},
-};
-use tokio_tungstenite::tungstenite::{
-    Error as SocketError, Message,
-    error::ProtocolError,
-    protocol::{CloseFrame, frame::coding::CloseCode},
-};
+use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 
 use super::{
     DeliveryStatus, Service,
@@ -25,6 +17,8 @@ use crate::storage::{DeliveryRejection, RegistrationStore};
 
 #[cfg(test)]
 mod tests;
+mod transport;
+use transport::Transport;
 
 pub(crate) struct ReceivedSms {
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -37,6 +31,20 @@ pub(crate) struct ReceivedSms {
 
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 const HEARTBEAT_LIMIT: Duration = Duration::from_secs(20);
+const MAX_PENDING_DELIVERIES: usize = 32;
+
+#[derive(Debug)]
+pub(super) struct ConnectionLoss {
+    pub status: DeliveryStatus,
+    pub resume_failed: bool,
+}
+
+struct IncomingDelivery {
+    text: Utf8Bytes,
+    arrival: Arrival,
+    #[cfg(windows)]
+    epoch: Option<u64>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,168 +110,63 @@ impl DeliveryConnection {
     }
 
     pub(super) async fn run(
-        mut self,
+        self,
         store: &RegistrationStore,
         updates: &ProgressUpdates,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
-    ) -> DeliveryStatus {
-        let reason = self.read_frames(store, updates, state, order).await;
-        if reason == DeliveryStatus::Protocol {
-            let _ = timeout(
-                WRITE_LIMIT,
-                self.socket.close(Some(CloseFrame {
-                    code: CloseCode::Protocol,
-                    reason: "invalid_delivery_event".into(),
-                })),
-            )
-            .await;
-        }
-        reason
-    }
-
-    async fn read_frames(
-        &mut self,
-        store: &RegistrationStore,
-        updates: &ProgressUpdates,
-        state: &mut watch::Receiver<Connectivity>,
-        order: &mut u64,
-    ) -> DeliveryStatus {
-        let mut resumes = state.borrow().resumes;
-        let mut heartbeat = Instant::now() + HEARTBEAT_LIMIT;
-        let mut probe = None;
-        loop {
-            let power = *state.borrow_and_update();
-            if power.suspended {
-                updates.delivery_status(DeliveryStatus::Suspended);
-                let _ = state.wait_for(|state| !state.suspended).await;
-                continue;
-            }
-            if resumes != power.resumes {
-                resumes = power.resumes;
-                let payload = resumes.to_le_bytes();
-                if !matches!(
-                    timeout(
-                        WRITE_LIMIT,
-                        self.socket.send(Message::Ping(payload.to_vec().into()))
-                    )
-                    .await,
-                    Ok(Ok(()))
-                ) {
-                    return DeliveryStatus::Disconnected;
-                }
-                heartbeat = Instant::now() + HEARTBEAT_LIMIT;
-                probe = Some((payload, Instant::now() + WRITE_LIMIT));
-                updates.delivery_status(DeliveryStatus::Connecting);
-            }
-            let deadline = probe.map_or(heartbeat, |(_, deadline)| deadline.min(heartbeat));
-            if Instant::now() >= deadline {
-                return DeliveryStatus::Heartbeat;
-            }
-            let frame = tokio::select! {
-                biased;
-                _ = state.wait_for(|state| state.suspended || state.resumes != resumes) => continue,
-                frame = timeout_at(deadline, self.socket.next()) => frame,
-            };
-            let frame = match frame {
-                Ok(Some(Ok(frame))) => frame,
-                Ok(Some(Err(SocketError::Protocol(
-                    ProtocolError::ResetWithoutClosingHandshake,
-                )))) => {
-                    return DeliveryStatus::Disconnected;
-                }
-                Ok(Some(Err(
-                    SocketError::Protocol(_) | SocketError::Utf8(_) | SocketError::Capacity(_),
-                ))) => {
-                    return DeliveryStatus::Protocol;
-                }
-                Ok(_) => return DeliveryStatus::Disconnected,
-                Err(_) => return DeliveryStatus::Heartbeat,
-            };
-            if frame.is_ping() {
-                heartbeat = Instant::now() + HEARTBEAT_LIMIT;
-            }
-            if let Message::Pong(ref data) = frame
-                && probe.is_some_and(|(expected, _)| data.as_ref() == expected)
-            {
-                probe = None;
-                updates.delivery_status(DeliveryStatus::Ready);
-            }
-            if let Err(reason) = self.handle_frame(frame, store, updates, order).await {
-                return reason;
-            }
-        }
-    }
-
-    async fn handle_frame(
-        &mut self,
-        frame: Message,
-        store: &RegistrationStore,
-        updates: &ProgressUpdates,
-        order: &mut u64,
-    ) -> Result<(), DeliveryStatus> {
-        let result = match frame {
-            Message::Text(text) => {
-                *order += 1;
-                let arrival = Arrival {
-                    time: SystemTime::now(),
-                    order: *order,
-                };
-                #[cfg(windows)]
-                let epoch = crate::platform::popup_epoch();
-                handle_text(
-                    &mut self.socket,
-                    &text,
-                    &self.receiver_id,
-                    store,
-                    |delivery| {
-                        authenticate(
-                            &self.receiver_id,
-                            delivery,
-                            arrival,
-                            store,
-                            updates,
-                            |sms, sender_name| {
-                                #[cfg(windows)]
-                                let Some(epoch) = epoch else { return };
-                                (updates.notify_sms)(ReceivedSms {
-                                    sms,
-                                    sender_name,
-                                    #[cfg(windows)]
-                                    epoch,
-                                });
-                            },
-                        )
-                    },
-                )
-                .await
-            }
-            Message::Ping(_) | Message::Pong(_) => {
-                match timeout(WRITE_LIMIT, self.socket.flush()).await {
-                    Ok(Ok(())) => Ok(()),
-                    _ => return Err(DeliveryStatus::Heartbeat),
-                }
-            }
-            Message::Close(_) => {
-                let _ = timeout(WRITE_LIMIT, self.socket.flush()).await;
-                return Err(DeliveryStatus::Disconnected);
-            }
-            _ => return Err(DeliveryStatus::Protocol),
-        };
-        result.map_err(|error| match error {
-            PairingEventError::Protocol => DeliveryStatus::Protocol,
-            _ => DeliveryStatus::Disconnected,
-        })
+    ) -> ConnectionLoss {
+        let (send, receive) = mpsc::channel(MAX_PENDING_DELIVERIES);
+        let mut transport = Transport::new(self.socket, store, updates);
+        let (loss, ()) = tokio::join!(
+            transport.run(state, order, send),
+            process_deliveries(receive, store, updates, self.receiver_id),
+        );
+        loss
     }
 }
 
-async fn handle_text(
-    socket: &mut (impl Sink<Message, Error = SocketError> + Unpin),
-    text: &str,
-    receiver_id: &str,
+async fn process_deliveries(
+    mut receive: mpsc::Receiver<IncomingDelivery>,
     store: &RegistrationStore,
-    authenticate: impl FnOnce(Delivery) -> Result<(), DeliveryRejection>,
-) -> Result<(), PairingEventError> {
+    updates: &ProgressUpdates,
+    receiver_id: String,
+) {
+    let store = store.clone();
+    let inbox = updates.inbox.clone();
+    let notify = updates.notify_sms;
+    let _ = tokio::task::spawn_blocking(move || {
+        while let Some(incoming) = receive.blocking_recv() {
+            let result = match serde_json::from_str::<Delivery>(&incoming.text) {
+                Ok(delivery) if delivery.receiver_id == receiver_id => {
+                    authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
+                }
+                Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
+                Err(_) => Err(DeliveryRejection::InvalidEnvelope),
+            };
+            match result {
+                Ok((sms, sender_name)) => {
+                    #[cfg(windows)]
+                    let Some(epoch) = incoming.epoch else {
+                        continue;
+                    };
+                    notify(ReceivedSms {
+                        sms,
+                        sender_name,
+                        #[cfg(windows)]
+                        epoch,
+                    });
+                }
+                Err(category) => {
+                    let _ = store.record_delivery_rejection(category);
+                }
+            }
+        }
+    })
+    .await;
+}
+
+fn receipt(text: &str) -> Result<Option<String>, PairingEventError> {
     let header: EventHeader =
         serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
     if header.version != 1 {
@@ -271,7 +174,7 @@ async fn handle_text(
     }
     match header.kind.as_str() {
         "delivery" => {}
-        "error" | "pairing_removed" | "device_revoked" => return Ok(()),
+        "error" | "pairing_removed" | "device_revoked" => return Ok(None),
         _ => return Err(PairingEventError::Protocol),
     }
     let receipt = Receipt {
@@ -280,20 +183,9 @@ async fn handle_text(
         reserved_type: "receipt".into(),
         version: 1,
     };
-    let receipt = serde_json::to_string(&receipt).map_err(|_| PairingEventError::Protocol)?;
-    let sent = timeout(WRITE_LIMIT, socket.send(Message::text(receipt))).await;
-    let authenticated = match serde_json::from_str::<Delivery>(text) {
-        Ok(delivery) if delivery.receiver_id == receiver_id => authenticate(delivery),
-        Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
-        Err(_) => Err(DeliveryRejection::InvalidEnvelope),
-    };
-    if let Err(category) = authenticated {
-        let _ = store.record_delivery_rejection(category);
-    }
-    match sent {
-        Ok(Ok(())) => Ok(()),
-        _ => Err(PairingEventError::Transport),
-    }
+    serde_json::to_string(&receipt)
+        .map(Some)
+        .map_err(|_| PairingEventError::Protocol)
 }
 
 fn authenticate(
@@ -301,12 +193,10 @@ fn authenticate(
     delivery: Delivery,
     arrival: Arrival,
     store: &RegistrationStore,
-    updates: &ProgressUpdates,
-    notify: impl FnOnce(Sms, String),
-) -> Result<(), DeliveryRejection> {
+    inbox: &std::sync::Mutex<receiver_core::delivery::Inbox>,
+) -> Result<(Sms, String), DeliveryRejection> {
     let mut sender_name = String::new();
-    let mut inbox = updates
-        .inbox
+    let mut inbox = inbox
         .lock()
         .map_err(|_| DeliveryRejection::InboxUnavailable)?;
     let result = inbox.receive(
@@ -323,10 +213,8 @@ fn authenticate(
             Some(target.key)
         },
     );
-    drop(inbox);
     let sms = result.map_err(DeliveryRejection::Receive)?;
-    notify(sms, sender_name);
-    Ok(())
+    Ok((sms, sender_name))
 }
 
 fn correlation(value: Option<String>) -> Result<String, PairingEventError> {
