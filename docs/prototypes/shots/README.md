@@ -13,7 +13,6 @@ application window and omit the browser's preview controls.
 | [Settings](settings/) | 12 | All gallery settings states, including shortcut and startup errors. Also shows empty, negative, fractional, and non-numeric popup durations after the field loses focus, plus a saved duration. |
 | [SMS popups](messages/) | 5 | With and without a code, long code with ellipsis, and long message at the start and end of its scroll area |
 | [Tray menu](tray/) | 1 | Open Pin Glide, Settings, and Exit |
-| [Historical style study](style-study/) | 66 | A/B/C directions in both palettes, every preset, and examples of settings, shortcut assignment, startup off, and closed windows |
 
 Pairing filenames distinguish the selected input (`-input-`) from the result of
 clicking Finish (`-error-`). Main window filenames identify the expanded row

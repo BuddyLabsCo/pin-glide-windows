@@ -1,10 +1,9 @@
-# Compact native utility UI study
+# Pin Glide Windows UI prototype
 
-This continues the B direction selected by the user on November 14, 2026.
-The user also selected fixed-size, non-maximizable windows and no theme/dark
-appearance in the current scope. UI supports Chinese and English, defaulting
-to the system language with an explicit override in Settings. The demo itself
-shows Chinese only.
+The approved design uses compact windows with fixed logical sizes, a single
+light appearance, and the original Pin Glide logo. The product supports
+Chinese and English and follows the system language by default. The browser
+prototype uses Chinese.
 
 Open [index.html](index.html) directly in a browser. It opens the animated
 welcome screen. Choose Start to enter pairing. Each scenario has its own HTML
@@ -33,8 +32,7 @@ completes. The completion screens accept a device name and show the saved
 name in the device list and SMS source. The browser preview keeps these names
 for the current tab session.
 
-Read [ui-inventory.md](ui-inventory.md) for the complete trigger/action/error
-inventory. The demo shows application screens and the tray menu sketch.
+The [UI inventory](ui-inventory.md) describes the approved screens and interactions.
 
 ## Native source and regeneration
 
@@ -48,11 +46,11 @@ python docs/prototypes/ui-tool/build-preview.py
 ```
 
 The command compiles the source with `--style fluent`, renders every state and
-asserts each output has the proposed fixed logical dimensions. It writes
+asserts each output matches the prototype's fixed logical dimensions. It writes
 `shots/` and a separate state-data file for each feature under `data/`.
 The HTML files are edited directly.
 
-Edit each feature's HTML for its layout and discussion notes. Shared preview
+Edit each feature's HTML for its layout. Shared preview
 styles live in `assets/preview.css`; shared state navigation/rendering lives
 in `assets/gallery.js`. Product-surface artwork comes from `ui.slint`, with
 scenario inputs defined in `build-preview.py`. No file-loader server, bundler
@@ -104,5 +102,4 @@ Compilation, native render dimensions and browser-catalogue navigation were
 checked across the separate scenario pages.
 Focus/maximize/tray/clipboard/hotkeys, real pairing/crypto/reception,
 installer behavior, accessibility automation, product E2E, resource measurement
-and acceptance were not validated. The user has excluded the last three
-projects from the Wayfinder map.
+and acceptance were not validated.
