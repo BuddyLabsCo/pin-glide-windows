@@ -14,7 +14,7 @@ use tokio_tungstenite::{
     },
 };
 
-use super::{NewReceiverSession, Service, SessionState};
+use super::{NewReceiverSession, Service, SessionState, pairing_snapshot::Snapshot};
 
 const PROTOCOL: &str = "pin-glide.v1";
 
@@ -25,16 +25,10 @@ pub(super) struct PairingEvents {
 }
 
 pub(super) enum PairingEvent {
-    State(SessionState, Option<Claim>),
+    State(Snapshot),
     Relay(String),
     CredentialReady,
     Error,
-}
-
-#[derive(Eq, PartialEq)]
-pub(super) struct Claim {
-    pub pairing_id: String,
-    pub sender_id: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -232,10 +226,7 @@ impl PairingEvents {
         let state: PairingState =
             serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
         let session = state.session;
-        if session.session_id != self.session_id
-            || session.receiver_id != self.receiver_id
-            || *session.mode != AnonymousSchema26::NewReceiver
-        {
+        if *session.mode != AnonymousSchema26::NewReceiver {
             return Err(PairingEventError::Protocol);
         }
         let phase = match *session.state {
@@ -248,27 +239,17 @@ impl PairingEvents {
             AnonymousSchema33::Expired => SessionState::Expired,
             AnonymousSchema33::Superseded => SessionState::Superseded,
         };
-        let claim = match (session.pairing_id, session.sender_id) {
-            (Some(pairing_id), Some(sender_id))
-                if !pairing_id.is_empty() && !sender_id.is_empty() =>
-            {
-                Some(Claim {
-                    pairing_id,
-                    sender_id,
-                })
-            }
-            (None, None) => None,
-            _ => return Err(PairingEventError::Protocol),
-        };
-        if matches!(
-            phase,
-            SessionState::CredentialReady
-                | SessionState::CredentialIssued
-                | SessionState::Completed
-        ) && (claim.is_none() || !session.sender_confirmed || !session.receiver_confirmed)
-        {
-            return Err(PairingEventError::Protocol);
+        Snapshot {
+            session_id: session.session_id,
+            receiver_id: session.receiver_id,
+            pairing_id: session.pairing_id,
+            sender_id: session.sender_id,
+            state: phase,
+            receiver_confirmed: session.receiver_confirmed,
+            sender_confirmed: session.sender_confirmed,
         }
-        Ok(PairingEvent::State(phase, claim))
+        .validated(&self.session_id, &self.receiver_id)
+        .map(PairingEvent::State)
+        .ok_or(PairingEventError::Protocol)
     }
 }

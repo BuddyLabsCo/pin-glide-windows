@@ -18,7 +18,7 @@ pub enum PairingOutcome {
     Failed,
     Expired,
     Canceled,
-    KeyConfirmed,
+    KeyConfirmed(SessionState),
 }
 
 pub fn pairing_lifetime(

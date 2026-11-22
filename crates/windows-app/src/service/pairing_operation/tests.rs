@@ -17,9 +17,6 @@ use super::{
 };
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
 
-#[cfg(windows)]
-mod confirmation;
-
 pub(crate) const TOKEN: &str = "fixture-pairing-b";
 const EXPIRY: &str = "2030-01-01T00:01:00Z";
 const START: u64 = 1_893_456_000;
@@ -240,8 +237,9 @@ async fn preserves_terminal_state_before_policy_close_and_reports_unexpected_clo
             progress,
             worker: None,
         };
-        let worker =
-            tokio::spawn(async move { drive(&service, &updates, stopping, || clock(START)).await });
+        let worker = tokio::spawn(async move {
+            drive(&service, &updates, stopping, || clock(START), None).await
+        });
         send.send(Some("awaiting_authorization")).unwrap();
         wait_for(&operation, |state| {
             matches!(state, PairingProgress::Waiting { .. })
@@ -288,7 +286,7 @@ async fn upgrade_rejection_distinguishes_expiry_from_other_failures() {
         let (service, server) = script_service(Script::Rejected(status, code));
         let (updates, progress) = progress_channel();
         let (_stop, stopping) = oneshot::channel();
-        drive(&service, &updates, stopping, || clock(START)).await;
+        drive(&service, &updates, stopping, || clock(START), None).await;
         assert!(
             matches!(*progress.borrow(), PairingProgress::Finished(outcome) if outcome == expected)
         );
@@ -307,7 +305,9 @@ async fn the_countdown_reaches_expiry_on_the_operation_deadline() {
         worker: None,
     };
     let worker =
-        tokio::spawn(async move { drive(&service, &updates, stopping, || clock(START)).await });
+        tokio::spawn(
+            async move { drive(&service, &updates, stopping, || clock(START), None).await },
+        );
     send.send(Some("awaiting_authorization")).unwrap();
     wait_for(&operation, |state| {
         matches!(state, PairingProgress::Waiting { .. })

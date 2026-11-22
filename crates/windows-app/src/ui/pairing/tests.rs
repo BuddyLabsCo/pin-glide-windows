@@ -35,8 +35,6 @@ use crate::{
     ui::{self, WELCOME},
 };
 
-mod evidence;
-
 thread_local! {
     static SERVICES: RefCell<Vec<Service>> = const { RefCell::new(Vec::new()) };
 }

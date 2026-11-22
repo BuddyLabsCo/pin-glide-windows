@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use pairing_events::Claim;
 use pin_glide_http::{
     apis::{
         Error,
@@ -15,17 +14,19 @@ use pin_glide_http::{
         CompleteRequest, CreateRequest, complete_request, create_request, pairing_session_view,
     },
 };
-use reqwest::{Client, ClientBuilder, StatusCode, Url};
+use reqwest::{Certificate, Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod pairing_events;
 pub(crate) mod pairing_operation;
+mod pairing_snapshot;
 pub use pairing_operation::{PairingOperation, PairingProgress};
 pub use receiver_core::pairing::{PairingOutcome, SessionState};
 
 #[cfg(test)]
 pub(crate) mod tests;
 
+#[derive(Clone)]
 pub struct Service {
     config: Configuration,
 }
@@ -71,6 +72,14 @@ pub struct ValidationError {
 
 impl Service {
     pub fn new(origin: &str) -> Result<Self, CreateError> {
+        Self::with_builder(origin, client_builder())
+    }
+
+    pub fn with_trusted_root(origin: &str, root: Certificate) -> Result<Self, CreateError> {
+        Self::with_builder(origin, client_builder().tls_certs_only([root]))
+    }
+
+    fn with_builder(origin: &str, builder: ClientBuilder) -> Result<Self, CreateError> {
         let origin = Url::parse(origin).map_err(|_| CreateError::InvalidOrigin)?;
         if origin.scheme() != "https"
             || !origin.username().is_empty()
@@ -85,7 +94,7 @@ impl Service {
         Ok(Self {
             config: Configuration {
                 base_path: origin.origin().ascii_serialization(),
-                client: client_builder().build()?,
+                client: builder.build()?,
                 user_agent: None,
                 basic_auth: None,
                 oauth_access_token: None,
@@ -150,25 +159,66 @@ impl Service {
     async fn confirm_receiver(
         &self,
         session: &NewReceiverSession,
-        claim: &Claim,
-    ) -> Option<SessionState> {
+    ) -> Result<pairing_snapshot::Snapshot, CompletionError> {
         let mut config = self.config.clone();
         config.bearer_access_token = Some(session.pairing_token.clone());
         let report = CompleteRequest::new(complete_request::KeyConfirmation::Confirmed);
         let result = post_pairing_session_complete(&config, &session.session_id, report)
             .await
-            .ok()?;
-        let PostPairingSessionCompleteSuccess::Status200(snapshot) = result.entity? else {
-            return None;
+            .map_err(completion_error)?;
+        let Some(PostPairingSessionCompleteSuccess::Status200(snapshot)) = result.entity else {
+            return Err(CompletionError::InvalidResponse);
         };
-        (result.status == StatusCode::OK
-            && snapshot.mode == pairing_session_view::Mode::NewReceiver
-            && snapshot.session_id == session.session_id
-            && snapshot.receiver_id == session.receiver_id
-            && snapshot.pairing_id.as_deref() == Some(&claim.pairing_id)
-            && snapshot.sender_id.as_deref() == Some(&claim.sender_id)
-            && snapshot.receiver_confirmed)
-            .then(|| session_state(snapshot.state))
+        if result.status != StatusCode::OK
+            || snapshot.mode != pairing_session_view::Mode::NewReceiver
+        {
+            return Err(CompletionError::InvalidResponse);
+        }
+        pairing_snapshot::Snapshot {
+            session_id: snapshot.session_id,
+            receiver_id: snapshot.receiver_id,
+            pairing_id: snapshot.pairing_id,
+            sender_id: snapshot.sender_id,
+            state: session_state(snapshot.state),
+            receiver_confirmed: snapshot.receiver_confirmed,
+            sender_confirmed: snapshot.sender_confirmed,
+        }
+        .validated(&session.session_id, &session.receiver_id)
+        .ok_or(CompletionError::InvalidResponse)
+    }
+}
+
+enum CompletionError {
+    Transport,
+    InvalidResponse,
+    Rejected {
+        status: StatusCode,
+        code: Option<String>,
+    },
+}
+
+fn completion_error(
+    error: Error<pin_glide_http::apis::pairing_api::PostPairingSessionCompleteError>,
+) -> CompletionError {
+    use pin_glide_http::apis::pairing_api::PostPairingSessionCompleteError::*;
+
+    match error {
+        Error::Reqwest(_) => CompletionError::Transport,
+        Error::ResponseError(response) => {
+            let code = match response.entity {
+                Some(
+                    Status401(problem) | Status404(problem) | Status409(problem)
+                    | Status410(problem) | Status422(problem) | Status500(problem)
+                    | Status503(problem),
+                ) if problem.status == i64::from(response.status.as_u16()) => Some(problem.code),
+                _ => None,
+            };
+            CompletionError::Rejected {
+                status: response.status,
+                code,
+            }
+        }
+        _ => CompletionError::InvalidResponse,
     }
 }
 

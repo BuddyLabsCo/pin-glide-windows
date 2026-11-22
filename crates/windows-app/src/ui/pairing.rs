@@ -18,11 +18,19 @@ struct View {
     window: PairingWindow,
     operation: PairingOperation,
     rendered_code: Option<Arc<QrCode>>,
+    start: Box<dyn Fn() -> PairingOperation>,
 }
 
 pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
+    open_pairing(chinese, start_operation).map(drop)
+}
+
+pub fn open_pairing(
+    chinese: bool,
+    start: impl Fn(fn()) -> PairingOperation + 'static,
+) -> Result<PairingWindow, PlatformError> {
     if reopen()? {
-        return Ok(());
+        return Ok(PAIRING.with_borrow(|pairing| pairing.as_ref().unwrap().window.clone_strong()));
     }
     let window = PairingWindow::new()?;
     window.set_chinese(chinese);
@@ -36,14 +44,15 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
     super::focus(window.window());
     PAIRING.with_borrow_mut(|pairing| {
         let mut view = View {
-            window,
-            operation: start_operation(),
+            window: window.clone_strong(),
+            operation: start(notify_progress),
             rendered_code: None,
+            start: Box::new(move || start(notify_progress)),
         };
         view.render();
         *pairing = Some(view);
     });
-    Ok(())
+    Ok(window)
 }
 
 pub(super) fn reopen() -> Result<bool, PlatformError> {
@@ -84,14 +93,14 @@ pub(super) fn shutdown() {
     }
 }
 
-fn start_operation() -> PairingOperation {
+fn start_operation(notify: fn()) -> PairingOperation {
     #[cfg(test)]
     if let Some(service) = tests::connect() {
-        return PairingOperation::start(move || Some(service), notify_progress);
+        return PairingOperation::start(move || Some(service), notify);
     }
     let connect =
         || option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok());
-    PairingOperation::start(connect, notify_progress)
+    PairingOperation::start(connect, notify)
 }
 
 fn notify_progress() {
@@ -109,9 +118,9 @@ fn refresh() {
         let Some(view) = pairing else { return };
         if matches!(
             view.operation.current(),
-            PairingProgress::Finished(outcome) if outcome != PairingOutcome::KeyConfirmed
+            PairingProgress::Finished(outcome) if !matches!(outcome, PairingOutcome::KeyConfirmed(_))
         ) {
-            view.operation = start_operation();
+            view.operation = (view.start)();
             view.render();
         }
     });
@@ -140,7 +149,10 @@ impl View {
                 PairingOutcome::Failed => PairingStage::Failed,
                 PairingOutcome::Expired => PairingStage::Expired,
                 PairingOutcome::Canceled => PairingStage::Canceled,
-                PairingOutcome::KeyConfirmed => PairingStage::Confirming,
+                PairingOutcome::KeyConfirmed(crate::service::SessionState::CredentialReady) => {
+                    PairingStage::CredentialReady
+                }
+                PairingOutcome::KeyConfirmed(_) => PairingStage::Connecting,
             },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {

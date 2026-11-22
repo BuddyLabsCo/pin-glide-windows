@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::Arc,
     thread::{self, JoinHandle},
     time::{Duration, SystemTime},
@@ -14,8 +15,9 @@ use tokio::{
 use zeroize::Zeroizing;
 
 use super::{
-    NewReceiverSession, Service, SessionState,
-    pairing_events::{Claim, PairingEvent, PairingEventError, PairingEvents},
+    CompletionError, NewReceiverSession, Service, SessionState,
+    pairing_events::{PairingEvent, PairingEventError, PairingEvents},
+    pairing_snapshot::Claim,
 };
 use crate::storage::{PairingReference, RegistrationStore};
 
@@ -63,6 +65,22 @@ impl ProgressUpdates {
 
 impl PairingOperation {
     pub fn start(connect: impl FnOnce() -> Option<Service> + Send + 'static, notify: fn()) -> Self {
+        Self::spawn(connect, notify, None)
+    }
+
+    pub fn start_with_registration(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        path: PathBuf,
+    ) -> Self {
+        Self::spawn(connect, notify, Some(RegistrationStore::new(path)))
+    }
+
+    fn spawn(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        store: Option<RegistrationStore>,
+    ) -> Self {
         let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
         let (stop, stopping) = oneshot::channel();
         let updates = ProgressUpdates {
@@ -79,7 +97,13 @@ impl PairingOperation {
                         .build(),
                 ) {
                     (Some(service), Ok(runtime)) => {
-                        runtime.block_on(drive(&service, &updates, stopping, SystemTime::now));
+                        runtime.block_on(drive(
+                            &service,
+                            &updates,
+                            stopping,
+                            SystemTime::now,
+                            store.as_ref(),
+                        ));
                     }
                     _ => {
                         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
@@ -111,12 +135,13 @@ async fn drive(
     updates: &ProgressUpdates,
     stopping: oneshot::Receiver<()>,
     now: impl FnOnce() -> SystemTime,
+    store: Option<&RegistrationStore>,
 ) {
     let Ok(material) = PairingMaterial::generate() else {
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
         return;
     };
-    drive_session(service, updates, stopping, now, material, None).await;
+    drive_session(service, updates, stopping, now, material, store).await;
 }
 
 async fn drive_session(
@@ -145,9 +170,10 @@ async fn drive_session(
     );
     let deadline = Instant::now() + lifetime;
     let (outcome, exiting) = tokio::select! {
+        biased;
+        _ = &mut stopping => (PairingOutcome::Canceled, true),
         outcome = watch_session(service, &session, &material, deadline, updates, store) => (outcome, false),
         _ = sleep_until(deadline) => (PairingOutcome::Expired, false),
-        _ = &mut stopping => (PairingOutcome::Canceled, true),
     };
     updates.publish(PairingProgress::Finished(outcome));
     if exiting
@@ -188,7 +214,9 @@ async fn watch_session(
         _ => return PairingOutcome::CreateFailed,
     };
     let first = match first {
-        PairingEvent::State(SessionState::AwaitingAuthorization, _) => {
+        PairingEvent::State(ref snapshot)
+            if snapshot.state == SessionState::AwaitingAuthorization =>
+        {
             match wait_for_claim(&mut events, session, material, deadline, updates).await {
                 Ok(event) => event,
                 Err(outcome) => return outcome,
@@ -196,13 +224,20 @@ async fn watch_session(
         }
         event => event,
     };
-    match first {
-        PairingEvent::State(SessionState::AwaitingConfirmation, Some(claim)) => {
-            updates.publish(PairingProgress::Confirming);
-            check_key(service, session, &claim, material, &mut events, store).await
-        }
-        event => outcome(event, false),
+    let PairingEvent::State(snapshot) = first else {
+        return PairingOutcome::Failed;
+    };
+    if snapshot.state != SessionState::AwaitingConfirmation {
+        return outcome(snapshot.state, false);
     }
+    let Some(claim) = snapshot.into_claim() else {
+        return PairingOutcome::Failed;
+    };
+    updates.publish(PairingProgress::Confirming);
+    if let Err(outcome) = verify_and_save(&mut events, session, &claim, material, store).await {
+        return outcome;
+    }
+    wait_for_confirmation(service, session, &claim, &mut events).await
 }
 
 async fn wait_for_claim(
@@ -232,10 +267,8 @@ async fn wait_for_claim(
             event = events.next_event() => event.map_err(|_| PairingOutcome::Failed)?,
             _ = sleep_until(deadline - Duration::from_secs(seconds - 1)) => continue,
         };
-        if !matches!(
-            event,
-            PairingEvent::State(SessionState::AwaitingAuthorization, _)
-        ) {
+        if !matches!(&event, PairingEvent::State(snapshot) if snapshot.state == SessionState::AwaitingAuthorization)
+        {
             return Ok(event);
         }
     }
@@ -248,25 +281,14 @@ async fn next_relay(events: &mut PairingEvents, claim: &Claim) -> Result<String,
             .await
             .map_err(|_| PairingOutcome::Failed)?
         {
-            PairingEvent::State(SessionState::AwaitingConfirmation, Some(current))
-                if &current == claim => {}
+            PairingEvent::State(snapshot) if snapshot.matches_claim(claim) => {
+                if snapshot.state != SessionState::AwaitingConfirmation {
+                    return Err(outcome(snapshot.state, false));
+                }
+            }
             PairingEvent::Relay(payload) => return Ok(payload),
-            event => return Err(outcome(event, false)),
+            _ => return Err(PairingOutcome::Failed),
         }
-    }
-}
-
-async fn check_key(
-    service: &Service,
-    session: &NewReceiverSession,
-    claim: &Claim,
-    material: &PairingMaterial,
-    events: &mut PairingEvents,
-    store: Option<&RegistrationStore>,
-) -> PairingOutcome {
-    match verify_and_save(events, session, claim, material, store).await {
-        Ok(()) => wait_for_confirmation(service, session, claim, events).await,
-        Err(outcome) => outcome,
     }
 }
 
@@ -312,42 +334,60 @@ async fn wait_for_confirmation(
     claim: &Claim,
     events: &mut PairingEvents,
 ) -> PairingOutcome {
-    let mut report = std::pin::pin!(service.confirm_receiver(session, claim));
-    let mut sent = false;
-    loop {
-        tokio::select! {
-            event = events.next_event() => match event {
-                Ok(PairingEvent::State(SessionState::AwaitingConfirmation, Some(current)))
-                    if &current == claim => {}
-                Ok(PairingEvent::State(_, Some(ref current))) if current != claim => {
-                    return PairingOutcome::Failed;
-                }
-                Ok(event) => return outcome(event, true),
-                Err(_) => return PairingOutcome::Failed,
-            },
-            response = &mut report, if !sent => match response {
-                Some(SessionState::AwaitingConfirmation) => sent = true,
-                Some(state) => return outcome(PairingEvent::State(state, None), true),
-                None => return PairingOutcome::Failed,
-            },
+    let mut milestone = std::pin::pin!(confirmation_milestone(events, claim));
+    let response = tokio::select! {
+        biased;
+        state = &mut milestone => return state.unwrap_or(PairingOutcome::Failed),
+        response = service.confirm_receiver(session) => response,
+    };
+    let fallback = match response {
+        Ok(snapshot) if snapshot.matches_claim(claim) && snapshot.receiver_confirmed => {
+            if snapshot.state == SessionState::AwaitingConfirmation {
+                return milestone.await.unwrap_or(PairingOutcome::Failed);
+            }
+            return outcome(snapshot.state, true);
         }
-    }
+        Err(CompletionError::Rejected {
+            status: StatusCode::GONE,
+            code,
+        }) if code.as_deref() == Some("pairing_session_expired") => PairingOutcome::Expired,
+        _ => PairingOutcome::Failed,
+    };
+    timeout(Duration::from_secs(2), milestone)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(fallback)
 }
 
-fn outcome(event: PairingEvent, saved: bool) -> PairingOutcome {
-    match event {
-        PairingEvent::State(SessionState::Canceled, _) => PairingOutcome::Canceled,
-        PairingEvent::State(SessionState::Expired, _) => PairingOutcome::Expired,
-        PairingEvent::State(
-            SessionState::CredentialReady
-            | SessionState::CredentialIssued
-            | SessionState::Completed,
-            _,
-        )
-        | PairingEvent::CredentialReady
+async fn confirmation_milestone(
+    events: &mut PairingEvents,
+    claim: &Claim,
+) -> Option<PairingOutcome> {
+    while let Ok(event) = events.next_event().await {
+        match event {
+            PairingEvent::State(snapshot) if snapshot.matches_claim(claim) => {
+                if snapshot.state != SessionState::AwaitingConfirmation {
+                    return Some(outcome(snapshot.state, true));
+                }
+            }
+            PairingEvent::CredentialReady => {}
+            _ => break,
+        }
+    }
+    None
+}
+
+fn outcome(state: SessionState, saved: bool) -> PairingOutcome {
+    match state {
+        SessionState::Canceled => PairingOutcome::Canceled,
+        SessionState::Expired => PairingOutcome::Expired,
+        state @ (SessionState::CredentialReady
+        | SessionState::CredentialIssued
+        | SessionState::Completed)
             if saved =>
         {
-            PairingOutcome::KeyConfirmed
+            PairingOutcome::KeyConfirmed(state)
         }
         _ => PairingOutcome::Failed,
     }

@@ -126,6 +126,7 @@ interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
 | `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
 | `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
 | `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop with Pin Glide stopped |
+| `cargo test --locked -p windows-app --test pairing_desktop -- --ignored` | Check key-check motion, QR removal and terminal states on an interactive Windows desktop |
 
 The source gates cover handwritten files in `receiver-core` and `windows-app`.
 Generated code is checked through regeneration and compilation when added.
