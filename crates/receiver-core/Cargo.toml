@@ -6,11 +6,17 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aes-gcm.workspace = true
 base64 = "0.23"
-p256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
+getrandom = "0.4"
+hpke.workspace = true
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+subtle = "2"
 zeroize = "1"
+
+[dev-dependencies]
+hpke = { workspace = true, features = ["getrandom"] }
 
 [lints]
 workspace = true

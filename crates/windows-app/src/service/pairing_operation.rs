@@ -5,7 +5,7 @@ use std::{
 };
 
 use qrcode::QrCode;
-use receiver_core::pairing::{PairingMaterial, PairingOutcome, PairingPhase, pairing_lifetime};
+use receiver_core::pairing::{PairingMaterial, PairingOutcome, pairing_lifetime};
 use reqwest::StatusCode;
 use tokio::{
     sync::{oneshot, watch},
@@ -14,9 +14,10 @@ use tokio::{
 use zeroize::Zeroizing;
 
 use super::{
-    NewReceiverSession, Service,
-    pairing_events::{PairingEventError, PairingEvents},
+    NewReceiverSession, Service, SessionState,
+    pairing_events::{Claim, PairingEvent, PairingEventError, PairingEvents},
 };
+use crate::storage::{PairingReference, RegistrationStore};
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -108,13 +109,24 @@ impl PairingOperation {
 async fn drive(
     service: &Service,
     updates: &ProgressUpdates,
-    mut stopping: oneshot::Receiver<()>,
+    stopping: oneshot::Receiver<()>,
     now: impl FnOnce() -> SystemTime,
 ) {
     let Ok(material) = PairingMaterial::generate() else {
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
         return;
     };
+    drive_session(service, updates, stopping, now, material, None).await;
+}
+
+async fn drive_session(
+    service: &Service,
+    updates: &ProgressUpdates,
+    mut stopping: oneshot::Receiver<()>,
+    now: impl FnOnce() -> SystemTime,
+    material: PairingMaterial,
+    store: Option<&RegistrationStore>,
+) {
     let created = tokio::select! {
         result = service.new_receiver() => result,
         _ = &mut stopping => {
@@ -133,7 +145,8 @@ async fn drive(
     );
     let deadline = Instant::now() + lifetime;
     let (outcome, exiting) = tokio::select! {
-        outcome = observe(service, &session, &material, deadline, updates) => (outcome, false),
+        outcome = watch_session(service, &session, &material, deadline, updates, store) => (outcome, false),
+        _ = sleep_until(deadline) => (PairingOutcome::Expired, false),
         _ = &mut stopping => (PairingOutcome::Canceled, true),
     };
     updates.publish(PairingProgress::Finished(outcome));
@@ -147,30 +160,17 @@ async fn drive(
     }
 }
 
-async fn observe(
-    service: &Service,
-    session: &NewReceiverSession,
-    material: &PairingMaterial,
-    deadline: Instant,
-    updates: &ProgressUpdates,
-) -> PairingOutcome {
-    tokio::select! {
-        biased;
-        _ = sleep_until(deadline) => PairingOutcome::Expired,
-        outcome = watch_session(service, session, material, deadline, updates) => outcome,
-    }
-}
-
 async fn watch_session(
     service: &Service,
     session: &NewReceiverSession,
     material: &PairingMaterial,
     deadline: Instant,
     updates: &ProgressUpdates,
+    store: Option<&RegistrationStore>,
 ) -> PairingOutcome {
     let (mut events, first) = match timeout(Duration::from_secs(15), async {
         let mut events = service.pairing_events(session).await?;
-        let first = events.next_state().await?;
+        let first = events.next_event().await?;
         Ok((events, first))
     })
     .await
@@ -187,60 +187,168 @@ async fn watch_session(
         }
         _ => return PairingOutcome::CreateFailed,
     };
-    let phase = match PairingPhase::Preparing.advance(first) {
-        Ok(phase) => phase,
-        Err(outcome) => return outcome,
+    let first = match first {
+        PairingEvent::State(SessionState::AwaitingAuthorization, _) => {
+            match wait_for_claim(&mut events, session, material, deadline, updates).await {
+                Ok(event) => event,
+                Err(outcome) => return outcome,
+            }
+        }
+        event => event,
     };
-    let code = if phase == PairingPhase::Waiting {
-        let Some(payload) = material.qr_payload(&session.session_id, &session.receiver_id) else {
-            return PairingOutcome::CreateFailed;
-        };
-        let Ok(code) = QrCode::new(Zeroizing::new(payload).as_bytes()) else {
-            return PairingOutcome::CreateFailed;
-        };
-        Some(Arc::new(code))
-    } else {
-        None
-    };
-    follow_session(phase, code, deadline, updates, &mut events).await
+    match first {
+        PairingEvent::State(SessionState::AwaitingConfirmation, Some(claim)) => {
+            updates.publish(PairingProgress::Confirming);
+            check_key(service, session, &claim, material, &mut events, store).await
+        }
+        event => outcome(event, false),
+    }
 }
 
-async fn follow_session(
-    mut phase: PairingPhase,
-    mut code: Option<Arc<QrCode>>,
+async fn wait_for_claim(
+    events: &mut PairingEvents,
+    session: &NewReceiverSession,
+    material: &PairingMaterial,
     deadline: Instant,
     updates: &ProgressUpdates,
+) -> Result<PairingEvent, PairingOutcome> {
+    let payload = material
+        .qr_payload(&session.session_id, &session.receiver_id)
+        .ok_or(PairingOutcome::CreateFailed)?;
+    let code = QrCode::new(Zeroizing::new(payload).as_bytes())
+        .map(Arc::new)
+        .map_err(|_| PairingOutcome::CreateFailed)?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(PairingOutcome::Expired);
+        }
+        let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0);
+        updates.publish(PairingProgress::Waiting {
+            code: Arc::clone(&code),
+            seconds,
+        });
+        let event = tokio::select! {
+            event = events.next_event() => event.map_err(|_| PairingOutcome::Failed)?,
+            _ = sleep_until(deadline - Duration::from_secs(seconds - 1)) => continue,
+        };
+        if !matches!(
+            event,
+            PairingEvent::State(SessionState::AwaitingAuthorization, _)
+        ) {
+            return Ok(event);
+        }
+    }
+}
+
+async fn next_relay(events: &mut PairingEvents, claim: &Claim) -> Result<String, PairingOutcome> {
+    loop {
+        match events
+            .next_event()
+            .await
+            .map_err(|_| PairingOutcome::Failed)?
+        {
+            PairingEvent::State(SessionState::AwaitingConfirmation, Some(current))
+                if &current == claim => {}
+            PairingEvent::Relay(payload) => return Ok(payload),
+            event => return Err(outcome(event, false)),
+        }
+    }
+}
+
+async fn check_key(
+    service: &Service,
+    session: &NewReceiverSession,
+    claim: &Claim,
+    material: &PairingMaterial,
+    events: &mut PairingEvents,
+    store: Option<&RegistrationStore>,
+) -> PairingOutcome {
+    match verify_and_save(events, session, claim, material, store).await {
+        Ok(()) => wait_for_confirmation(service, session, claim, events).await,
+        Err(outcome) => outcome,
+    }
+}
+
+async fn verify_and_save(
+    events: &mut PairingEvents,
+    session: &NewReceiverSession,
+    claim: &Claim,
+    material: &PairingMaterial,
+    store: Option<&RegistrationStore>,
+) -> Result<(), PairingOutcome> {
+    let init = next_relay(events, claim).await?;
+    let (pending, reply) = material
+        .begin_confirmation(&session.session_id, &init)
+        .map_err(|_| PairingOutcome::Failed)?;
+    events
+        .send_relay(reply)
+        .await
+        .map_err(|_| PairingOutcome::Failed)?;
+    let reply = next_relay(events, claim).await?;
+    let key = pending.verify(&reply).map_err(|_| PairingOutcome::Failed)?;
+    let reference = PairingReference {
+        session_id: &session.session_id,
+        receiver_id: &session.receiver_id,
+        pairing_id: &claim.pairing_id,
+        sender_id: &claim.sender_id,
+    };
+    let local;
+    let store = match store {
+        Some(store) => store,
+        None => {
+            local = RegistrationStore::for_current_user().map_err(|_| PairingOutcome::Failed)?;
+            &local
+        }
+    };
+    store
+        .commit_provisional(&reference, key.as_bytes())
+        .map_err(|_| PairingOutcome::Failed)
+}
+
+async fn wait_for_confirmation(
+    service: &Service,
+    session: &NewReceiverSession,
+    claim: &Claim,
     events: &mut PairingEvents,
 ) -> PairingOutcome {
+    let mut report = std::pin::pin!(service.confirm_receiver(session, claim));
+    let mut sent = false;
     loop {
-        if phase == PairingPhase::Confirming {
-            code = None;
+        tokio::select! {
+            event = events.next_event() => match event {
+                Ok(PairingEvent::State(SessionState::AwaitingConfirmation, Some(current)))
+                    if &current == claim => {}
+                Ok(PairingEvent::State(_, Some(ref current))) if current != claim => {
+                    return PairingOutcome::Failed;
+                }
+                Ok(event) => return outcome(event, true),
+                Err(_) => return PairingOutcome::Failed,
+            },
+            response = &mut report, if !sent => match response {
+                Some(SessionState::AwaitingConfirmation) => sent = true,
+                Some(state) => return outcome(PairingEvent::State(state, None), true),
+                None => return PairingOutcome::Failed,
+            },
         }
-        let countdown = if let Some(code) = &code {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return PairingOutcome::Expired;
-            }
-            let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() != 0);
-            updates.publish(PairingProgress::Waiting {
-                code: Arc::clone(code),
-                seconds,
-            });
-            sleep_until(deadline - Duration::from_secs(seconds - 1))
-        } else {
-            updates.publish(PairingProgress::Confirming);
-            sleep_until(deadline)
-        };
-        let event = tokio::select! {
-            event = events.next_state() => event,
-            _ = countdown, if code.is_some() => continue,
-        };
-        let Ok(state) = event else {
-            return PairingOutcome::Failed;
-        };
-        phase = match phase.advance(state) {
-            Ok(phase) => phase,
-            Err(outcome) => return outcome,
-        };
+    }
+}
+
+fn outcome(event: PairingEvent, saved: bool) -> PairingOutcome {
+    match event {
+        PairingEvent::State(SessionState::Canceled, _) => PairingOutcome::Canceled,
+        PairingEvent::State(SessionState::Expired, _) => PairingOutcome::Expired,
+        PairingEvent::State(
+            SessionState::CredentialReady
+            | SessionState::CredentialIssued
+            | SessionState::Completed,
+            _,
+        )
+        | PairingEvent::CredentialReady
+            if saved =>
+        {
+            PairingOutcome::KeyConfirmed
+        }
+        _ => PairingOutcome::Failed,
     }
 }

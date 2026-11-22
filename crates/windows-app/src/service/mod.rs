@@ -1,15 +1,19 @@
 use std::time::Duration;
 
+use pairing_events::Claim;
 use pin_glide_http::{
     apis::{
         Error,
         configuration::Configuration,
         pairing_api::{
-            PostPairingSessionsError, PostPairingSessionsSuccess, delete_pairing_session,
+            PostPairingSessionCompleteSuccess, PostPairingSessionsError,
+            PostPairingSessionsSuccess, delete_pairing_session, post_pairing_session_complete,
             post_pairing_sessions,
         },
     },
-    models::{CreateRequest, create_request, pairing_session_view},
+    models::{
+        CompleteRequest, CreateRequest, complete_request, create_request, pairing_session_view,
+    },
 };
 use reqwest::{Client, ClientBuilder, StatusCode, Url};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -141,6 +145,30 @@ impl Service {
             delete_pairing_session(&config, &session.session_id).await,
             Ok(response) if response.status == StatusCode::NO_CONTENT
         )
+    }
+
+    async fn confirm_receiver(
+        &self,
+        session: &NewReceiverSession,
+        claim: &Claim,
+    ) -> Option<SessionState> {
+        let mut config = self.config.clone();
+        config.bearer_access_token = Some(session.pairing_token.clone());
+        let report = CompleteRequest::new(complete_request::KeyConfirmation::Confirmed);
+        let result = post_pairing_session_complete(&config, &session.session_id, report)
+            .await
+            .ok()?;
+        let PostPairingSessionCompleteSuccess::Status200(snapshot) = result.entity? else {
+            return None;
+        };
+        (result.status == StatusCode::OK
+            && snapshot.mode == pairing_session_view::Mode::NewReceiver
+            && snapshot.session_id == session.session_id
+            && snapshot.receiver_id == session.receiver_id
+            && snapshot.pairing_id.as_deref() == Some(&claim.pairing_id)
+            && snapshot.sender_id.as_deref() == Some(&claim.sender_id)
+            && snapshot.receiver_confirmed)
+            .then(|| session_state(snapshot.state))
     }
 }
 

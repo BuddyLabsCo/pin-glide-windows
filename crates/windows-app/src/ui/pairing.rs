@@ -107,7 +107,10 @@ fn notify_progress() {
 fn refresh() {
     PAIRING.with_borrow_mut(|pairing| {
         let Some(view) = pairing else { return };
-        if matches!(view.operation.current(), PairingProgress::Finished(_)) {
+        if matches!(
+            view.operation.current(),
+            PairingProgress::Finished(outcome) if outcome != PairingOutcome::KeyConfirmed
+        ) {
             view.operation = start_operation();
             view.render();
         }
@@ -137,6 +140,7 @@ impl View {
                 PairingOutcome::Failed => PairingStage::Failed,
                 PairingOutcome::Expired => PairingStage::Expired,
                 PairingOutcome::Canceled => PairingStage::Canceled,
+                PairingOutcome::KeyConfirmed => PairingStage::Confirming,
             },
         };
         if stage != PairingStage::Waiting && self.rendered_code.take().is_some() {

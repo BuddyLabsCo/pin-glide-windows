@@ -17,6 +17,9 @@ use super::{
 };
 use crate::service::tests::{accept_loopback, acceptor, listen, local_service};
 
+#[cfg(windows)]
+mod confirmation;
+
 pub(crate) const TOKEN: &str = "fixture-pairing-b";
 const EXPIRY: &str = "2030-01-01T00:01:00Z";
 const START: u64 = 1_893_456_000;
@@ -36,18 +39,7 @@ fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
     let service = local_service(&listener, &origin, true);
     let server = std::thread::spawn(move || {
         let acceptor = acceptor();
-        let mut creation = BufReader::new(acceptor.accept(accept_loopback(&listener)).unwrap());
-        assert_eq!(
-            read_request(&mut creation),
-            "POST /v1/pairing-sessions HTTP/1.1\r\n"
-        );
-        let created = json!({
-            "session": snapshot("awaiting_authorization"),
-            "pairingToken": TOKEN,
-            "pairingTokenExpiresAt": EXPIRY,
-        });
-        write_response(creation.get_mut(), "201 Created", &created);
-        drop(creation);
+        accept_creation(acceptor.accept(accept_loopback(&listener)).unwrap());
 
         let connection = acceptor.accept(accept_loopback(&listener)).unwrap();
         match script {
@@ -85,10 +77,30 @@ fn script_service(script: Script) -> (Service, std::thread::JoinHandle<()>) {
     (service, server)
 }
 
+fn accept_creation(connection: impl Read + Write) {
+    let mut creation = BufReader::new(connection);
+    assert_eq!(
+        read_request(&mut creation),
+        "POST /v1/pairing-sessions HTTP/1.1\r\n"
+    );
+    let created = json!({
+        "session": snapshot("awaiting_authorization"),
+        "pairingToken": TOKEN,
+        "pairingTokenExpiresAt": EXPIRY,
+    });
+    write_response(creation.get_mut(), "201 Created", &created);
+}
+
 pub(crate) fn read_request(stream: &mut impl BufRead) -> String {
+    let (request, _, _) = read_request_parts(stream);
+    request
+}
+
+fn read_request_parts(stream: &mut impl BufRead) -> (String, Vec<String>, Vec<u8>) {
     let mut request = String::new();
     stream.read_line(&mut request).unwrap();
     let mut size = 0;
+    let mut headers = Vec::new();
     loop {
         let mut header = String::new();
         assert_ne!(stream.read_line(&mut header).unwrap(), 0);
@@ -99,9 +111,11 @@ pub(crate) fn read_request(stream: &mut impl BufRead) -> String {
         if name.eq_ignore_ascii_case("content-length") {
             size = value.trim().parse().unwrap();
         }
+        headers.push(header);
     }
-    stream.read_exact(&mut vec![0; size]).unwrap();
-    request
+    let mut body = vec![0; size];
+    stream.read_exact(&mut body).unwrap();
+    (request, headers, body)
 }
 
 pub(crate) fn write_response(stream: &mut impl Write, status: &str, body: &Value) {
@@ -171,16 +185,21 @@ pub(crate) fn send_state(
     socket: &mut tokio_tungstenite::tungstenite::WebSocket<impl Read + Write>,
     state: Value,
 ) {
-    socket
-        .send(Message::text(
-            json!({
-                "type": "pairing_state",
-                "version": 1,
-                "session": state,
-            })
-            .to_string(),
-        ))
-        .unwrap();
+    send_event(
+        socket,
+        json!({
+            "type": "pairing_state",
+            "version": 1,
+            "session": state,
+        }),
+    );
+}
+
+pub(crate) fn send_event(
+    socket: &mut tokio_tungstenite::tungstenite::WebSocket<impl Read + Write>,
+    event: Value,
+) {
+    socket.send(Message::text(event.to_string())).unwrap();
 }
 
 async fn wait_for(operation: &PairingOperation, matches: impl Fn(&PairingProgress) -> bool) {

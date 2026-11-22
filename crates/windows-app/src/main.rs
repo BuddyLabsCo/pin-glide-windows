@@ -7,6 +7,8 @@ slint::include_modules!();
 mod platform;
 #[cfg(all(test, windows))]
 mod service;
+#[cfg(all(test, windows))]
+mod storage;
 #[cfg(windows)]
 mod ui;
 #[cfg(all(not(test), windows))]

@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
-use p256::PublicKey;
+use hpke::{Deserializable, Kem, kem::DhP256HkdfSha256};
 use receiver_core::pairing::PairingMaterial;
 use serde_json::Value;
 
@@ -34,7 +34,7 @@ fn encodes_only_the_shared_v1_fields_and_rotates_handshake_material() {
             .unwrap();
         assert_eq!(public_key.len(), 65);
         assert_eq!(public_key[0], 4);
-        assert!(PublicKey::from_sec1_bytes(&public_key).is_ok());
+        assert!(<DhP256HkdfSha256 as Kem>::PublicKey::from_bytes(&public_key).is_ok());
         assert_eq!(
             STANDARD
                 .decode(payload["psk"].as_str().unwrap())
