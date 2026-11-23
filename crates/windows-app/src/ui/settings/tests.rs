@@ -5,6 +5,49 @@ use crate::storage::settings::Language;
 
 #[test]
 #[ignore = "requires an interactive Windows desktop"]
+fn shortcut_tooltip_shows_the_full_value_and_dismisses_on_pointer_exit() {
+    use i_slint_core::{
+        item_tree::ItemRc, items::StyledTextItem, styled_text::get_raw_text, window::WindowInner,
+    };
+    use slint::{
+        ComponentHandle, LogicalPosition,
+        platform::{WindowEvent, update_timers_and_animations},
+    };
+    use std::{ops::ControlFlow, time::Duration};
+
+    crate::startup_tests::select_test_backend().unwrap();
+    let settings = crate::SettingsWindow::new().unwrap();
+    settings.set_chinese(true);
+    let chord = "Ctrl + Alt + Shift + Page Down";
+    settings.set_shortcut(chord.into());
+    settings.show().unwrap();
+    let window = settings.window();
+    let inner = WindowInner::from_pub(window);
+    update_timers_and_animations();
+    window.dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(228., 210.),
+    });
+    std::thread::sleep(Duration::from_millis(750));
+    update_timers_and_animations();
+
+    {
+        let popups = inner.active_popups();
+        assert_eq!(popups.len(), 1);
+        let root = ItemRc::new_root(popups[0].component.clone());
+        let text = root
+            .visit_descendants(|item| match item.downcast::<StyledTextItem>() {
+                Some(text) => ControlFlow::Break(text),
+                None => ControlFlow::Continue(()),
+            })
+            .unwrap();
+        assert_eq!(get_raw_text(&text.as_pin_ref().text()), chord);
+    }
+    window.dispatch_event(WindowEvent::PointerExited);
+    assert!(inner.active_popups().is_empty());
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop"]
 fn settings_keyboard_navigation_skips_the_page_focus_target() {
     use i_slint_core::{
         accessibility::AccessibleStringProperty, item_tree::ParentItemTraversalMode,

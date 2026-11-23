@@ -127,35 +127,6 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
         main_capture::edit_value(settings as usize, LABEL, None),
         "Ctrl + Alt + Q"
     );
-    drop(restarted);
-    let occupied = Occupied::new(MOD_CONTROL | MOD_ALT, b'Q'.into());
-    let blocked = AppProcess(
-        fixture
-            .command()
-            .env("PINGLIDE_TEST_REDUCED_MOTION", "1")
-            .spawn()
-            .unwrap(),
-    );
-    let main = wait_for_window(blocked.0.id(), |window| {
-        visible(window) && window_size::client_size(window, 400, 576).is_some()
-    });
-    click(main, 360, 40);
-    let settings = wait_for_window(blocked.0.id(), |window| {
-        visible(window) && window_size::client_size(window, 420, 392).is_some()
-    });
-    assert_label(settings, "此快捷键已被占用，原有快捷键保持不变。");
-    capture_client(settings, 420, 392, "settings-shortcut-restore-conflict");
-    assert_eq!(
-        main_capture::edit_value(settings as usize, LABEL, None),
-        "未设置"
-    );
-    click(settings, 354, 210);
-    wait_for(
-        || read_settings(&path).get("shortcut").is_none(),
-        "Clear must remove the saved shortcut even when it could not be restored",
-    );
-    drop(occupied);
-
     begin(settings);
     send_keys(settings, &[VK_CONTROL, VK_NEXT]);
     send_keys(settings, &[VK_RETURN]);
@@ -171,6 +142,80 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
     );
     assert!(read_settings(&path).get("shortcut").is_none());
     drop(Occupied::new(MOD_CONTROL, VK_NEXT.into()));
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop"]
+fn unavailable_saved_shortcut_can_be_cleared() {
+    // SAFETY: use physical coordinates when addressing the fixture windows.
+    unsafe {
+        assert!(
+            !SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_null()
+        );
+    }
+    let fixture = Fixture::new();
+    seed_registration(&fixture.path().join("registration.json"), false);
+    let path = fixture.path().join("settings.json");
+    let saved = serde_json::json!({
+        "version": 3,
+        "language": "chinese",
+        "launch_at_login": false,
+        "popup_duration_seconds": 30,
+        "shortcut": {"key": b'V', "modifiers": MOD_CONTROL | MOD_ALT},
+    });
+    fs::write(&path, saved.to_string()).unwrap();
+
+    let child = AppProcess(fixture.command().spawn().unwrap());
+    let settings = open_settings(&child);
+    assert_eq!(
+        main_capture::edit_value(settings as usize, LABEL, None),
+        "Ctrl + Alt + V"
+    );
+    capture_client(settings, 420, 392, "settings-shortcut-restored");
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&path)
+        .unwrap();
+    click(settings, 354, 210);
+    assert_label(settings, "无法保存快捷键，请重试。");
+    capture_client(settings, 420, 392, "settings-shortcut-clear-save-failed");
+    assert_eq!(read_settings(&path), saved);
+    assert!(!Occupied::available(MOD_CONTROL | MOD_ALT, b'V'.into()));
+    drop(locked);
+    drop(child);
+
+    let occupied = Occupied::new(MOD_CONTROL | MOD_ALT, b'V'.into());
+    let child = AppProcess(fixture.command().spawn().unwrap());
+    let settings = open_settings(&child);
+    let feedback = "已保存的快捷键被占用，当前没有生效的快捷键。";
+    assert_label(settings, feedback);
+    capture_client(settings, 420, 392, "settings-shortcut-restore-conflict");
+    assert_eq!(
+        main_capture::edit_value(settings as usize, LABEL, None),
+        "未设置"
+    );
+    assert_eq!(read_settings(&path), saved);
+    click(settings, 354, 210);
+    wait_for(
+        || {
+            read_settings(&path).get("shortcut").is_none()
+                && !main_capture::accessible_name(settings as usize, feedback).unwrap()
+        },
+        "Clear must remove the unavailable shortcut and its feedback",
+    );
+    assert!(!Occupied::available(MOD_CONTROL | MOD_ALT, b'V'.into()));
+    drop(occupied);
+}
+
+fn open_settings(child: &AppProcess) -> HWND {
+    let main = wait_for_window(child.0.id(), |window| {
+        visible(window) && window_size::client_size(window, 400, 576).is_some()
+    });
+    click(main, 360, 40);
+    wait_for_window(child.0.id(), |window| {
+        visible(window) && window_size::client_size(window, 420, 392).is_some()
+    })
 }
 
 struct Occupied;

@@ -24,11 +24,15 @@ use super::{PREFERENCES, WINDOW};
 
 thread_local! {
     static ERROR: Cell<Option<ShortcutError>> = const { Cell::new(None) };
+    static RESTORE_CONFLICT: Cell<bool> = const { Cell::new(false) };
 }
 
 pub(crate) fn restore_shortcut() {
     let saved = PREFERENCES.with_borrow(|preferences| preferences.as_ref()?.settings.shortcut);
-    ERROR.set(platform::replace_shortcut(saved, || Ok(())).err());
+    let error = platform::replace_shortcut(saved, || Ok(())).err();
+    let conflict = matches!(error, Some(ShortcutError::Conflict));
+    RESTORE_CONFLICT.set(conflict);
+    ERROR.set(error.filter(|_| !conflict));
 }
 
 pub(super) fn connect(window: &SettingsWindow) {
@@ -77,6 +81,7 @@ pub(super) fn cancel(window: &SettingsWindow) {
     if window.get_capturing_shortcut() {
         shortcut::finish_capture();
         window.set_capturing_shortcut(false);
+        render(window);
     }
 }
 
@@ -97,6 +102,8 @@ pub(crate) fn finish_shortcut_capture(apply: bool) {
                 ERROR.set(Some(ShortcutError::Invalid));
                 render(window);
             }
+        } else {
+            render(window);
         }
     });
 }
@@ -114,6 +121,9 @@ fn save(window: &SettingsWindow, chord: Option<Shortcut>) {
             Ok(())
         })
     });
+    if result.is_ok() {
+        RESTORE_CONFLICT.set(false);
+    }
     ERROR.set(result.err());
     render(window);
 }
@@ -133,16 +143,27 @@ pub(super) fn render(window: &SettingsWindow) {
         match (ERROR.get(), window.get_chinese()) {
             (Some(ShortcutError::Invalid), true) => "请输入完整且受支持的快捷键组合。",
             (Some(ShortcutError::Invalid), false) => "Enter a complete, supported shortcut.",
-            (Some(ShortcutError::Conflict), true) => "此快捷键已被占用，原有快捷键保持不变。",
-            (Some(ShortcutError::Conflict), false) => {
+            (Some(ShortcutError::Conflict), true) if effective.is_some() => {
+                "此快捷键已被占用，原有快捷键保持不变。"
+            }
+            (Some(ShortcutError::Conflict), false) if effective.is_some() => {
                 "This shortcut is already in use. The previous shortcut is unchanged."
             }
+            (Some(ShortcutError::Conflict), true) => "此快捷键已被占用。",
+            (Some(ShortcutError::Conflict), false) => "This shortcut is already in use.",
             (Some(ShortcutError::Register), true) => "无法在 Windows 中注册快捷键，请重试。",
             (Some(ShortcutError::Register), false) => {
                 "Could not register the shortcut with Windows. Try again."
             }
             (Some(ShortcutError::Save), true) => "无法保存快捷键，请重试。",
             (Some(ShortcutError::Save), false) => "Could not save the shortcut. Try again.",
+            (None, chinese) if RESTORE_CONFLICT.get() && !window.get_capturing_shortcut() => {
+                if chinese {
+                    "已保存的快捷键被占用，当前没有生效的快捷键。"
+                } else {
+                    "The saved shortcut is already in use. No shortcut is active."
+                }
+            }
             (None, _) => "",
         }
         .into(),

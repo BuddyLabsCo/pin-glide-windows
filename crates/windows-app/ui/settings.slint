@@ -201,6 +201,9 @@ export component SettingsWindow inherits Window {
                         read-only: true;
                         accessible-label: parent.label;
                         accessible-description: parent.error != "" ? parent.error : parent.hint;
+                        if !root.capturing-shortcut && root.shortcut != "": Tooltip {
+                            text: @markdown("\{root.shortcut}");
+                        }
                     }
 
                     Button {
