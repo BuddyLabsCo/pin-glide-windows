@@ -33,6 +33,7 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
     let main = wait_for_window(child.0.id(), |window| {
         visible(window) && window_size::client_size(window, 400, 576).is_some()
     });
+    keyboard::activate(main);
     click(main, 360, 40);
     let settings = wait_for_window(child.0.id(), |window| {
         visible(window) && window_size::client_size(window, 420, 392).is_some()
@@ -255,5 +256,5 @@ fn begin(settings: HWND) {
 }
 
 fn send_keys(settings: HWND, keys: &[u16]) {
-    keyboard::press(settings, keys);
+    keyboard::press_captured(settings, keys);
 }

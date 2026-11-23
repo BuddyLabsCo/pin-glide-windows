@@ -99,10 +99,15 @@ fn tray_shortcut_copies_with_another_process_focused() {
     let popup = wait_for_window(receiver.0.id(), is_sms);
     wait_for_window(receiver.0.id(), |window| window != popup && is_sms(window));
     wait_for(
-        || !has_visible_window(receiver.0.id()),
+        || super::find_window(receiver.0.id(), is_sms).is_none(),
         "every SMS popup must close",
     );
+    assert!(
+        !has_visible_window(receiver.0.id()),
+        "receiver must be tray-only",
+    );
 
+    keyboard::activate(foreground);
     let locked = Clipboard::open();
     // SAFETY: send the known registered chord to the fixture tray while this other process holds the clipboard.
     unsafe {
@@ -200,7 +205,10 @@ fn is_sms(window: HWND) -> bool {
 }
 
 fn has_visible_window(process: u32) -> bool {
-    super::find_window(process, visible).is_some()
+    super::find_window(process, |window| {
+        visible(window) && class(window) != "Winit Thread Event Target"
+    })
+    .is_some()
 }
 
 struct Clipboard;
