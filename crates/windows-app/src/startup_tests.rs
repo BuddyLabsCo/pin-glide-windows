@@ -17,7 +17,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostMessageW, PostThreadMessageW, WM_APP, WM_CANCELMODE, WM_KEYDOWN, WM_QUIT, WM_RBUTTONUP,
 };
 
-use super::{application::run, platform};
+use super::{application::run_with_connection, platform};
+
+fn run(
+    instance: platform::Instance,
+    explicit: bool,
+    select_backend: impl FnMut() -> Result<(), slint::PlatformError>,
+    start_listener: impl FnOnce(&platform::Instance, HWND) -> io::Result<platform::ActivationListener>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_with_connection(instance, explicit, select_backend, start_listener, || None)
+}
 
 #[path = "../tests/support/mod.rs"]
 mod support;

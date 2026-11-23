@@ -74,11 +74,18 @@ pub fn decode_qr(code: &qrcode::QrCode) -> Value {
 }
 
 pub fn listen() -> (TcpListener, Service) {
-    let (listener, origin) = tls::listen("localhost");
+    let (listener, origin) = listen_origin();
+    (listener, trusted_service(&origin))
+}
+
+pub fn listen_origin() -> (TcpListener, String) {
+    tls::listen("localhost")
+}
+
+pub fn trusted_service(origin: &str) -> Service {
     let root =
         reqwest::Certificate::from_pem(include_bytes!("../fixtures/service/ca.pem")).unwrap();
-    let service = Service::with_trusted_root(&origin, root).unwrap();
-    (listener, service)
+    Service::with_trusted_root(origin, root).unwrap()
 }
 
 pub fn accept(acceptor: &TlsAcceptor, listener: &TcpListener) -> Connection {

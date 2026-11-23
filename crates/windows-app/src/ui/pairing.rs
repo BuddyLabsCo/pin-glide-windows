@@ -242,7 +242,7 @@ fn operation_service() -> impl FnOnce() -> Option<Service> + Send {
     }
 }
 
-pub(super) fn connect_service() -> Option<Service> {
+pub(crate) fn connect_service() -> Option<Service> {
     option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok())
 }
 

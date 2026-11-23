@@ -12,6 +12,8 @@ mod platform;
 mod test_environment;
 #[cfg(windows)]
 pub mod ui;
+#[cfg(all(windows, debug_assertions))]
+pub use application::launch_with_connection;
 #[cfg(windows)]
 pub use application::{launch, select_backend};
 #[cfg(windows)]

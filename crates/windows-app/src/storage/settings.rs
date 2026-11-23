@@ -55,6 +55,19 @@ struct LegacySettings {
     launch_at_login: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsV2 {
+    #[serde(rename = "version")]
+    _version: u32,
+    #[serde(default)]
+    language: Language,
+    #[serde(default = "default_launch_at_login")]
+    launch_at_login: bool,
+    #[serde(default)]
+    popup_duration_seconds: PopupDuration,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct PopupDuration(Number);
 
@@ -145,10 +158,16 @@ impl SettingsStore {
                     ..Settings::default()
                 }
             }
-            2 | VERSION => Settings {
-                version: VERSION,
-                ..serde_json::from_slice(&bytes).map_err(invalid)?
-            },
+            2 => {
+                let legacy: SettingsV2 = serde_json::from_slice(&bytes).map_err(invalid)?;
+                Settings {
+                    language: legacy.language,
+                    launch_at_login: legacy.launch_at_login,
+                    popup_duration_seconds: legacy.popup_duration_seconds,
+                    ..Settings::default()
+                }
+            }
+            VERSION => serde_json::from_slice(&bytes).map_err(invalid)?,
             _ => return Err(io::ErrorKind::InvalidData.into()),
         };
         Ok(Some(settings))

@@ -1,17 +1,16 @@
 use super::{
-    AppProcess, Fixture, assert_label, capture_client, click, main_capture, post, read_settings,
-    seed_registration, visible, wait_for, wait_for_window, window_size,
+    AppProcess, Fixture, assert_label, capture_client, click, keyboard, main_capture,
+    read_settings, seed_registration, visible, wait_for, wait_for_window, window_size,
 };
 use std::{fs, os::windows::fs::OpenOptionsExt};
 use windows_sys::Win32::{
-    Foundation::HWND,
+    Foundation::{ERROR_HOTKEY_ALREADY_REGISTERED, GetLastError, HWND},
     UI::{
         HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext},
         Input::KeyboardAndMouse::{
             MOD_ALT, MOD_CONTROL, RegisterHotKey, UnregisterHotKey, VK_CONTROL, VK_ESCAPE, VK_MENU,
-            VK_RETURN,
+            VK_NEXT, VK_RETURN,
         },
-        WindowsAndMessaging::{WM_KEYDOWN, WM_KEYUP},
     },
 };
 
@@ -59,6 +58,7 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
     );
     assert_eq!(read_settings(&path)["shortcut"]["key"], b'V');
     let saved = fs::read(&path).unwrap();
+    capture_client(settings, 420, 392, "settings-shortcut-assigned");
     click(settings, 170, 336);
     begin(settings);
     capture_client(settings, 420, 392, "settings-shortcut-capture");
@@ -76,7 +76,7 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
     assert_eq!(fs::read(&path).unwrap(), saved);
 
     // SAFETY: reserve a test chord on the current thread to simulate another app owning it.
-    let occupied = Occupied::new(b'Q');
+    let occupied = Occupied::new(MOD_CONTROL | MOD_ALT, b'Q'.into());
     begin(settings);
     send_keys(settings, &[VK_CONTROL, VK_MENU, b'Q'.into()]);
     send_keys(settings, &[VK_RETURN]);
@@ -95,8 +95,14 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
     send_keys(settings, &[VK_CONTROL, VK_MENU, b'Q'.into()]);
     send_keys(settings, &[VK_RETURN]);
     assert_label(settings, "无法保存快捷键，请重试。");
+    capture_client(settings, 420, 392, "settings-shortcut-save-failed");
     assert_eq!(value(), "Ctrl + Alt + V");
     assert_eq!(fs::read(&path).unwrap(), saved);
+    assert!(
+        !Occupied::available(MOD_CONTROL | MOD_ALT, b'V'.into()),
+        "the old OS registration must survive a failed save"
+    );
+    drop(Occupied::new(MOD_CONTROL | MOD_ALT, b'Q'.into()));
     drop(locked);
     begin(settings);
     send_keys(settings, &[VK_CONTROL, VK_MENU, b'Q'.into()]);
@@ -106,7 +112,7 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
         "retry must replace the effective shortcut",
     );
     assert_eq!(read_settings(&path)["shortcut"]["key"], b'Q');
-    drop(Occupied::new(b'V'));
+    drop(Occupied::new(MOD_CONTROL | MOD_ALT, b'V'.into()));
 
     drop(child);
     let restarted = AppProcess(fixture.command().spawn().unwrap());
@@ -122,7 +128,7 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
         "Ctrl + Alt + Q"
     );
     drop(restarted);
-    let occupied = Occupied::new(b'Q');
+    let occupied = Occupied::new(MOD_CONTROL | MOD_ALT, b'Q'.into());
     let blocked = AppProcess(
         fixture
             .command()
@@ -138,6 +144,7 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
         visible(window) && window_size::client_size(window, 420, 392).is_some()
     });
     assert_label(settings, "此快捷键已被占用，原有快捷键保持不变。");
+    capture_client(settings, 420, 392, "settings-shortcut-restore-conflict");
     assert_eq!(
         main_capture::edit_value(settings as usize, LABEL, None),
         "未设置"
@@ -150,28 +157,42 @@ fn shortcut_capture_shows_field_feedback_and_preserves_the_effective_registratio
     drop(occupied);
 
     begin(settings);
-    send_keys(settings, &[VK_CONTROL, VK_MENU, b'Q'.into()]);
+    send_keys(settings, &[VK_CONTROL, VK_NEXT]);
     send_keys(settings, &[VK_RETURN]);
     let value = || main_capture::edit_value(settings as usize, LABEL, None);
-    wait_for(|| value() == "Ctrl + Alt + Q", "saved shortcut");
+    wait_for(
+        || read_settings(&path)["shortcut"]["key"] == VK_NEXT && value().starts_with("Ctrl + "),
+        "Ctrl + Page Down must register and display its key name",
+    );
     click(settings, 354, 210);
     wait_for(
         || value() == "未设置",
         "Clear must remove the effective shortcut",
     );
     assert!(read_settings(&path).get("shortcut").is_none());
-    drop(Occupied::new(b'Q'));
+    drop(Occupied::new(MOD_CONTROL, VK_NEXT.into()));
 }
 
 struct Occupied;
 
 impl Occupied {
-    fn new(key: u8) -> Self {
+    fn new(modifiers: u32, key: u32) -> Self {
         // SAFETY: the test reserves and releases the chord on the same thread.
-        let registered =
-            unsafe { RegisterHotKey(std::ptr::null_mut(), 1, MOD_CONTROL | MOD_ALT, key.into()) };
+        let registered = unsafe { RegisterHotKey(std::ptr::null_mut(), 1, modifiers, key) };
         assert_ne!(registered, 0);
         Self
+    }
+
+    fn available(modifiers: u32, key: u32) -> bool {
+        // SAFETY: use a separate id on the test thread and release any successful probe.
+        unsafe {
+            if RegisterHotKey(std::ptr::null_mut(), 2, modifiers, key) == 0 {
+                assert_eq!(GetLastError(), ERROR_HOTKEY_ALREADY_REGISTERED);
+                return false;
+            }
+            assert_ne!(UnregisterHotKey(std::ptr::null_mut(), 2), 0);
+        }
+        true
     }
 }
 
@@ -183,15 +204,11 @@ impl Drop for Occupied {
 }
 
 fn begin(settings: HWND) {
+    keyboard::activate(settings);
     click(settings, 302, 210);
     assert_label(settings, HINT);
 }
 
 fn send_keys(settings: HWND, keys: &[u16]) {
-    for &key in keys {
-        post(settings, WM_KEYDOWN, key.into(), 1);
-    }
-    for &key in keys.iter().rev() {
-        post(settings, WM_KEYUP, key.into(), 0xc001_0001_u32 as isize);
-    }
+    keyboard::press(settings, keys);
 }

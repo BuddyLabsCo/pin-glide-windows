@@ -5,9 +5,15 @@ mod app_process;
 #[allow(dead_code)]
 #[path = "support/dpapi.rs"]
 mod dpapi;
+#[path = "support/keyboard.rs"]
+mod keyboard;
 #[allow(dead_code)]
 #[path = "support/main_capture.rs"]
 mod main_capture;
+#[cfg(debug_assertions)]
+#[allow(unused_imports)]
+#[path = "support/pairing.rs"]
+mod service_fixture;
 #[path = "support/settings_duration.rs"]
 mod settings_duration;
 #[path = "support/settings_frames.rs"]
@@ -15,6 +21,9 @@ mod settings_frames;
 #[path = "support/settings_shortcut.rs"]
 mod settings_shortcut;
 mod support;
+#[path = "support/tray_shortcut.rs"]
+#[cfg(debug_assertions)]
+mod tray_shortcut;
 #[path = "support/window_size.rs"]
 mod window_size;
 
@@ -301,6 +310,18 @@ fn assert_label(window: HWND, label: &str) {
 }
 
 fn wait_for_window(process: u32, predicate: impl Fn(HWND) -> bool) -> HWND {
+    let mut window = None;
+    wait_for(
+        || {
+            window = find_window(process, &predicate);
+            window.is_some()
+        },
+        "fixture window did not open",
+    );
+    window.unwrap()
+}
+
+fn find_window(process: u32, predicate: impl Fn(HWND) -> bool) -> Option<HWND> {
     struct Search<'a> {
         process: u32,
         predicate: &'a dyn Fn(HWND) -> bool,
@@ -323,15 +344,9 @@ fn wait_for_window(process: u32, predicate: impl Fn(HWND) -> bool) -> HWND {
         predicate: &predicate,
         window: null_mut(),
     };
-    wait_for(
-        || {
-            // SAFETY: search stays live throughout the synchronous enumeration.
-            unsafe { EnumWindows(Some(visit), &raw mut search as LPARAM) };
-            !search.window.is_null()
-        },
-        "fixture window did not open",
-    );
-    search.window
+    // SAFETY: search stays live throughout the synchronous enumeration.
+    unsafe { EnumWindows(Some(visit), &raw mut search as LPARAM) };
+    (!search.window.is_null()).then_some(search.window)
 }
 
 fn visible(window: HWND) -> bool {
