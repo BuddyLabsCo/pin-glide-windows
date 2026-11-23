@@ -15,6 +15,7 @@ pub(crate) use sms::{popup_count, receive as receive_sms};
 
 pub use pairing::{open_pairing, visible_pairing};
 pub(crate) use settings::initialize as initialize_preferences;
+pub use settings::settings_visible;
 pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {

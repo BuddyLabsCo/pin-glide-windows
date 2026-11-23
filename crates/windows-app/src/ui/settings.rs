@@ -75,10 +75,6 @@ impl Preferences {
         let entry = startup.read().map_err(change_error)?;
         let desired = startup.command_for(enabled).map_err(change_error)?;
         if enabled && !startup.approved().map_err(change_error)? {
-            // Keep the disabled entry visible in Windows Startup Apps so the user can enable it there.
-            if entry.as_deref() != desired {
-                startup.replace(desired).map_err(change_error)?;
-            }
             return Err(StartupError::WindowsOverride);
         }
         let changed = entry.as_deref() != desired;
@@ -168,6 +164,15 @@ pub(super) fn show(
 
 pub(super) fn hide() -> Result<(), PlatformError> {
     WINDOW.with_borrow(|window| window.as_ref().map_or(Ok(()), ComponentHandle::hide))
+}
+
+#[doc(hidden)]
+pub fn settings_visible() -> bool {
+    WINDOW.with_borrow(|window| {
+        window
+            .as_ref()
+            .is_some_and(|window| window.window().is_visible())
+    })
 }
 
 pub(super) fn close() {

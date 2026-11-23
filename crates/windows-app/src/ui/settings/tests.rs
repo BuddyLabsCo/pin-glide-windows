@@ -4,6 +4,43 @@ use super::{LaunchAtLogin, Preferences, SettingsStore, StartupError};
 use crate::storage::settings::Language;
 
 #[test]
+#[ignore = "requires an interactive Windows desktop"]
+fn settings_keyboard_navigation_skips_the_page_focus_target() {
+    use i_slint_core::{
+        accessibility::AccessibleStringProperty, item_tree::ParentItemTraversalMode,
+        window::WindowInner,
+    };
+    use slint::{
+        ComponentHandle,
+        platform::{Key, WindowEvent},
+    };
+
+    crate::startup_tests::select_test_backend().unwrap();
+    let settings = crate::SettingsWindow::new().unwrap();
+    settings.show().unwrap();
+    let window = settings.window();
+    settings.invoke_focus_page();
+    for (key, label) in [
+        (Key::Tab, "Back to Main"),
+        (Key::Tab, "Interface language"),
+        (Key::Tab, "Launch at login"),
+        (Key::Backtab, "Interface language"),
+        (Key::Backtab, "Back to Main"),
+        (Key::Backtab, "Popup duration (seconds)"),
+        (Key::Tab, "Back to Main"),
+    ] {
+        window.dispatch_event(WindowEvent::KeyPressed { text: key.into() });
+        window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
+        let focused = WindowInner::from_pub(window).focus_item.borrow().upgrade();
+        let actual = std::iter::successors(focused, |item| {
+            item.parent_item(ParentItemTraversalMode::StopAtPopups)
+        })
+        .find_map(|item| item.accessible_string_property(AccessibleStringProperty::Label));
+        assert_eq!(actual.as_deref(), Some(label));
+    }
+}
+
+#[test]
 fn launch_at_login_keeps_the_working_registration_when_settings_cannot_be_saved() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("settings.json");
@@ -66,14 +103,18 @@ fn launch_at_login_respects_the_windows_override_and_recovers_after_it_is_cleare
     ));
     assert_eq!(startup.0.read().unwrap(), entry);
     assert_eq!(fs::read(&path).unwrap(), committed);
-    startup.0.set(false).unwrap();
-    assert!(matches!(
-        preferences.save_startup(true),
-        Err(StartupError::WindowsOverride)
-    ));
-    assert_eq!(startup.0.read().unwrap(), entry);
-    assert!(!startup.0.enabled().unwrap());
-    assert_eq!(fs::read(&path).unwrap(), committed);
+    let other_installation: Vec<_> =
+        r#""C:\Other Pin Glide\Pin Glide.exe" --startup"#.encode_utf16().chain([0]).collect();
+    for prior in [None, Some(other_installation.as_slice())] {
+        startup.0.replace(prior).unwrap();
+        assert!(matches!(
+            preferences.save_startup(true),
+            Err(StartupError::WindowsOverride)
+        ));
+        assert_eq!(startup.0.read().unwrap().as_deref(), prior);
+        assert!(!startup.0.enabled().unwrap());
+        assert_eq!(fs::read(&path).unwrap(), committed);
+    }
     startup.0.set_test_approval(true);
     preferences.save_startup(true).unwrap();
     assert!(startup.0.enabled().unwrap());

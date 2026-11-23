@@ -27,7 +27,7 @@ component SettingCard inherits Rectangle {
             spacing: 8px;
             Text {
                 text: root.label;
-                font-weight: 550;
+                font-weight: 600;
                 color: #25322e;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
@@ -79,6 +79,7 @@ export component SettingsWindow inherits Window {
     page-focus := FocusScope {
         width: 0px;
         height: 0px;
+        focus-on-tab-navigation: false;
     }
 
     TouchArea {

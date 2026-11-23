@@ -91,31 +91,67 @@ fn verify_main(expected: &str, evidence: Option<&Path>) -> mpsc::Receiver<bool> 
 }
 
 pub(super) fn accessible_name(handle: usize, expected: &str) -> windows::core::Result<bool> {
+    with_automation(|automation| Ok(named_element(automation, handle, expected, false)?.is_some()))
+}
+
+#[allow(dead_code)]
+pub(super) fn toggle(window: usize, label: &str) {
+    use windows::Win32::UI::Accessibility::{IUIAutomationTogglePattern, UIA_TogglePatternId};
+    with_automation(|automation| {
+        let element =
+            named_element(automation, window, label, true)?.expect("visible startup switch");
+        // SAFETY: the element is the fixture's live, accessible Switch.
+        unsafe {
+            element
+                .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)?
+                .Toggle()
+        }
+    })
+    .unwrap();
+}
+
+fn named_element(
+    automation: &windows::Win32::UI::Accessibility::IUIAutomation,
+    handle: usize,
+    expected: &str,
+    button: bool,
+) -> windows::core::Result<Option<windows::Win32::UI::Accessibility::IUIAutomationElement>> {
     use windows::Win32::{
         Foundation::HWND,
+        UI::Accessibility::{TreeScope_Descendants, UIA_ButtonControlTypeId},
+    };
+    // SAFETY: COM is initialized, and the handle identifies the fixture window.
+    unsafe {
+        let root = automation.ElementFromHandle(HWND(handle as *mut _))?;
+        let children = root.FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
+        for index in 0..children.Length()? {
+            let element = children.GetElement(index)?;
+            if (!button || element.CurrentControlType()? == UIA_ButtonControlTypeId)
+                && !element.CurrentIsOffscreen()?.as_bool()
+                && element.CurrentName()? == expected
+            {
+                return Ok(Some(element));
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn with_automation<T>(
+    query: impl FnOnce(&windows::Win32::UI::Accessibility::IUIAutomation) -> windows::core::Result<T>,
+) -> windows::core::Result<T> {
+    use windows::Win32::{
         System::Com::{
             CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
             CoUninitialize,
         },
-        UI::Accessibility::{CUIAutomation, IUIAutomation, TreeScope_Descendants},
+        UI::Accessibility::CUIAutomation,
     };
     // SAFETY: this fresh thread uses COM only between initialization and teardown.
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
-        let result = (|| {
-            let automation: IUIAutomation =
-                CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
-            let root = automation.ElementFromHandle(HWND(handle as *mut _))?;
-            let children =
-                root.FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
-            for index in 0..children.Length()? {
-                let element = children.GetElement(index)?;
-                if !element.CurrentIsOffscreen()?.as_bool() && element.CurrentName()? == expected {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        })();
+        let result = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)
+            .and_then(|automation| query(&automation));
         CoUninitialize();
         result
     }
@@ -152,8 +188,31 @@ pub(super) fn capture(
     (width, height): (i32, i32),
     path: &Path,
 ) {
+    write_ppm(
+        path,
+        (width, height),
+        &capture_rgb(window, (left, top), (width, height)),
+    );
+}
+
+pub(super) fn capture_rgb(window: HWND, origin: (i32, i32), size: (i32, i32)) -> Vec<u8> {
+    rgb(&capture_bgra(window, origin, size))
+}
+
+pub(super) fn rgb(pixels: &[[u8; 4]]) -> Vec<u8> {
+    pixels
+        .iter()
+        .flat_map(|[blue, green, red, _]| [*red, *green, *blue])
+        .collect()
+}
+
+pub(super) fn capture_bgra(
+    window: HWND,
+    (left, top): (i32, i32),
+    (width, height): (i32, i32),
+) -> Vec<[u8; 4]> {
     // SAFETY: the window is live and the DIB buffer stays allocated until its pixels are copied.
-    let rgb = unsafe {
+    unsafe {
         let client = GetDC(window);
         assert!(!client.is_null());
         let target = CreateCompatibleDC(client);
@@ -187,20 +246,19 @@ pub(super) fn capture(
             top,
             SRCCOPY | CAPTUREBLT,
         );
-        let rgb = std::slice::from_raw_parts(pixels.cast::<u8>(), (width * height * 4) as usize)
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .flat_map(|pixel| [pixel[2], pixel[1], pixel[0]])
-            .collect::<Vec<_>>();
+        let frame = std::slice::from_raw_parts(pixels.cast::<[u8; 4]>(), (width * height) as usize)
+            .to_vec();
         SelectObject(target, previous);
         DeleteObject(image);
         DeleteDC(target);
         ReleaseDC(window, client);
         assert_ne!(copied, 0);
-        rgb
-    };
+        frame
+    }
+}
+
+pub(super) fn write_ppm(path: &Path, (width, height): (i32, i32), rgb: &[u8]) {
     let mut file = fs::File::create(path).unwrap();
     write!(file, "P6\n{width} {height}\n255\n").unwrap();
-    file.write_all(&rgb).unwrap();
+    file.write_all(rgb).unwrap();
 }

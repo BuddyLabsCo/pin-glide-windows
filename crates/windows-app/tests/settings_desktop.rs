@@ -8,6 +8,8 @@ mod dpapi;
 #[allow(dead_code)]
 #[path = "support/main_capture.rs"]
 mod main_capture;
+#[path = "support/settings_frames.rs"]
+mod settings_frames;
 mod support;
 #[path = "support/window_size.rs"]
 mod window_size;
@@ -23,6 +25,7 @@ use std::{
 
 use app_process::{AppProcess, Fixture};
 use serde_json::{Value, json};
+use settings_frames::{capture_immediate, first_switch_frame, switch_pixels};
 use support::wait_for;
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, RECT},
@@ -51,7 +54,13 @@ fn main_and_tray_settings_show_saved_language_and_actual_startup() {
     let fixture = Fixture::new();
     let registration = fixture.path().join("registration.json");
     seed_registration(&registration, false);
-    let child = AppProcess(fixture.command().spawn().unwrap());
+    let child = AppProcess(
+        fixture
+            .command()
+            .env("PINGLIDE_TEST_REDUCED_MOTION", "0")
+            .spawn()
+            .unwrap(),
+    );
     let process = child.0.id();
     let main = wait_for_window(process, |window| {
         window_size::client_size(window, 400, 576).is_some()
@@ -111,29 +120,33 @@ fn main_and_tray_settings_show_saved_language_and_actual_startup() {
         if system_chinese { "system" } else { "chinese" },
     );
     click(settings, 210, 350);
-    click(settings, 365, 150);
+    let switch = "开机启动";
+    let handle = settings as usize;
+    first_switch_frame(settings, false, "settings-startup-toggle-frame", || {
+        main_capture::toggle(handle, switch);
+    });
     wait_for(
-        || fixture.startup().is_none(),
-        "turning off must remove the Run entry",
+        || fixture.startup().is_none() && read_settings(&settings_path)["launch_at_login"] == false,
+        "turning off must remove the Run entry and persist the setting",
     );
-    capture_immediate(settings, "settings-startup-toggle-frame");
     capture_client(settings, 420, 392, "settings-startup-off");
     let locked = OpenOptions::new()
         .read(true)
         .share_mode(1)
         .open(&settings_path)
         .unwrap();
-    click(settings, 365, 150);
+    main_capture::toggle(handle, switch);
     assert_label(settings, "无法启用开机启动，可再次打开开关重试。");
     assert!(fixture.startup().is_none());
     capture_client(settings, 420, 392, "settings-startup-failed");
     drop(locked);
-    click(settings, 365, 150);
+    first_switch_frame(settings, true, "settings-startup-retry-frame", || {
+        main_capture::toggle(handle, switch);
+    });
     wait_for(
         || fixture.startup().is_some() && read_settings(&settings_path)["launch_at_login"] == true,
         "retry must enable Windows startup and persist the new setting",
     );
-    capture_immediate(settings, "settings-startup-retry-frame");
     capture_client(settings, 420, 392, "settings-startup-retried");
 
     seed_registration(&registration, true);
@@ -175,6 +188,11 @@ fn startup_switch_settles_immediately_with_reduced_motion() {
     unsafe {
         assert!(!SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_null())
     };
+    assert_off_transition(false);
+    assert_off_transition(true);
+}
+
+fn assert_off_transition(reduced: bool) {
     let fixture = Fixture::new();
     seed_registration(&fixture.path().join("registration.json"), false);
     // SAFETY: the UI language query has no side effects.
@@ -188,7 +206,10 @@ fn startup_switch_settles_immediately_with_reduced_motion() {
     )
     .unwrap();
     let mut command = fixture.command();
-    command.env("PINGLIDE_TEST_REDUCED_MOTION", "1");
+    command.env(
+        "PINGLIDE_TEST_REDUCED_MOTION",
+        if reduced { "1" } else { "0" },
+    );
     let child = AppProcess(command.spawn().unwrap());
     let process = child.0.id();
     let main = wait_for_window(process, |window| {
@@ -198,27 +219,44 @@ fn startup_switch_settles_immediately_with_reduced_motion() {
     let settings = wait_for_window(process, |window| {
         window_size::client_size(window, 420, 392).is_some()
     });
-    click(settings, 365, 150);
+    assert_label(settings, "开机启动");
+    click(settings, 210, 350);
+    main_capture::toggle(settings as usize, "开机启动");
     wait_for(
         || fixture.startup().is_some(),
-        "reduced-motion switch must enable startup",
+        "the switch must enable startup",
     );
-    thread::sleep(Duration::from_millis(160));
-    let enabled = capture_pixels(settings);
-    click(settings, 365, 150);
-    wait_for(
-        || fixture.startup().is_none(),
-        "reduced-motion switch must disable startup",
-    );
-    capture_immediate(settings, "settings-startup-reduced-motion");
-    let first = capture_pixels(settings);
     thread::sleep(Duration::from_millis(220));
-    let settled = capture_pixels(settings);
+    let enabled = switch_pixels(settings);
+    let handle = settings as usize;
+    let first = first_switch_frame(
+        settings,
+        false,
+        if reduced {
+            "settings-startup-reduced-motion"
+        } else {
+            "settings-startup-normal-motion"
+        },
+        || main_capture::toggle(handle, "开机启动"),
+    );
+    wait_for(
+        || {
+            fixture.startup().is_none()
+                && read_settings(&fixture.path().join("settings.json"))["launch_at_login"] == false
+        },
+        "the switch must disable startup and persist the setting",
+    );
+    thread::sleep(Duration::from_millis(220));
+    let settled = switch_pixels(settings);
     assert_ne!(
         enabled, settled,
         "on and off must draw different thumb positions"
     );
-    assert_eq!(first, settled, "switch pixels must already be settled");
+    assert_eq!(
+        first == settled,
+        reduced,
+        "only reduced motion settles on the first presented off frame"
+    );
     drop(child);
     fixture.verify_system_settings();
 }
@@ -328,39 +366,6 @@ fn capture_client(window: HWND, width: i32, height: i32, state: &str) {
         thread::sleep(Duration::from_millis(250));
         assert!(window_size::client_size(window, width, height).is_some());
         capture_immediate(window, state);
-    }
-}
-
-fn capture_immediate(window: HWND, state: &str) {
-    if let Some(directory) = std::env::var_os("PIN_GLIDE_SETTINGS_EVIDENCE") {
-        let mut rect = RECT::default();
-        // SAFETY: Settings is live and the client bounds output is writable.
-        unsafe {
-            assert_ne!(
-                windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect(window, &raw mut rect),
-                0
-            );
-        }
-        main_capture::capture_client(
-            window,
-            (rect.right, rect.bottom),
-            &Path::new(&directory).join(format!("{state}.ppm")),
-        );
-    }
-}
-
-fn capture_pixels(window: HWND) -> Vec<u8> {
-    use windows_sys::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
-    // SAFETY: the live Settings window owns the device context until it is released.
-    unsafe {
-        let dpi = GetDpiForWindow(window) as i32;
-        let dc = GetDC(window);
-        let pixels = (347..385)
-            .map(|x| GetPixel(dc, x * dpi / 96, 150 * dpi / 96))
-            .flat_map(u32::to_ne_bytes)
-            .collect();
-        ReleaseDC(window, dc);
-        pixels
     }
 }
 

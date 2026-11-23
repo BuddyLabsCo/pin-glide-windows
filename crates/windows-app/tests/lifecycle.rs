@@ -73,6 +73,38 @@ fn visible_window(process: u32) -> HWND {
 use support::wait_for;
 
 #[test]
+#[cfg(debug_assertions)]
+fn invalid_fixture_configuration_exits_before_using_system_settings() {
+    let fixture = Fixture::new();
+    let file = fixture.path().join("PinGlideTest-file");
+    std::fs::write(&file, []).unwrap();
+    for invalid in [
+        std::path::PathBuf::from("PinGlideTest-relative"),
+        fixture.path().join("PinGlideTest-missing"),
+        file,
+    ] {
+        let mut child = AppProcess(
+            fixture
+                .command()
+                .env("PINGLIDE_TEST_DIRECTORY", invalid)
+                .arg("--startup")
+                .spawn()
+                .unwrap(),
+        );
+        wait_for(
+            || {
+                child.0.try_wait().unwrap().is_some_and(|status| {
+                    assert!(!status.success(), "invalid fixture must fail to start");
+                    true
+                })
+            },
+            "invalid fixture must exit",
+        );
+        fixture.verify_system_settings();
+    }
+}
+
+#[test]
 #[ignore = "requires an interactive Windows desktop"]
 fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Result<()> {
     // SAFETY: use physical coordinates when querying Welcome from this test thread.
