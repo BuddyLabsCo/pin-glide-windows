@@ -90,6 +90,11 @@ within 500 lines.
 - Use one writer. Stage and flush the new file before replacing the current
   one. Keep the previous committed data on failure. Read supported older
   formats and leave unreadable or newer unsupported files intact.
+- Store interface language and launch-at-login preferences in
+  `Pin Glide/settings.json`. Version 1 defaults to following the Windows UI
+  language and enabling launch at login. Use the per-user Windows Run entry
+  for `--startup` and show its effective state in Settings. Restore the
+  previous entry if saving the preference fails.
 - Store Receiver registration in `Pin Glide/registration.json` under Local
   AppData. Version 2 adds `provisional_pairing` with the session, Receiver,
   Sender and Pairing IDs and the protected key blob. Preserve the active
@@ -152,6 +157,7 @@ interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
 | `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
 | `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
 | `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop with Pin Glide stopped |
+| `cargo test --locked -p windows-app --lib main_and_tray_settings_show_saved_language_and_actual_startup -- --ignored` | Check Settings navigation, language selection, and startup rollback on an unlocked Windows desktop with Pin Glide stopped |
 | `cargo test --locked -p windows-app --test pairing_desktop -- --ignored` | Check key-check motion, QR removal and terminal states on an interactive Windows desktop |
 | `cargo test --locked -p windows-app --test sms_desktop -- --ignored` | Check SMS popup rendering, scrolling and dismissal on an unlocked Windows desktop. Writes a synthetic OTP to the clipboard. |
 | `cargo test --locked -p windows-app --lib sms_stack_matches_the_reference_timeline -- --ignored` | Check SMS stack motion, overflow, and work-area and DPI changes in an isolated process on an unlocked Windows desktop. |

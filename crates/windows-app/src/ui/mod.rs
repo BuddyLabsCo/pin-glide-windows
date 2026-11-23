@@ -8,11 +8,13 @@ use crate::storage::{RegistrationStore, SenderDevice, SenderNameError};
 use crate::{MainWindow, SenderRowData, WelcomeWindow, platform};
 
 mod pairing;
+mod settings;
 mod sms;
 #[cfg(test)]
 pub(crate) use sms::{popup_count, receive as receive_sms};
 
 pub use pairing::{open_pairing, visible_pairing};
+pub(crate) use settings::initialize as initialize_preferences;
 pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
@@ -40,20 +42,27 @@ pub fn open() {
 }
 
 pub fn open_settings() {
-    let result = (|| {
-        if pairing::reopen_pending_name()? {
-            return hide_welcome();
-        }
-        if let Ok(store) = RegistrationStore::for_current_user()
-            && show_registered(&store, platform::chinese())?
-        {
-            return pairing::hide();
-        }
-        show_welcome().and_then(|()| pairing::hide())
-    })();
-    if let Err(error) = result {
-        eprintln!("Could not open Pin Glide: {error}");
+    let store = RegistrationStore::for_current_user().ok();
+    #[cfg(test)]
+    let store = settings::test_registration().or(store);
+    if let Err(error) = open_settings_with(store) {
+        eprintln!("Could not open Settings: {error}");
     }
+}
+
+fn open_settings_with(store: Option<RegistrationStore>) -> Result<(), PlatformError> {
+    if pairing::reopen_pending_name()? {
+        return hide_welcome();
+    }
+    if let Some(store) = store
+        && let Some(main) =
+            registered_window(&store, platform::chinese(), pairing::connect_service)?
+    {
+        settings::show(&main)?;
+        hide_welcome()?;
+        return pairing::hide();
+    }
+    show_welcome().and_then(|()| pairing::hide())
 }
 
 pub fn close() {
@@ -62,6 +71,7 @@ pub fn close() {
         operation.shutdown();
     }
     close_sms();
+    settings::close();
     WELCOME.with_borrow_mut(|welcome| *welcome = None);
     MAIN.with_borrow_mut(|main| *main = None);
 }
@@ -131,11 +141,33 @@ pub fn update_motion() {
     });
 }
 
+pub(crate) fn refresh_preferences() {
+    let chinese = platform::chinese();
+    platform::refresh_tooltip();
+    WELCOME.with_borrow(|welcome| {
+        if let Some(window) = welcome {
+            window.set_chinese(chinese);
+        }
+    });
+    MAIN.with_borrow(|main| {
+        if let Some(window) = main
+            && window.get_chinese() != chinese
+        {
+            window.set_chinese(chinese);
+            window.invoke_clear_editor_error();
+        }
+    });
+    pairing::update_language(chinese);
+    sms::update_language(chinese);
+    settings::refresh(chinese);
+}
+
 pub(crate) fn resize_sms_popups() {
     sms::refresh_layout(true);
 }
 
 fn show() -> Result<(), PlatformError> {
+    settings::hide()?;
     let main_visible = MAIN.with_borrow(|main| {
         main.as_ref()
             .is_some_and(|window| window.window().is_visible())
@@ -160,6 +192,18 @@ fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, Pla
 }
 
 fn show_registered_with(
+    store: &RegistrationStore,
+    chinese: bool,
+    connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
+) -> Result<Option<MainWindow>, PlatformError> {
+    let window = registered_window(store, chinese, connect)?;
+    if let Some(window) = &window {
+        show_main(window)?;
+    }
+    Ok(window)
+}
+
+fn registered_window(
     store: &RegistrationStore,
     chinese: bool,
     connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
@@ -194,15 +238,27 @@ fn show_registered_with(
                 Err(error) => eprintln!("Could not open pairing: {error}"),
             }
         });
+        let weak = window.as_weak();
+        window.on_open_settings(move || {
+            if let Some(main) = weak.upgrade()
+                && let Err(error) = settings::show(&main)
+            {
+                eprintln!("Could not open Settings: {error}");
+            }
+        });
         *main = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
     set_sender_devices(&window, devices);
     register_sender_actions(&window, store.clone());
+    Ok(Some(window))
+}
+
+fn show_main(window: &MainWindow) -> Result<(), PlatformError> {
     window.show()?;
     platform::configure_main_chrome(window.window());
     focus(window.window());
-    Ok(Some(window))
+    Ok(())
 }
 
 fn refresh_visible_main(store: &RegistrationStore) {
@@ -232,8 +288,12 @@ fn set_sender_devices(window: &MainWindow, devices: Vec<SenderDevice>) {
 }
 
 fn register_sender_actions(window: &MainWindow, store: RegistrationStore) {
-    let chinese = window.get_chinese();
-    window.on_read_name_paste(move || pairing::read_name_paste(chinese));
+    let weak = window.as_weak();
+    window.on_read_name_paste(move || {
+        weak.upgrade().map_or_else(Default::default, |window| {
+            pairing::read_name_paste(window.get_chinese())
+        })
+    });
     let weak = window.as_weak();
     window.on_insert_name_paste(move |text| {
         if let Some(window) = weak.upgrade() {
@@ -244,11 +304,13 @@ fn register_sender_actions(window: &MainWindow, store: RegistrationStore) {
     let rename_store = store.clone();
     let weak = window.as_weak();
     window.on_rename_sender(move |index, draft, invalid| {
+        let Some(window) = weak.upgrade() else {
+            return Default::default();
+        };
         let result = (|| {
             if invalid {
                 return Err(SenderNameError::InvalidCharacter);
             }
-            let window = weak.upgrade().ok_or(SenderNameError::Storage)?;
             let rows = window.get_sender_devices();
             let index = index as usize;
             let mut row = rows.row_data(index).ok_or(SenderNameError::Storage)?;
@@ -259,14 +321,16 @@ fn register_sender_actions(window: &MainWindow, store: RegistrationStore) {
             Ok(())
         })();
         result.err().map_or_else(Default::default, |error| {
-            pairing::name_error(chinese, error).into()
+            pairing::name_error(window.get_chinese(), error).into()
         })
     });
 
     let weak = window.as_weak();
     window.on_delete_sender(move |index, pointer| {
-        if let Some(window) = weak.upgrade()
-            && let Some(row) = window.get_sender_devices().row_data(index as usize)
+        let Some(window) = weak.upgrade() else {
+            return Default::default();
+        };
+        if let Some(row) = window.get_sender_devices().row_data(index as usize)
             && store.delete_unreadable_pairing(&row.pairing_id).is_ok()
         {
             window.invoke_close_editor();
@@ -280,7 +344,7 @@ fn register_sender_actions(window: &MainWindow, store: RegistrationStore) {
             update_delivery_status();
             return "".into();
         }
-        if chinese {
+        if window.get_chinese() {
             "无法删除设备，请重试。".into()
         } else {
             "Could not delete the device. Try again.".into()

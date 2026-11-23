@@ -118,7 +118,12 @@ fn create_view(
     window.on_refresh(refresh);
     window.on_back(back);
     window.on_finish_naming(finish_naming);
-    window.on_read_name_paste(move || read_name_paste(chinese));
+    let weak = window.as_weak();
+    window.on_read_name_paste(move || {
+        weak.upgrade().map_or_else(Default::default, |window| {
+            read_name_paste(window.get_chinese())
+        })
+    });
     let weak = window.as_weak();
     window.on_insert_name_paste(move |text| {
         if let Some(window) = weak.upgrade() {
@@ -196,6 +201,17 @@ pub(super) fn update_motion() {
         if let Some(view) = pairing {
             view.window
                 .set_motion_enabled(platform::animations_enabled());
+        }
+    });
+}
+
+pub(super) fn update_language(chinese: bool) {
+    PAIRING.with_borrow(|pairing| {
+        if let Some(view) = pairing
+            && view.window.get_chinese() != chinese
+        {
+            view.window.set_chinese(chinese);
+            view.window.set_name_error(Default::default());
         }
     });
 }

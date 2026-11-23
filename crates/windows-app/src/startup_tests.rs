@@ -208,6 +208,11 @@ fn has_visible_window(owner: u32) -> bool {
 }
 
 fn exit_from_menu(tray: HWND, owner: u32) {
+    let popup = open_tray_menu(tray, owner);
+    select_tray_menu(popup, 3);
+}
+
+pub(crate) fn open_tray_menu(tray: HWND, owner: u32) -> HWND {
     // SAFETY: tray is the live notification callback window.
     unsafe {
         assert_ne!(PostMessageW(tray, WM_APP + 1, 1, WM_RBUTTONUP as LPARAM), 0);
@@ -218,7 +223,10 @@ fn exit_from_menu(tray: HWND, owner: u32) {
         // SAFETY: the class name is terminated and the handle is checked before use.
         || unsafe {
             let menu = FindWindowW(menu_class.as_ptr(), null());
-            if menu.is_null() || GetWindowThreadProcessId(menu, std::ptr::null_mut()) != owner {
+            if menu.is_null()
+                || IsWindowVisible(menu) == 0
+                || GetWindowThreadProcessId(menu, std::ptr::null_mut()) != owner
+            {
                 return false;
             }
             popup = menu;
@@ -226,9 +234,13 @@ fn exit_from_menu(tray: HWND, owner: u32) {
         },
         "the native tray context menu did not open",
     );
-    // SAFETY: the live popup processes these keyboard messages to select Exit.
+    popup
+}
+
+pub(crate) fn select_tray_menu(popup: HWND, row: usize) {
+    // SAFETY: the live popup processes these keyboard messages in order.
     unsafe {
-        for key in [VK_DOWN, VK_DOWN, VK_DOWN, VK_RETURN] {
+        for key in std::iter::repeat_n(VK_DOWN, row).chain([VK_RETURN]) {
             assert_ne!(PostMessageW(popup, WM_KEYDOWN, key.into(), 0), 0);
         }
     }

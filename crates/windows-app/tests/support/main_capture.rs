@@ -12,8 +12,8 @@ use serde_json::json;
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM},
     Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BitBlt, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC,
-        DeleteObject, GetDC, ReleaseDC, SRCCOPY, SelectObject,
+        BI_RGB, BITMAPINFO, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
+        DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, ReleaseDC, SRCCOPY, SelectObject,
     },
     UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
 };
@@ -143,6 +143,15 @@ fn capture_main(window: HWND, path: &Path) {
 }
 
 pub(super) fn capture_client(window: HWND, (width, height): (i32, i32), path: &Path) {
+    capture(window, (0, 0), (width, height), path);
+}
+
+pub(super) fn capture(
+    window: HWND,
+    (left, top): (i32, i32),
+    (width, height): (i32, i32),
+    path: &Path,
+) {
     // SAFETY: the window is live and the DIB buffer stays allocated until its pixels are copied.
     let rgb = unsafe {
         let client = GetDC(window);
@@ -167,7 +176,17 @@ pub(super) fn capture_client(window: HWND, (width, height): (i32, i32), path: &P
         );
         assert!(!image.is_null() && !pixels.is_null());
         let previous = SelectObject(target, image);
-        let copied = BitBlt(target, 0, 0, width, height, client, 0, 0, SRCCOPY);
+        let copied = BitBlt(
+            target,
+            0,
+            0,
+            width,
+            height,
+            client,
+            left,
+            top,
+            SRCCOPY | CAPTUREBLT,
+        );
         let rgb = std::slice::from_raw_parts(pixels.cast::<u8>(), (width * height * 4) as usize)
             .as_chunks::<4>()
             .0

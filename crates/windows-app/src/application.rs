@@ -4,6 +4,7 @@ pub fn launch(explicit: bool) -> Result<(), Box<dyn std::error::Error>> {
     let Some(instance) = platform::Instance::claim(explicit)? else {
         return Ok(());
     };
+    ui::initialize_preferences();
     run(
         instance,
         explicit,

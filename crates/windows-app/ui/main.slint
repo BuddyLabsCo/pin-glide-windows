@@ -14,6 +14,7 @@ export component MainWindow inherits Window {
         : (root.sender-devices[root.editor].needs-repair ? 44px : 100px)
         + (root.editor-error == "" ? 0px : 24px);
     callback open-pairing();
+    callback open-settings();
     callback rename-sender(int, string, bool) -> string;
     callback delete-sender(int, bool) -> string;
     callback read-name-paste() -> NamePaste;
@@ -23,6 +24,10 @@ export component MainWindow inherits Window {
         root.editor = -1;
         root.editor-error = "";
         root.focus-first-row = false;
+    }
+
+    public function clear-editor-error() {
+        root.editor-error = "";
     }
 
     public function focus-first-sender(pointer: bool) {
@@ -76,6 +81,7 @@ export component MainWindow inherits Window {
                     width: parent.width;
                     height: parent.height;
                     accessible-label: root.chinese ? "设置" : "Settings";
+                    clicked => { root.open-settings(); }
                 }
 
                 Path {

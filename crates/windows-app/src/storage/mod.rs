@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File},
     io::{self, BufReader},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Mutex,
 };
 
@@ -15,6 +15,8 @@ mod enrollment;
 pub(crate) use enrollment::Enrollment;
 mod pending_add;
 mod sender_names;
+#[cfg(windows)]
+pub(crate) mod settings;
 #[cfg(windows)]
 pub(crate) use sender_names::SenderNameError;
 
@@ -262,15 +264,7 @@ impl RegistrationStore {
         let mut next = self.read()?;
         let value = change(&mut next)?;
         next.version = CURRENT_VERSION;
-        let directory = self
-            .path
-            .parent()
-            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
-        fs::create_dir_all(directory)?;
-        let mut stage = tempfile::NamedTempFile::new_in(directory)?;
-        serde_json::to_writer(stage.as_file_mut(), &next).map_err(io::Error::from)?;
-        stage.as_file().sync_all()?;
-        stage.persist(&self.path).map_err(|error| error.error)?;
+        replace_json(&self.path, &next)?;
         Ok(value)
     }
 
@@ -323,6 +317,18 @@ impl RegistrationStore {
         stored.backfill_sender_names();
         Ok(stored)
     }
+}
+
+fn replace_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+    fs::create_dir_all(directory)?;
+    let mut stage = tempfile::NamedTempFile::new_in(directory)?;
+    serde_json::to_writer(stage.as_file_mut(), value).map_err(io::Error::from)?;
+    stage.as_file().sync_all()?;
+    stage.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 impl Registration {

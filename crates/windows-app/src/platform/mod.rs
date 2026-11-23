@@ -1,5 +1,6 @@
 mod clipboard;
 mod instance;
+pub(crate) mod launch_at_login;
 mod popup;
 mod session;
 mod tray;
@@ -13,10 +14,11 @@ pub(crate) use popup::{
 };
 pub(crate) use session::popup_epoch;
 pub use tray::Tray;
-pub(crate) use tray::{delivery_status, set_delivery_status};
+pub(crate) use tray::{delivery_status, refresh_tooltip, set_delivery_status};
 
 use std::{cell::Cell, io};
 
+use crate::storage::settings::Language;
 use slint::{
     Window,
     winit_030::{WinitWindowAccessor, winit::window::WindowButtons},
@@ -31,6 +33,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 thread_local! {
     static ANIMATION_PREFERENCE_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+    static LANGUAGE: Cell<Language> = const { Cell::new(Language::System) };
 }
 
 pub fn set_animation_preference_override(enabled: Option<bool>) {
@@ -58,8 +61,18 @@ pub fn animations_enabled() -> bool {
 }
 
 pub fn chinese() -> bool {
-    // SAFETY: this query requires no input and has no side effects.
-    unsafe { GetUserDefaultUILanguage() & 0x03ff == 0x04 }
+    match LANGUAGE.get() {
+        Language::Chinese => true,
+        Language::English => false,
+        Language::System => {
+            // SAFETY: this query requires no input and has no side effects.
+            unsafe { GetUserDefaultUILanguage() & 0x03ff == 0x04 }
+        }
+    }
+}
+
+pub(crate) fn set_language(language: Language) {
+    LANGUAGE.set(language);
 }
 
 pub fn wide(value: &str) -> Vec<u16> {
