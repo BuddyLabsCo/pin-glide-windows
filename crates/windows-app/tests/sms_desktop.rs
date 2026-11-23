@@ -29,9 +29,6 @@ use windows_sys::Win32::{
 
 use windows_app::{select_backend, set_animation_preference_override, ui::show_sms};
 
-#[path = "support/sms_motion.rs"]
-mod sms_motion;
-
 const SENDER_NAME: &str = "我的设备";
 
 #[derive(Deserialize)]
@@ -66,7 +63,6 @@ fn renders_stacks_and_dismisses_approved_sms_popups() {
         for sample in &samples {
             check_sample(&mut inbox, sample).await;
         }
-        sms_motion::check(&samples).await;
         slint::quit_event_loop().unwrap();
     })
     .unwrap();

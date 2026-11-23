@@ -10,11 +10,14 @@ use slint::{
     CloseRequestResponse, ComponentHandle, PhysicalPosition, PlatformError, Timer, TimerMode,
     winit_030::WinitWindowAccessor,
 };
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{HWND, RECT};
 
 use receiver_core::delivery::Sms;
 
 use crate::{SmsWindow, platform, service::ReceivedSms};
+
+#[cfg(test)]
+mod tests;
 
 thread_local! {
     static STACK: RefCell<Stack> = RefCell::default();
@@ -29,6 +32,36 @@ struct Stack {
     visible: BTreeMap<u64, Popup>,
     leaving: Vec<Popup>,
     animation: Timer,
+    area: Option<WorkArea>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct WorkArea {
+    edges: [i32; 4],
+    scale: f32,
+}
+
+impl WorkArea {
+    fn read(anchor: &Popup) -> io::Result<Self> {
+        #[cfg(test)]
+        if let Some(area) = tests::WORK_AREA.get() {
+            return Ok(area);
+        }
+        let RECT {
+            left,
+            top,
+            right,
+            bottom,
+        } = platform::popup_work_area(anchor.hwnd)?;
+        Ok(Self {
+            edges: [left, top, right, bottom],
+            scale: anchor.window.window().scale_factor(),
+        })
+    }
+
+    fn margin(self) -> i32 {
+        (12.0 * self.scale).round() as i32
+    }
 }
 
 struct Popup {
@@ -38,7 +71,7 @@ struct Popup {
     motion: Option<Motion>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 struct Frame {
     position: PhysicalPosition,
     alpha: u8,
@@ -69,40 +102,59 @@ impl Motion {
     }
 }
 
+fn now() -> Instant {
+    #[cfg(test)]
+    if let Some(time) = tests::TIME.get() {
+        return time;
+    }
+    Instant::now()
+}
+
 impl Popup {
     fn draw(&self, frame: Frame) -> io::Result<()> {
+        #[cfg(test)]
+        if tests::FAIL_DRAW.get() == Some(self.hwnd) {
+            return Err(io::Error::other("injected window update failure"));
+        }
         platform::position_popup(self.hwnd, frame.position)?;
         platform::fade_popup(self.hwnd, frame.alpha)
     }
 
-    fn start_motion(&mut self, from: Frame, to: Frame, duration: Duration) -> io::Result<()> {
-        self.draw(from)?;
-        self.motion = Some(Motion {
-            from,
-            to,
-            started: Instant::now(),
-            duration,
-        });
+    fn start_motion(&mut self, motion: Motion) -> io::Result<()> {
+        self.draw(motion.from)?;
+        self.motion = Some(motion);
         Ok(())
     }
 }
 
 impl Stack {
-    fn layout(&mut self, incoming: Option<u64>, animate: bool) -> io::Result<()> {
+    fn layout(&mut self, incoming: Option<u64>, animate: bool, started: Instant) -> io::Result<()> {
         let Some(anchor) = self.visible.first_key_value().map(|(_, popup)| popup) else {
+            self.area = None;
             return Ok(());
         };
-        let work = platform::popup_work_area(anchor.hwnd)?;
-        let scale = anchor.window.window().scale_factor();
-        let physical = |logical: f32| (logical * scale).round() as i32;
-        let margin = physical(12.0);
-        let gap = physical(8.0);
+        let area = WorkArea::read(anchor)?;
+        self.layout_in(area, incoming, animate, started)?;
+        self.area = Some(area);
+        Ok(())
+    }
+
+    fn layout_in(
+        &mut self,
+        area: WorkArea,
+        incoming: Option<u64>,
+        animate: bool,
+        started: Instant,
+    ) -> io::Result<()> {
+        let [_, top, right, work_bottom] = area.edges;
+        let margin = area.margin();
+        let gap = (8.0 * area.scale).round() as i32;
         let bounds = self
             .visible
             .iter()
             .map(|(&id, popup)| Ok((id, platform::popup_bounds(popup.hwnd)?)))
             .collect::<io::Result<Vec<_>>>()?;
-        let mut available = work.bottom - work.top - 2 * margin + gap;
+        let mut available = work_bottom - top - 2 * margin + gap;
         let fitting = bounds
             .iter()
             .rev()
@@ -114,37 +166,42 @@ impl Stack {
             .count();
         let (evicted, retained) = bounds.split_at(bounds.len() - fitting);
         for &(id, _) in evicted {
-            self.remove(id, animate && Some(id) != incoming);
+            self.remove(id, animate && Some(id) != incoming, started);
         }
 
-        let mut bottom = work.bottom - margin;
+        let mut bottom = work_bottom - margin;
         for &(id, bounds) in retained {
             let popup = self.visible.get_mut(&id).unwrap();
             bottom -= bounds.bottom - bounds.top;
             let to = Frame {
                 position: PhysicalPosition::new(
-                    work.right - margin - (bounds.right - bounds.left),
+                    right - margin - (bounds.right - bounds.left),
                     bottom,
                 ),
                 alpha: 255,
             };
             bottom -= gap;
-            if animate && popup.motion.as_ref().is_some_and(|motion| motion.to == to) {
-                continue;
-            }
             popup.motion = None;
             if animate && Some(id) == incoming {
-                let from = Frame {
-                    position: PhysicalPosition::new(to.position.x + margin, to.position.y),
-                    alpha: 0,
-                };
-                popup.start_motion(from, to, FADE_DURATION)?;
+                popup.start_motion(Motion {
+                    from: Frame {
+                        position: PhysicalPosition::new(to.position.x + margin, to.position.y),
+                        alpha: 0,
+                    },
+                    to,
+                    started,
+                    duration: FADE_DURATION,
+                })?;
             } else if animate && bounds.top != to.position.y {
-                let from = Frame {
-                    position: PhysicalPosition::new(to.position.x, bounds.top),
-                    alpha: 255,
-                };
-                popup.start_motion(from, to, SLIDE_DURATION)?;
+                popup.start_motion(Motion {
+                    from: Frame {
+                        position: PhysicalPosition::new(to.position.x, bounds.top),
+                        alpha: 255,
+                    },
+                    to,
+                    started,
+                    duration: SLIDE_DURATION,
+                })?;
             } else {
                 popup.draw(to)?;
             }
@@ -152,12 +209,12 @@ impl Stack {
         Ok(())
     }
 
-    fn remove(&mut self, id: u64, animate: bool) -> bool {
+    fn remove(&mut self, id: u64, animate: bool, started: Instant) -> bool {
         let Some(mut popup) = self.visible.remove(&id) else {
             return false;
         };
         popup.expiry.stop();
-        if animate && start_exit(&mut popup).is_ok() {
+        if animate && start_exit(&mut popup, started).is_ok() {
             self.leaving.push(popup);
         } else {
             clear(&popup.window);
@@ -166,7 +223,7 @@ impl Stack {
     }
 
     fn tick(&mut self, animate: bool) {
-        let now = Instant::now();
+        let now = now();
         for popup in self.visible.values_mut() {
             if let Some(motion) = popup.motion.take() {
                 if let Some(frame) = animate.then(|| motion.frame(now)).flatten() {
@@ -206,7 +263,7 @@ impl Stack {
     }
 }
 
-fn start_exit(popup: &mut Popup) -> io::Result<()> {
+fn start_exit(popup: &mut Popup, started: Instant) -> io::Result<()> {
     let bounds = platform::popup_bounds(popup.hwnd)?;
     let offset = (12.0 * popup.window.window().scale_factor()).round() as i32;
     platform::prepare_popup_exit(popup.hwnd)?;
@@ -218,7 +275,12 @@ fn start_exit(popup: &mut Popup) -> io::Result<()> {
         position: PhysicalPosition::new(bounds.left + offset, bounds.top),
         alpha: 0,
     };
-    popup.start_motion(from, to, FADE_DURATION)
+    popup.start_motion(Motion {
+        from,
+        to,
+        started,
+        duration: FADE_DURATION,
+    })
 }
 
 pub(crate) fn receive(message: ReceivedSms) {
@@ -326,11 +388,14 @@ async fn show_sms_for_session(
                 motion: None,
             },
         );
-        if let Err(error) = stack.layout(Some(id), animate) {
-            stack.remove(id, false);
-            return Err(native_error(error));
+        let started = now();
+        let result = stack.layout(Some(id), animate, started);
+        if result.is_err() {
+            stack.remove(id, false, started);
+            let _ = stack.layout(None, false, started);
         }
         stack.schedule_frame(animate);
+        result.map_err(native_error)?;
         Ok(stack.visible.contains_key(&id))
     })?;
     if visible {
@@ -342,17 +407,31 @@ async fn show_sms_for_session(
 fn dismiss(id: u64) {
     let animate = platform::animations_enabled();
     STACK.with_borrow_mut(|stack| {
-        if stack.remove(id, animate) {
-            let _ = stack.layout(None, animate);
+        let started = now();
+        if stack.remove(id, animate, started) {
+            let _ = stack.layout(None, animate, started);
             stack.schedule_frame(animate);
         }
     });
 }
 
 pub(super) fn update_motion() {
-    if !platform::animations_enabled() {
-        STACK.with_borrow_mut(|stack| stack.tick(false));
-    }
+    STACK.with_borrow_mut(|stack| {
+        let area = stack
+            .visible
+            .first_key_value()
+            .and_then(|(_, anchor)| WorkArea::read(anchor).ok());
+        if let Some(area) = area
+            && stack.area != Some(area)
+        {
+            if stack.layout_in(area, None, false, now()).is_ok() {
+                stack.area = Some(area);
+            }
+            stack.tick(false);
+        } else if !platform::animations_enabled() {
+            stack.tick(false);
+        }
+    });
 }
 
 pub(super) fn close_all() {
