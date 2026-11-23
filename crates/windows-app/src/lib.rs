@@ -9,6 +9,8 @@ mod application;
 #[cfg(windows)]
 mod platform;
 #[cfg(windows)]
+mod test_environment;
+#[cfg(windows)]
 pub mod ui;
 #[cfg(windows)]
 pub use application::{launch, select_backend};

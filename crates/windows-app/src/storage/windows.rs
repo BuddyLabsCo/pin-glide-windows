@@ -17,7 +17,14 @@ use windows_sys::Win32::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
-pub(super) fn local_app_data() -> io::Result<PathBuf> {
+pub(super) fn app_data() -> io::Result<PathBuf> {
+    if let Some(path) = crate::test_environment::directory() {
+        return Ok(path);
+    }
+    local_app_data().map(|path| path.join("Pin Glide"))
+}
+
+fn local_app_data() -> io::Result<PathBuf> {
     let mut path = null_mut();
     // SAFETY: the known-folder ID and output pointer are valid and the null token selects this user.
     let result = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, null_mut(), &mut path) };

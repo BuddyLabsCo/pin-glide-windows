@@ -1,0 +1,182 @@
+import {
+    Button,
+    ComboBox,
+    LineEdit,
+    Palette,
+    ScrollView,
+    Switch,
+} from "std-widgets.slint";
+import { BackButton } from "back_button.slint";
+
+component SettingCard inherits Rectangle {
+    in property <string> label;
+    in property <string> error;
+    background: white;
+    border-color: #deebe5;
+    border-width: 1px;
+    border-radius: 8px;
+    height: content.preferred-height;
+
+    content := VerticalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        HorizontalLayout {
+            height: 52px;
+            padding-top: 10px;
+            padding-bottom: 10px;
+            spacing: 8px;
+            Text {
+                text: root.label;
+                font-weight: 600;
+                color: #25322e;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                min-width: 0px;
+                wrap: word-wrap;
+            }
+
+            @children
+        }
+
+        if root.error != "": VerticalLayout {
+            padding-bottom: 10px;
+            Text {
+                text: root.error;
+                color: #903d34;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component SettingsWindow inherits Window {
+    in property <bool> chinese;
+    in property <string> language-error;
+    in property <string> startup-error;
+    in-out property <int> language-index;
+    in-out property <bool> startup;
+    callback back();
+    callback choose-language(int);
+    callback toggle-startup(bool);
+    private property <string> heading: root.chinese ? "设置" : "Settings";
+
+    title: root.chinese ? "鹊信 · 设置" : "Pin Glide · Settings";
+    icon: @image-url("assets/app-icon.png");
+    min-width: 420px;
+    max-width: 420px;
+    min-height: 392px;
+    max-height: 392px;
+    background: #f1f8f5;
+    default-font-family: "Microsoft YaHei UI";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
+    public function focus-page() {
+        page-focus.focus();
+    }
+
+    page-focus := FocusScope {
+        width: 0px;
+        height: 0px;
+        focus-on-tab-navigation: false;
+    }
+
+    TouchArea {
+        clicked => { root.focus-page(); }
+    }
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        HorizontalLayout {
+            height: 32px;
+            spacing: 10px;
+            BackButton {
+                label: root.chinese ? "返回主窗口" : "Back to Main";
+                clicked => { root.back(); }
+            }
+
+            Text {
+                text: root.heading;
+                font-size: 22px;
+                font-weight: 600;
+                color: #22312f;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                wrap: word-wrap;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            VerticalLayout {
+                width: parent.width;
+                alignment: start;
+                spacing: 8px;
+                SettingCard {
+                    label: root.chinese ? "界面语言" : "Interface language";
+                    error: root.language-error;
+                    ComboBox {
+                        width: 128px;
+                        model: [root.chinese ? "跟随系统" : "Follow system", "中文", "English"];
+                        current-index <=> root.language-index;
+                        accessible-label: parent.label;
+                        selected => { root.choose-language(self.current-index); }
+                    }
+                }
+
+                SettingCard {
+                    label: root.chinese ? "开机启动" : "Launch at login";
+                    error: root.startup-error;
+                    Switch {
+                        width: 40px;
+                        checked <=> root.startup;
+                        accessible-label: parent.label;
+                        toggled => { root.toggle-startup(self.checked); }
+                    }
+                }
+
+                SettingCard {
+                    label: root.chinese ? "复制验证码快捷键" : "Copy code shortcut";
+                    LineEdit {
+                        width: 106px;
+                        text: root.chinese ? "未设置" : "Unassigned";
+                        read-only: true;
+                        accessible-label: parent.label;
+                    }
+
+                    Button {
+                        text: root.chinese ? "修改" : "Change";
+                        width: root.chinese ? 52px : 64px;
+                        enabled: false;
+                    }
+
+                    Button {
+                        text: root.chinese ? "清除" : "Clear";
+                        width: 52px;
+                        enabled: false;
+                    }
+                }
+
+                SettingCard {
+                    label: root.chinese ? "弹窗显示时长" : "Popup duration";
+                    LineEdit {
+                        width: 56px;
+                        text: "30";
+                        read-only: true;
+                        accessible-label: root.chinese ? "弹窗显示时长（秒）" : "Popup duration (seconds)";
+                    }
+
+                    Text {
+                        text: root.chinese ? "秒" : "s";
+                        width: 14px;
+                        font-size: 13px;
+                        color: #65716e;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

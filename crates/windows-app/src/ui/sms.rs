@@ -471,6 +471,14 @@ pub(super) fn refresh_layout(resized: bool) {
     });
 }
 
+pub(super) fn update_language(chinese: bool) {
+    STACK.with_borrow(|stack| {
+        for popup in stack.visible.values().chain(&stack.leaving) {
+            popup.window.set_chinese(chinese);
+        }
+    });
+}
+
 pub(super) fn close_all() {
     let stack = STACK.take();
     for popup in stack.visible.into_values().chain(stack.leaving) {

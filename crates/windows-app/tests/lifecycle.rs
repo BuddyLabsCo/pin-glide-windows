@@ -1,11 +1,13 @@
 #![cfg(windows)]
 
+#[path = "support/app_process.rs"]
+mod app_process;
 mod support;
 #[path = "support/window_size.rs"]
 mod window_size;
 
+use app_process::{AppProcess, Fixture};
 use std::io;
-use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -19,40 +21,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_MINIMIZEBOX, WS_THICKFRAME,
 };
 
-struct AppProcess(Child);
-
-impl AppProcess {
-    fn launch(arguments: &[&str]) -> Self {
-        Self(
-            Command::new(env!("CARGO_BIN_EXE_windows-app"))
-                .args(arguments)
-                .spawn()
-                .unwrap(),
-        )
-    }
-
-    fn id(&self) -> u32 {
-        self.0.id()
-    }
-
-    fn wait_for_success(&mut self, expectation: &str) {
-        wait_for(
-            || {
-                self.0.try_wait().unwrap().is_some_and(|status| {
-                    assert!(status.success(), "{expectation}: {status}");
-                    true
-                })
-            },
-            expectation,
-        );
-    }
-}
-
-impl Drop for AppProcess {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
+fn launch_duplicate(fixture: &Fixture, arguments: &[&str], expectation: &str) {
+    let mut child = AppProcess(fixture.command().args(arguments).spawn().unwrap());
+    wait_for(
+        || {
+            child.0.try_wait().unwrap().is_some_and(|status| {
+                assert!(status.success(), "{expectation}: {status}");
+                true
+            })
+        },
+        expectation,
+    );
 }
 
 fn visible_window(process: u32) -> HWND {
@@ -94,17 +73,51 @@ fn visible_window(process: u32) -> HWND {
 use support::wait_for;
 
 #[test]
-#[ignore = "requires an interactive Windows desktop with Pin Glide stopped"]
+#[cfg(debug_assertions)]
+fn invalid_fixture_configuration_exits_before_using_system_settings() {
+    let fixture = Fixture::new();
+    let file = fixture.path().join("PinGlideTest-file");
+    std::fs::write(&file, []).unwrap();
+    for invalid in [
+        std::path::PathBuf::from("PinGlideTest-relative"),
+        fixture.path().join("PinGlideTest-missing"),
+        file,
+    ] {
+        let mut child = AppProcess(
+            fixture
+                .command()
+                .env("PINGLIDE_TEST_DIRECTORY", invalid)
+                .arg("--startup")
+                .spawn()
+                .unwrap(),
+        );
+        wait_for(
+            || {
+                child.0.try_wait().unwrap().is_some_and(|status| {
+                    assert!(!status.success(), "invalid fixture must fail to start");
+                    true
+                })
+            },
+            "invalid fixture must exit",
+        );
+        fixture.verify_system_settings();
+    }
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop"]
 fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Result<()> {
     // SAFETY: use physical coordinates when querying Welcome from this test thread.
     let previous =
         unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     assert!(!previous.is_null());
-    let mut primary = AppProcess::launch(&["--startup"]);
+    let fixture = Fixture::new();
+    let mut primary = AppProcess(fixture.command().arg("--startup").spawn()?);
+    let process = primary.0.id();
     let observe_until = Instant::now() + Duration::from_secs(1);
     while Instant::now() < observe_until {
         assert!(
-            visible_window(primary.id()).is_null(),
+            visible_window(process).is_null(),
             "startup must not open a window"
         );
         assert!(
@@ -114,18 +127,28 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         thread::sleep(Duration::from_millis(25));
     }
 
-    AppProcess::launch(&["--startup"]).wait_for_success("duplicate startup must exit successfully");
+    assert!(fixture.path().join("settings.json").is_file());
+    assert!(fixture.startup().is_some());
+    launch_duplicate(
+        &fixture,
+        &["--startup"],
+        "duplicate startup must exit successfully",
+    );
     assert!(
-        visible_window(primary.id()).is_null(),
+        visible_window(process).is_null(),
         "duplicate startup must stay quiet"
     );
 
-    AppProcess::launch(&[]).wait_for_success("explicit second launch must exit successfully");
+    launch_duplicate(
+        &fixture,
+        &[],
+        "explicit second launch must exit successfully",
+    );
     wait_for(
-        || !visible_window(primary.id()).is_null(),
+        || !visible_window(process).is_null(),
         "the tray process must open Welcome",
     );
-    let window = visible_window(primary.id());
+    let window = visible_window(process);
     assert!(window_size::client_size(window, 440, 560).is_some());
     // SAFETY: window was obtained from EnumWindows.
     unsafe {
@@ -138,7 +161,11 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         || unsafe { IsIconic(window) != 0 },
         "Windows must minimize Welcome",
     );
-    AppProcess::launch(&[]).wait_for_success("launch while minimized must exit successfully");
+    launch_duplicate(
+        &fixture,
+        &[],
+        "launch while minimized must exit successfully",
+    );
     wait_for(
         // SAFETY: the primary process still owns the same Welcome HWND.
         || unsafe { IsIconic(window) == 0 && IsWindowVisible(window) != 0 },
@@ -149,7 +176,7 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         assert_ne!(PostMessageW(window, WM_CLOSE, 0, 0), 0);
     }
     wait_for(
-        || visible_window(primary.id()).is_null(),
+        || visible_window(process).is_null(),
         "close must hide the window",
     );
     assert!(
@@ -157,10 +184,12 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         "close must leave the tray process alive"
     );
 
-    AppProcess::launch(&[]).wait_for_success("relaunch must exit successfully");
+    launch_duplicate(&fixture, &[], "relaunch must exit successfully");
     wait_for(
-        || !visible_window(primary.id()).is_null(),
+        || !visible_window(process).is_null(),
         "relaunch must reopen Welcome",
     );
+    drop(primary);
+    fixture.verify_system_settings();
     Ok(())
 }

@@ -182,7 +182,13 @@ fn add_icon(window: HWND, icon: HICON, chinese: bool) -> io::Result<()> {
 }
 
 pub(crate) fn set_delivery_status(status: DeliveryStatus) {
-    if DELIVERY_STATUS.replace(status) == status || TRAY_WINDOW.get().is_null() {
+    if DELIVERY_STATUS.replace(status) != status {
+        refresh_tooltip();
+    }
+}
+
+pub(crate) fn refresh_tooltip() {
+    if TRAY_WINDOW.get().is_null() {
         return;
     }
     let mut data = icon_data(TRAY_WINDOW.get());
@@ -287,7 +293,10 @@ unsafe extern "system" fn window_proc(
         }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE => {
             if !WITHOUT_UI.get() {
-                let _ = slint::invoke_from_event_loop(crate::ui::update_motion);
+                let _ = slint::invoke_from_event_loop(|| {
+                    crate::ui::update_motion();
+                    crate::ui::refresh_preferences();
+                });
             }
             0
         }

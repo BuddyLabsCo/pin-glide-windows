@@ -278,10 +278,10 @@ fn verify_pending_name_route(window: &PairingWindow) {
     window.set_sender_name("Draft".into());
     window.hide().unwrap();
     ui::open_settings();
-    assert!(window.window().is_visible());
-    assert_eq!(window.get_sender_name(), "Draft");
+    assert!(!window.window().is_visible() && ui::settings_visible());
     ui::open();
-    assert!(main_capture::main_window().is_none());
+    assert!(window.window().is_visible() && main_capture::main_window().is_none());
+    assert_eq!(window.get_sender_name(), "Draft");
 }
 
 fn saved_name(path: &Path) -> String {

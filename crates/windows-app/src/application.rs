@@ -1,9 +1,19 @@
 use crate::{platform, ui};
 
 pub fn launch(explicit: bool) -> Result<(), Box<dyn std::error::Error>> {
+    crate::test_environment::validate()?;
     let Some(instance) = platform::Instance::claim(explicit)? else {
         return Ok(());
     };
+    if crate::test_environment::directory().is_some() {
+        let animation_override = match std::env::var("PINGLIDE_TEST_REDUCED_MOTION").as_deref() {
+            Ok("0") => Some(true),
+            Ok("1") => Some(false),
+            _ => None,
+        };
+        platform::set_animation_preference_override(animation_override);
+    }
+    ui::initialize_preferences();
     run(
         instance,
         explicit,
