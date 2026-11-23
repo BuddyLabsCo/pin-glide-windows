@@ -5,7 +5,8 @@ mod fixture;
 
 use serde_json::{Value, json};
 use slint::{
-    ComponentHandle, Timer, TimerMode,
+    ComponentHandle, LogicalPosition, Timer, TimerMode, Window,
+    platform::{PointerEventButton, WindowEvent},
     winit_030::winit::{event_loop::EventLoop, platform::windows::EventLoopBuilderExtWindows},
 };
 use std::{
@@ -27,6 +28,8 @@ mod add_sender_service;
 mod completion_frames;
 #[path = "support/main_capture.rs"]
 mod main_capture;
+#[path = "support/main_devices_desktop.rs"]
+mod main_devices_desktop;
 #[path = "support/name_clipboard.rs"]
 mod name_clipboard;
 #[path = "support/window_size.rs"]
@@ -356,6 +359,15 @@ fn capture(window: &slint::Window, path: &Path) {
         .flat_map(|pixel| [pixel.r, pixel.g, pixel.b])
         .collect();
     file.write_all(&rgb).unwrap();
+}
+
+fn click(window: &Window, x: f32, y: f32) {
+    let position = LogicalPosition::new(x, y);
+    let button = PointerEventButton::Left;
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed { position, button });
+    window.dispatch_event(WindowEvent::PointerReleased { position, button });
+    window.dispatch_event(WindowEvent::PointerExited);
 }
 
 fn issue_sessions(

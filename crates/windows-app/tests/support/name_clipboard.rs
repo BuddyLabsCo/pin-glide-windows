@@ -1,5 +1,5 @@
 use slint::{
-    ComponentHandle,
+    ComponentHandle, Window,
     platform::{Key, WindowEvent},
 };
 use windows_app::{NamePaste, PairingWindow};
@@ -11,13 +11,16 @@ pub(super) fn type_text(window: &PairingWindow, text: &str) {
 }
 
 fn control(window: &PairingWindow, key: &str) {
-    let surface = window.window();
-    surface.dispatch_event(WindowEvent::KeyPressed {
-        text: Key::Control.into(),
+    with_modifier(window.window(), Key::Control, || type_text(window, key));
+}
+
+pub(super) fn with_modifier(window: &Window, modifier: Key, send: impl FnOnce()) {
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: modifier.into(),
     });
-    type_text(window, key);
-    surface.dispatch_event(WindowEvent::KeyReleased {
-        text: Key::Control.into(),
+    send();
+    window.dispatch_event(WindowEvent::KeyReleased {
+        text: modifier.into(),
     });
 }
 

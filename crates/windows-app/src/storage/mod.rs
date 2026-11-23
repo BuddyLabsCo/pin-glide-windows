@@ -43,6 +43,13 @@ pub(crate) struct DeliveryTarget {
     pub key: Zeroizing<[u8; 32]>,
 }
 
+#[cfg(windows)]
+pub(crate) struct SenderDevice {
+    pub pairing_id: String,
+    pub name: String,
+    pub needs_repair: bool,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProtectedPairing {
@@ -50,6 +57,16 @@ struct ProtectedPairing {
     protected_key: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+}
+
+impl ProtectedPairing {
+    fn key(&self) -> Option<Zeroizing<[u8; 32]>> {
+        let bytes = unprotect(&self.protected_key).ok()?;
+        let mut key = Zeroizing::new([0; 32]);
+        key.as_mut_slice()
+            .copy_from_slice(<&[u8; 32]>::try_from(bytes.as_slice()).ok()?);
+        Some(key)
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -172,13 +189,38 @@ impl RegistrationStore {
         if pairing.sender_id != sender_id {
             return None;
         }
-        let bytes = unprotect(&pairing.protected_key).ok()?;
-        let mut key = Zeroizing::new([0; 32]);
-        key.as_mut_slice()
-            .copy_from_slice(<&[u8; 32]>::try_from(bytes.as_slice()).ok()?);
         Some(DeliveryTarget {
+            key: pairing.key()?,
             name: pairing.name?,
-            key,
+        })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn sender_devices(&self) -> io::Result<Vec<SenderDevice>> {
+        Ok(self
+            .read()?
+            .active_pairings
+            .into_iter()
+            .map(|(pairing_id, pairing)| SenderDevice {
+                pairing_id,
+                needs_repair: pairing.key().is_none(),
+                name: pairing.name.unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn delete_unreadable_pairing(&self, pairing_id: &str) -> io::Result<()> {
+        self.update(|next| {
+            let pairing = next
+                .active_pairings
+                .get(pairing_id)
+                .ok_or(io::ErrorKind::NotFound)?;
+            if pairing.key().is_some() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            next.active_pairings.remove(pairing_id);
+            Ok(())
         })
     }
 

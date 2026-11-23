@@ -6,6 +6,8 @@ use std::{
     time::Duration,
 };
 
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use native_tls::{TlsAcceptor, TlsStream};
 use serde_json::{Value, json};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -27,6 +29,31 @@ pub use tls::acceptor;
 
 pub type Connection = TlsStream<TcpStream>;
 pub type Socket = WebSocket<Connection>;
+
+pub fn send_authenticated_delivery(
+    socket: &mut Socket,
+    pairing_id: &str,
+    sender_id: &str,
+    key: &[u8; 32],
+    message: (&str, u8),
+    plaintext: Value,
+) {
+    let (message_id, sequence) = message;
+    let nonce = [sequence; 12];
+    let ciphertext = Aes256Gcm::new(key.into())
+        .encrypt(&Nonce::from(nonce), plaintext.to_string().as_bytes())
+        .unwrap();
+    send_event(
+        socket,
+        json!({
+            "type":"delivery", "version":1, "receiverId":"receiver-1",
+            "senderId":sender_id, "pairingId":pairing_id,
+            "messageId":message_id, "cryptoVersion":1,
+            "nonce":STANDARD.encode(nonce), "ciphertext":STANDARD.encode(ciphertext),
+        }),
+    );
+}
+
 pub const TOKEN: &str = "fixture-pairing-b";
 pub const RECEIVER_TOKEN: &str = "fixture-receiver-r";
 

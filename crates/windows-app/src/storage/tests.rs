@@ -11,6 +11,62 @@ mod dpapi;
 use super::{PairingReference, RegistrationStore};
 
 #[test]
+fn deletes_only_the_unreadable_pairing_and_keeps_delivery_credentials() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("registration.json");
+    fs::write(
+        &path,
+        json!({
+            "version": 4,
+            "receiver_id": "receiver",
+            "protected_receiver_token": dpapi::protect(b"receiver-token"),
+            "active_pairings": {
+                "broken": {"sender_id": "first", "protected_key": [1, 2], "name": "Broken"},
+                "short": {"sender_id": "second", "protected_key": dpapi::protect(&[42]), "name": "Short"},
+                "working": {"sender_id": "third", "protected_key": dpapi::protect(&[7; 32]), "name": "Working"}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let store = RegistrationStore::new(path.clone());
+    assert!(store.delete_unreadable_pairing("working").is_err());
+    assert_eq!(
+        store
+            .sender_devices()
+            .unwrap()
+            .iter()
+            .map(|device| (device.pairing_id.as_str(), device.needs_repair))
+            .collect::<Vec<_>>(),
+        [("broken", true), ("short", true), ("working", false)]
+    );
+    for (id, sender) in [("broken", "first"), ("short", "second")] {
+        assert!(store.delivery_target("receiver", id, sender).is_none());
+        store.delete_unreadable_pairing(id).unwrap();
+        assert!(store.delete_unreadable_pairing(id).is_err());
+    }
+    let reopened = RegistrationStore::new(path);
+    let (receiver, token) = reopened.receiver_credential().unwrap();
+    assert_eq!(receiver, "receiver");
+    assert_eq!(token.as_str(), "receiver-token");
+    assert_eq!(reopened.sender_devices().unwrap().len(), 1);
+    let delivery = reopened
+        .delivery_target("receiver", "working", "third")
+        .unwrap();
+    assert_eq!(*delivery.key, [7; 32]);
+    reopened
+        .name_sender("working", &" Working ".encode_utf16().collect::<Vec<_>>())
+        .unwrap();
+    reopened
+        .name_sender("working", &" Travel ".encode_utf16().collect::<Vec<_>>())
+        .unwrap();
+    let delivery = reopened
+        .delivery_target("receiver", "working", "third")
+        .unwrap();
+    assert_eq!(delivery.name, "Travel");
+}
+
+#[test]
 fn saves_only_a_valid_unique_sender_name_and_preserves_it_on_failure() {
     use super::SenderNameError::{Duplicate, Empty, InvalidCharacter, TooLong};
 
@@ -37,7 +93,10 @@ fn saves_only_a_valid_unique_sender_name_and_preserves_it_on_failure() {
         (vec![0xd800], InvalidCharacter),
     ] {
         assert!(matches!(store.name_sender("second", &input), Err(error) if error == expected));
-        assert_eq!(store.sender_names().unwrap()["second"], "未命名设备-2");
+        assert_eq!(
+            store.sender_name("second").unwrap().as_deref(),
+            Some("未命名设备-2")
+        );
     }
     let name = "🚀".repeat(40);
     store
@@ -47,8 +106,8 @@ fn saves_only_a_valid_unique_sender_name_and_preserves_it_on_failure() {
         )
         .unwrap();
     assert_eq!(
-        RegistrationStore::new(path).sender_names().unwrap()["second"],
-        name
+        RegistrationStore::new(path).sender_name("second").unwrap(),
+        Some(name)
     );
 }
 
@@ -89,10 +148,14 @@ fn verify_migration(version: u32) {
         ("named-pairing", "未命名设备-2"),
         ("other-pairing", "未命名设备-3"),
     ];
-    let names = store.sender_names().unwrap();
-    for (id, name) in expected {
-        assert_eq!(names[id], name);
-    }
+    let devices = store.sender_devices().unwrap();
+    assert_eq!(
+        devices
+            .iter()
+            .map(|device| (device.pairing_id.as_str(), device.name.as_str()))
+            .collect::<Vec<_>>(),
+        expected
+    );
     let locked = OpenOptions::new()
         .read(true)
         .share_mode(1)

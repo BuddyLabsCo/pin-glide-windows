@@ -1,14 +1,16 @@
 import { Button, Palette } from "std-widgets.slint";
 import { BackButton } from "back_button.slint";
 
-struct NamePaste {
+export struct NamePaste {
     text: string,
     error: string,
     invalid-text: bool,
 }
 
-component SenderNameForm inherits Rectangle {
+export component SenderNameForm inherits Rectangle {
     in property <bool> chinese;
+    in property <bool> compact;
+    in property <bool> editable: true;
     in-out property <string> name;
     in-out property <string> error;
     in-out property <bool> invalid-paste;
@@ -18,6 +20,11 @@ component SenderNameForm inherits Rectangle {
     callback done();
     public function focus-name() {
         field.focus();
+    }
+    public function focus-draft() {
+        field.focus();
+        field.select-all();
+        field.clear-selection();
     }
     public function paste-name() {
         field.focus();
@@ -33,26 +40,39 @@ component SenderNameForm inherits Rectangle {
         x: 0px;
         y: 0px;
         width: parent.width;
-        height: 20px;
+        height: root.compact ? 16px : 20px;
         text: root.chinese ? "设备名称" : "Device name";
-        color: #22312f;
+        color: root.compact ? #53655d : #22312f;
+        font-size: root.compact ? 12px : 14px;
+        vertical-alignment: root.compact ? center : top;
         horizontal-alignment: left;
     }
 
     Rectangle {
         x: 0px;
-        y: 24px;
+        y: root.compact ? 20px : 24px;
         width: parent.width;
-        height: 36px;
+        height: root.compact ? 32px : 36px;
         background: white;
         border-width: root.error != "" ? 1px : field.has-focus ? 2px : 1px;
         border-radius: 4px;
-        border-color: root.error != "" ? #903d34 : field.has-focus ? #284e79 : #d1d1d1;
+        border-color: root.compact ? (field.has-focus && root.error == "" ? #101010 : #b8bfbc)
+            : root.error != "" ? #903d34 : field.has-focus ? #284e79 : #d1d1d1;
+
+        if root.compact && root.error != "": Rectangle {
+            x: -1px;
+            y: -1px;
+            width: parent.width + 2px;
+            height: parent.height + 2px;
+            border-width: 1px;
+            border-radius: 5px;
+            border-color: #903d34;
+        }
 
         Rectangle {
             clip: true;
-            x: 11px;
-            width: parent.width - 22px;
+            x: root.compact ? 10px : 11px;
+            width: parent.width - 2 * self.x;
             ContextMenuArea {
                 Menu {
                     MenuItem {
@@ -94,8 +114,8 @@ component SenderNameForm inherits Rectangle {
                 Text {
                     width: parent.width;
                     text: root.invalid-paste ? "�" : root.chinese ? "输入设备名称" : "Enter device name";
-                    visible: root.name == "" && field.preedit-text == "";
-                    color: root.invalid-paste ? #242424 : #757575;
+                    visible: root.name == "" && field.preedit-text == "" && (!root.compact || root.invalid-paste);
+                    color: root.compact ? black : root.invalid-paste ? #242424 : #757575;
                     horizontal-alignment: left;
                     vertical-alignment: center;
                 }
@@ -105,10 +125,13 @@ component SenderNameForm inherits Rectangle {
                     x: offset;
                     width: max(parent.width - 1px, self.preferred-width);
                     height: 100%;
-                    color: #242424;
+                    color: root.compact ? black : #242424;
                     vertical-alignment: center;
                     single-line: true;
+                    enabled: root.editable;
                     text <=> root.name;
+                    accessible-role: text-input;
+                    accessible-value: root.name;
                     accessible-label: root.chinese ? "设备名称" : "Device name";
                     accessible-description: root.error;
                     cursor-position-changed(position) => {
@@ -133,9 +156,9 @@ component SenderNameForm inherits Rectangle {
         }
     }
 
-    Text {
+    if !root.compact || root.error != "": Text {
         x: 0px;
-        y: 65px;
+        y: root.compact ? 56px : 65px;
         width: parent.width;
         height: 20px;
         text: root.error;
@@ -144,7 +167,7 @@ component SenderNameForm inherits Rectangle {
         vertical-alignment: center;
     }
 
-    Rectangle {
+    if !root.compact: Rectangle {
         x: parent.width - 112px;
         y: 101px;
         width: 112px;

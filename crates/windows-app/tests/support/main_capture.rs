@@ -90,7 +90,7 @@ fn verify_main(expected: &str, evidence: Option<&Path>) -> mpsc::Receiver<bool> 
     result
 }
 
-fn accessible_name(handle: usize, expected: &str) -> windows::core::Result<bool> {
+pub(super) fn accessible_name(handle: usize, expected: &str) -> windows::core::Result<bool> {
     use windows::Win32::{
         Foundation::HWND,
         System::Com::{
@@ -138,7 +138,11 @@ unsafe extern "system" fn find_main(window: HWND, output: LPARAM) -> i32 {
 }
 
 fn capture_main(window: HWND, path: &Path) {
-    let (width, height) = super::window_size::client_size(window, WIDTH, HEIGHT).unwrap();
+    let size = super::window_size::client_size(window, WIDTH, HEIGHT).unwrap();
+    capture_client(window, size, path);
+}
+
+pub(super) fn capture_client(window: HWND, (width, height): (i32, i32), path: &Path) {
     // SAFETY: the window is live and the DIB buffer stays allocated until its pixels are copied.
     let rgb = unsafe {
         let client = GetDC(window);
