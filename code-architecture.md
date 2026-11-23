@@ -101,6 +101,9 @@ within 500 lines.
   Startup Apps overrides. Stage and flush the settings file before changing
   the Run entry. Restore the previous entry if replacement fails and show
   rollback failures in Settings.
+  Version 3 adds the optional global copy shortcut. The tray window owns its
+  Windows registration. Keep the previous registration until the candidate
+  registers and the settings file commits.
 - Store Receiver registration in `Pin Glide/registration.json` under Local
   AppData. Version 2 adds `provisional_pairing` with the session, Receiver,
   Sender and Pairing IDs and the protected key blob. Preserve the active

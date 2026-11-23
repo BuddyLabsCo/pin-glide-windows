@@ -12,6 +12,8 @@ mod main_capture;
 mod settings_duration;
 #[path = "support/settings_frames.rs"]
 mod settings_frames;
+#[path = "support/settings_shortcut.rs"]
+mod settings_shortcut;
 mod support;
 #[path = "support/window_size.rs"]
 mod window_size;

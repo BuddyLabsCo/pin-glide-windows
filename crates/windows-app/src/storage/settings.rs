@@ -12,7 +12,7 @@ use super::{WRITER, stage_json, windows};
 #[cfg(test)]
 mod tests;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +21,13 @@ pub(crate) enum Language {
     System,
     Chinese,
     English,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Shortcut {
+    pub(crate) modifiers: u32,
+    pub(crate) key: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -33,6 +40,8 @@ pub(crate) struct Settings {
     pub(crate) launch_at_login: bool,
     #[serde(default)]
     pub(crate) popup_duration_seconds: PopupDuration,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shortcut: Option<Shortcut>,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +106,7 @@ impl Default for Settings {
             language: Language::System,
             launch_at_login: default_launch_at_login(),
             popup_duration_seconds: PopupDuration::default(),
+            shortcut: None,
         }
     }
 }
@@ -135,7 +145,10 @@ impl SettingsStore {
                     ..Settings::default()
                 }
             }
-            VERSION => serde_json::from_slice(&bytes).map_err(invalid)?,
+            2 | VERSION => Settings {
+                version: VERSION,
+                ..serde_json::from_slice(&bytes).map_err(invalid)?
+            },
             _ => return Err(io::ErrorKind::InvalidData.into()),
         };
         Ok(Some(settings))

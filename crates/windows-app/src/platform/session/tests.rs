@@ -13,9 +13,15 @@ use receiver_core::delivery::Sms;
 use serde_json::{Value, json};
 use slint::ComponentHandle;
 use tokio_tungstenite::tungstenite::{Message, WebSocket};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, SendMessageW, WM_POWERBROADCAST, WM_WTSSESSION_CHANGE,
-    WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+use windows_sys::Win32::{
+    System::DataExchange::{CloseClipboard, OpenClipboard},
+    UI::{
+        Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL},
+        WindowsAndMessaging::{
+            GetForegroundWindow, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, SendMessageW, WM_HOTKEY,
+            WM_POWERBROADCAST, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+        },
+    },
 };
 
 use crate::{
@@ -51,17 +57,7 @@ fn lock_immediately_closes_every_sms_and_unlock_only_shows_new_sms() {
     let (listener, origin) = listen("localhost");
     let service = local_service(&listener, &origin, true);
     let fixture_dir = tempfile::tempdir().unwrap();
-    let path = fixture_dir.path().join("registration.json");
-    std::fs::write(&path, json!({
-        "version": 4,
-        "receiver_id": "receiver-1",
-        "protected_receiver_token": Enrollment::protect_token(TOKEN).unwrap(),
-        "active_pairings": {
-            "pairing-1": {
-                "sender_id": "sender-1", "protected_key": Enrollment::protect_token("abcdefghijklmnopqrstuvwxyz123456").unwrap(), "name": "我的设备",
-            },
-        },
-    }).to_string()).unwrap();
+    let path = registration(fixture_dir.path());
     let (deliver, messages) = mpsc::channel();
     let (ack, receipts) = mpsc::channel();
     let server = thread::spawn(move || {
@@ -140,6 +136,120 @@ fn lock_immediately_closes_every_sms_and_unlock_only_shows_new_sms() {
     slint::run_event_loop_until_quit().unwrap();
     server.join().unwrap();
     drop(tray);
+}
+
+#[test]
+#[ignore = "requires an unlocked interactive Windows desktop and writes a synthetic OTP to the clipboard"]
+fn tray_shortcut_leaves_an_empty_inbox_alone_and_retries_after_popups_close() {
+    platform::enable_per_monitor_dpi().unwrap();
+    select_test_backend().unwrap();
+    let tray = platform::Tray::new(&platform::wide("Pin Glide shortcut fixture")).unwrap();
+    let handle = tray.window() as usize;
+    let (listener, origin) = listen("localhost");
+    let service = local_service(&listener, &origin, true);
+    let directory = tempfile::tempdir().unwrap();
+    let (deliver, ready) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let stream = acceptor().accept(accept_loopback(&listener)).unwrap();
+        let mut socket = socket::accept_socket(stream, "/v1/receiver/events", TOKEN);
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        deliver_sms(&mut socket, 1, "synthetic-code");
+        deliver_sms(&mut socket, 2, "");
+        let _ = socket.read();
+    });
+    slint::spawn_local(async move {
+        let chord = crate::storage::settings::Shortcut {
+            key: b'V'.into(),
+            modifiers: MOD_CONTROL | MOD_ALT,
+        };
+        assert!(platform::replace_shortcut(Some(chord), || Ok(())).is_ok());
+        let main = ui::open_registered(true, registration(directory.path()), move || {
+            Some(service.clone())
+        })
+        .unwrap()
+        .unwrap();
+        main.hide().unwrap();
+        let window = handle as _;
+        let trigger = || {
+            // SAFETY: the live tray HWND is owned by this thread.
+            unsafe {
+                SendMessageW(
+                    window,
+                    WM_HOTKEY,
+                    1,
+                    ((chord.key << 16) | chord.modifiers) as isize,
+                )
+            };
+        };
+        // SAFETY: this query does not modify the foreground window.
+        let foreground = unsafe { GetForegroundWindow() };
+        assert_ne!(foreground, window);
+        platform::write_unicode_clipboard(window, "synthetic sentinel");
+        trigger();
+        assert_eq!(
+            platform::read_unicode_clipboard().unwrap().as_deref(),
+            Some("synthetic sentinel")
+        );
+        deliver.send(()).unwrap();
+        for _ in 0..80 {
+            if ui::popup_count() == 2 {
+                break;
+            }
+            next_gui_turn().await;
+        }
+        assert_eq!(ui::popup_count(), 2);
+        ui::close_sms();
+        assert_eq!(ui::popup_count(), 0);
+        let (locked, busy) = mpsc::channel();
+        let (release, done) = mpsc::channel();
+        let owner = thread::spawn(move || {
+            // SAFETY: a different thread must hold the clipboard for a write to fail.
+            unsafe {
+                let opened = OpenClipboard(std::ptr::null_mut()) != 0;
+                locked.send(opened).unwrap();
+                if opened {
+                    let _ = done.recv();
+                    CloseClipboard();
+                }
+            }
+        });
+        assert!(busy.recv_timeout(Duration::from_secs(5)).unwrap());
+        trigger();
+        release.send(()).unwrap();
+        owner.join().unwrap();
+        assert_eq!(
+            platform::read_unicode_clipboard().unwrap().as_deref(),
+            Some("synthetic sentinel")
+        );
+        trigger();
+        assert_eq!(
+            platform::read_unicode_clipboard().unwrap().as_deref(),
+            Some("synthetic-code")
+        );
+        // SAFETY: this query does not modify the foreground window.
+        assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+        assert!(!main.window().is_visible());
+        ui::close();
+        slint::quit_event_loop().unwrap();
+    })
+    .unwrap();
+    slint::run_event_loop_until_quit().unwrap();
+    server.join().unwrap();
+}
+
+fn registration(directory: &std::path::Path) -> std::path::PathBuf {
+    let path = directory.join("registration.json");
+    std::fs::write(&path, json!({
+        "version": 4,
+        "receiver_id": "receiver-1",
+        "protected_receiver_token": Enrollment::protect_token(TOKEN).unwrap(),
+        "active_pairings": {
+            "pairing-1": {
+                "sender_id": "sender-1", "protected_key": Enrollment::protect_token("abcdefghijklmnopqrstuvwxyz123456").unwrap(), "name": "我的设备",
+            },
+        },
+    }).to_string()).unwrap();
+    path
 }
 
 fn deliver_sms(

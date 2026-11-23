@@ -16,6 +16,7 @@ pub(crate) use sms::{popup_count, receive as receive_sms};
 pub use pairing::{open_pairing, visible_pairing};
 pub(crate) use settings::initialize as initialize_preferences;
 pub use settings::settings_visible;
+pub(crate) use settings::{finish_shortcut_capture, restore_shortcut};
 pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
@@ -77,6 +78,13 @@ pub fn close() {
 
 pub(crate) fn close_sms() {
     sms::close_all();
+}
+
+pub(crate) fn latest_otp() -> Option<zeroize::Zeroizing<String>> {
+    REGISTERED.with_borrow(|operation| match operation {
+        Some(operation) => operation.latest_otp(),
+        None => pairing::latest_otp(),
+    })
 }
 
 fn update_delivery_status() {

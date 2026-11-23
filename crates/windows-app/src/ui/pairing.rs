@@ -250,6 +250,10 @@ pub(super) fn delivery_status() -> Option<DeliveryStatus> {
     PAIRING.with_borrow(|view| view.as_ref().map(|view| view.operation.delivery_status()))
 }
 
+pub(super) fn latest_otp() -> Option<zeroize::Zeroizing<String>> {
+    PAIRING.with_borrow(|view| view.as_ref()?.operation.latest_otp())
+}
+
 pub(super) fn notify_progress() {
     let _ = slint::invoke_from_event_loop(|| {
         PAIRING.with_borrow_mut(|pairing| {

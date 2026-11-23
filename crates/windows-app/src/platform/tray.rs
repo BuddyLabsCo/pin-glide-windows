@@ -18,17 +18,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     KillTimer, MF_SEPARATOR, MF_STRING, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, PostMessageW,
     PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
     TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-    UnregisterClassW, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK, WM_NULL, WM_POWERBROADCAST,
-    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_POPUP,
-    WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+    UnregisterClassW, WM_APP, WM_DISPLAYCHANGE, WM_HOTKEY, WM_LBUTTONDBLCLK, WM_NULL,
+    WM_POWERBROADCAST, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW,
+    WS_POPUP, WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
 use super::{
     chinese,
     session::{SessionNotifications, session_changed},
+    shortcut::{self, ShortcutError},
     wide, win32_result,
 };
 use crate::service::{DeliveryStatus, power_changed};
+use crate::storage::settings::Shortcut;
 
 const TRAY_EVENT: u32 = WM_APP + 1;
 pub(super) const ACTIVATE: u32 = WM_APP + 2;
@@ -134,6 +136,7 @@ impl Tray {
 
 impl Drop for Tray {
     fn drop(&mut self) {
+        shortcut::close();
         TRAY_WINDOW.set(null_mut());
         DELIVERY_STATUS.set(DeliveryStatus::Unregistered);
         drop(SESSION.take());
@@ -147,6 +150,17 @@ impl Drop for Tray {
         }
         ACTIVATION_EVENT.set(None);
     }
+}
+
+pub(crate) fn replace_shortcut(
+    chord: Option<Shortcut>,
+    save: impl FnOnce() -> io::Result<()>,
+) -> Result<(), ShortcutError> {
+    shortcut::replace(TRAY_WINDOW.get(), chord, save)
+}
+
+pub(crate) fn capture_shortcut(window: HWND) -> Result<(), ShortcutError> {
+    shortcut::start_capture(window, TRAY_WINDOW.get())
 }
 
 fn load_icon() -> io::Result<HICON> {
@@ -289,6 +303,18 @@ unsafe extern "system" fn window_proc(
         }
         TRAY_EVENT => {
             tray_event(window, lparam as u32);
+            0
+        }
+        WM_HOTKEY => {
+            if shortcut::triggered(wparam, lparam)
+                && let Some(code) = crate::ui::latest_otp()
+            {
+                super::write_unicode_clipboard(window, &code);
+            }
+            0
+        }
+        shortcut::CAPTURE_FINISHED => {
+            crate::ui::finish_shortcut_capture(wparam != 0);
             0
         }
         WM_SETTINGCHANGE | WM_DISPLAYCHANGE => {

@@ -24,6 +24,10 @@ fn settings_keyboard_navigation_skips_the_page_focus_target() {
         (Key::Tab, "Back to Main"),
         (Key::Tab, "Interface language"),
         (Key::Tab, "Launch at login"),
+        (Key::Tab, "Copy code shortcut"),
+        (Key::Tab, "Change copy code shortcut"),
+        (Key::Backtab, "Copy code shortcut"),
+        (Key::Backtab, "Launch at login"),
         (Key::Backtab, "Interface language"),
         (Key::Backtab, "Back to Main"),
         (Key::Backtab, "Popup duration (seconds)"),
@@ -67,10 +71,10 @@ fn launch_at_login_keeps_the_working_registration_when_settings_cannot_be_saved(
         Language::System
     );
     drop(locked);
-    fs::write(&path, br#"{"version":3}"#).unwrap();
+    fs::write(&path, br#"{"version":4}"#).unwrap();
     assert!(preferences.save_startup(false).is_err());
     assert!(preferences.is_startup_enabled().unwrap());
-    assert_eq!(fs::read(&path).unwrap(), br#"{"version":3}"#);
+    assert_eq!(fs::read(&path).unwrap(), br#"{"version":4}"#);
     fs::write(&path, br#"{"version":1}"#).unwrap();
     preferences.save_startup(false).unwrap();
     assert!(!preferences.is_startup_enabled().unwrap());

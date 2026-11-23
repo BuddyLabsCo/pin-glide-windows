@@ -19,7 +19,7 @@ fn settings_read_defaults_and_migrate_supported_partial_files_on_save() {
     store.save(&settings).unwrap();
 
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 2);
+    assert_eq!(saved["version"], 3);
     let reopened = SettingsStore::new(path).read().unwrap().unwrap();
     assert_eq!(reopened, settings);
 }
@@ -46,7 +46,7 @@ fn invalid_or_future_settings_survive_every_save_attempt() {
     let store = SettingsStore::new(path.clone());
     for bytes in [
         b"broken JSON".as_slice(),
-        br#"{"version":3,"language":"english"}"#,
+        br#"{"version":4,"language":"english"}"#,
         br#"{"version":1,"language":"unknown"}"#,
         br#"{"version":1,"popup_duration_seconds":45}"#,
         br#"{"version":1,"popup_duration_seconds":null}"#,

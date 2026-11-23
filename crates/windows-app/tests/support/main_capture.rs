@@ -91,7 +91,7 @@ fn verify_main(expected: &str, evidence: Option<&Path>) -> mpsc::Receiver<bool> 
 }
 
 pub(super) fn accessible_name(handle: usize, expected: &str) -> windows::core::Result<bool> {
-    with_automation(|automation| Ok(named_element(automation, handle, expected, false)?.is_some()))
+    with_automation(|automation| Ok(named_element(automation, handle, expected, None)?.is_some()))
 }
 
 #[allow(dead_code)]
@@ -102,7 +102,7 @@ pub(super) fn live_region_is_polite(handle: usize, label: &str) -> bool {
     };
 
     with_automation(|automation| {
-        let error = named_element(automation, handle, label, false)?.expect("visible error");
+        let error = named_element(automation, handle, label, None)?.expect("visible error");
         let error: IUIAutomationElement2 = error.cast()?;
         // SAFETY: COM is initialized and the element belongs to the fixture.
         Ok(unsafe { error.CurrentLiveSetting()? == Polite })
@@ -112,10 +112,12 @@ pub(super) fn live_region_is_polite(handle: usize, label: &str) -> bool {
 
 #[allow(dead_code)]
 pub(super) fn toggle(window: usize, label: &str) {
-    use windows::Win32::UI::Accessibility::{IUIAutomationTogglePattern, UIA_TogglePatternId};
+    use windows::Win32::UI::Accessibility::{
+        IUIAutomationTogglePattern, UIA_ButtonControlTypeId, UIA_TogglePatternId,
+    };
     with_automation(|automation| {
-        let element =
-            named_element(automation, window, label, true)?.expect("visible startup switch");
+        let element = named_element(automation, window, label, Some(UIA_ButtonControlTypeId))?
+            .expect("visible startup switch");
         // SAFETY: the element is the fixture's live, accessible Switch.
         unsafe {
             element
@@ -129,11 +131,14 @@ pub(super) fn toggle(window: usize, label: &str) {
 #[allow(dead_code)]
 pub(super) fn edit_value(window: usize, label: &str, value: Option<&str>) -> String {
     use windows::{
-        Win32::UI::Accessibility::{IUIAutomationValuePattern, UIA_ValuePatternId},
+        Win32::UI::Accessibility::{
+            IUIAutomationValuePattern, UIA_EditControlTypeId, UIA_ValuePatternId,
+        },
         core::BSTR,
     };
     with_automation(|automation| {
-        let element = named_element(automation, window, label, false)?.expect("visible input");
+        let element = named_element(automation, window, label, Some(UIA_EditControlTypeId))?
+            .expect("visible input");
         // SAFETY: the live fixture element and its value pattern are used on the COM thread.
         unsafe {
             let input =
@@ -151,19 +156,16 @@ fn named_element(
     automation: &windows::Win32::UI::Accessibility::IUIAutomation,
     handle: usize,
     expected: &str,
-    button: bool,
+    role: Option<windows::Win32::UI::Accessibility::UIA_CONTROLTYPE_ID>,
 ) -> windows::core::Result<Option<windows::Win32::UI::Accessibility::IUIAutomationElement>> {
-    use windows::Win32::{
-        Foundation::HWND,
-        UI::Accessibility::{TreeScope_Descendants, UIA_ButtonControlTypeId},
-    };
+    use windows::Win32::{Foundation::HWND, UI::Accessibility::TreeScope_Descendants};
     // SAFETY: COM is initialized, and the handle identifies the fixture window.
     unsafe {
         let root = automation.ElementFromHandle(HWND(handle as *mut _))?;
         let children = root.FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
         for index in 0..children.Length()? {
             let element = children.GetElement(index)?;
-            if (!button || element.CurrentControlType()? == UIA_ButtonControlTypeId)
+            if (role.is_none() || Some(element.CurrentControlType()?) == role)
                 && !element.CurrentIsOffscreen()?.as_bool()
                 && element.CurrentName()? == expected
             {

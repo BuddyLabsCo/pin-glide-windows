@@ -48,6 +48,7 @@ pub(crate) fn run(
         eprintln!("Could not set per-monitor DPI awareness: {error}");
     }
     let tray = platform::Tray::new(instance.window_name())?;
+    ui::restore_shortcut();
     let _activation = match start_listener(&instance, tray.window()) {
         Ok(listener) => Some(listener),
         Err(error) => {
