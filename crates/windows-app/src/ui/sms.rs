@@ -240,6 +240,8 @@ impl Stack {
         let Some(mut popup) = self.visible.remove(&id) else {
             return false;
         };
+        #[cfg(test)]
+        tests::REMOVALS.with_borrow_mut(|times| times.insert(id, Instant::now()));
         popup.expiry.stop();
         if animate && start_exit(&mut popup, started).is_ok() {
             self.leaving.push(popup);

@@ -5,7 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::Number;
+use serde_json::{Number, value::RawValue};
 
 use super::{WRITER, stage_json, windows};
 
@@ -46,8 +46,7 @@ struct LegacySettings {
     launch_at_login: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(try_from = "Number")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct PopupDuration(Number);
 
 impl PopupDuration {
@@ -68,11 +67,10 @@ impl PopupDuration {
     }
 }
 
-impl TryFrom<Number> for PopupDuration {
-    type Error = &'static str;
-
-    fn try_from(number: Number) -> Result<Self, Self::Error> {
-        Self::parse(number.as_str())
+impl<'de> Deserialize<'de> for PopupDuration {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let token = Box::<RawValue>::deserialize(deserializer)?;
+        Self::parse(token.get()).map_err(serde::de::Error::custom)
     }
 }
 

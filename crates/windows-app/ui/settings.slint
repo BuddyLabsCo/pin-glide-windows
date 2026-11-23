@@ -47,7 +47,8 @@ component SettingCard inherits Rectangle {
                     }
 
                     if root.label-clickable: TouchArea {
-                        width: parent.width;
+                        x: 0px;
+                        width: min(parent.width, caption.preferred-width);
                         height: parent.height;
                         clicked => { root.label-clicked(); }
                     }

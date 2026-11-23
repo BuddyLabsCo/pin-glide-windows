@@ -81,8 +81,13 @@ fn popup_duration_saves_on_blur_and_preserves_the_saved_value_on_errors() {
             "a valid blur must clear the previous error",
         );
     }
-    edit(" 45 ");
+    edit("40");
     assert_eq!(fs::read(&path).unwrap(), previous);
+    click(settings, 220, 270);
+    assert_duration(&path, 40);
+
+    edit(" 45 ");
+    assert_eq!(read_settings(&path)["popup_duration_seconds"], 40);
     click(settings, 365, 150);
     assert_duration(&path, 45);
     assert_eq!(edit_value(handle, LABEL, None), "45");

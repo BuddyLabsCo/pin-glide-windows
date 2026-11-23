@@ -14,6 +14,8 @@ thread_local! {
     pub(super) static TIME: Cell<Option<Instant>> = const { Cell::new(None) };
     pub(super) static WORK_AREA: Cell<Option<WorkArea>> = const { Cell::new(None) };
     pub(super) static FAIL_DRAW: Cell<Option<HWND>> = const { Cell::new(None) };
+    pub(super) static REMOVALS: RefCell<BTreeMap<u64, Instant>> = RefCell::default();
+    pub(super) static EXPIRY_INTERVAL: Cell<Option<Duration>> = const { Cell::new(None) };
 }
 
 const SAMPLE_TIME: u64 = 65;

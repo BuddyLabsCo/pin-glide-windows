@@ -1,8 +1,8 @@
 use super::{
-    SAMPLE_TIME, STACK, Sample, WorkArea, advance, assert_exit, bounds, capture, close_all, pause,
-    show, until,
+    EXPIRY_INTERVAL, REMOVALS, SAMPLE_TIME, STACK, Sample, advance, assert_exit, bounds, capture,
+    close_all, handle, pause, show, until,
 };
-use crate::ui::settings;
+use crate::{SmsWindow, ui::settings};
 use slint::ComponentHandle;
 use std::{
     fs,
@@ -17,51 +17,123 @@ pub(super) async fn check(samples: &[Sample], animate: bool) {
     let settings = settings::test_window(&path);
     settings.invoke_apply_popup_duration("2".into());
     crate::set_animation_preference_override(Some(animate));
+    REMOVALS.with_borrow_mut(|times| times.clear());
 
-    let first_started = Instant::now();
-    let bottom = show(&samples[0]).await;
+    let bottom = TimedPopup::open(&samples[0]).await;
     settings.invoke_apply_popup_duration("5".into());
-    let later_started = Instant::now();
-    let middle = show(&samples[2]).await;
-    let top = show(&samples[1]).await;
+    let middle = TimedPopup::open(&samples[2]).await;
+    pause(300).await;
+    let top = TimedPopup::open(&samples[1]).await;
     advance(220);
-    let before = bounds(&bottom);
-    let area: WorkArea = STACK.with_borrow(|stack| stack.area.unwrap());
+    let before = bounds(&bottom.window);
+    let area = STACK.with_borrow(|stack| stack.area.unwrap());
 
-    pause_before(first_started, 2).await;
-    assert!(bottom.window().is_visible());
+    bottom.assert_expiry(2).await;
     if animate {
-        until(Duration::from_secs(2), || {
-            STACK.with_borrow(|stack| {
-                stack
-                    .leaving
-                    .iter()
-                    .any(|popup| std::ptr::eq(popup.window.window(), bottom.window()))
-            })
-        })
-        .await;
+        assert!(bottom.window.window().is_visible());
         advance(SAMPLE_TIME);
-        assert_exit(&bottom, before, area.margin());
+        assert_exit(&bottom.window, before, area.margin());
         capture("bottom-timeout", SAMPLE_TIME);
-        advance(155);
+        advance(114);
+        assert!(bottom.window.window().is_visible());
+        advance(1);
+        assert!(!bottom.window.window().is_visible());
+        advance(40);
     } else {
-        until(Duration::from_secs(2), || !bottom.window().is_visible()).await;
+        assert!(!bottom.window.window().is_visible());
         capture("bottom-timeout-reduced-motion", 0);
     }
-    assert!(first_started.elapsed() >= Duration::from_secs(2));
-    assert!(!bottom.window().is_visible());
-    assert!(top.window().is_visible());
-    assert_eq!(bounds(&middle).bottom, area.edges[3] - area.margin());
-
-    pause_before(later_started, 5).await;
-    assert!(middle.window().is_visible() && top.window().is_visible());
-    until(Duration::from_secs(2), || super::popup_count() == 0).await;
-    assert!(later_started.elapsed() >= Duration::from_secs(5));
+    assert!(top.active() && middle.active());
+    assert_eq!(bounds(&middle.window).bottom, area.edges[3] - area.margin());
+    middle.assert_expiry(5).await;
+    top.assert_expiry(5).await;
     close_all();
+
+    if !animate {
+        settings.invoke_apply_popup_duration("1".into());
+        check_rearm(&samples[0]).await;
+    }
     settings.invoke_apply_popup_duration(original.to_string().into());
 }
 
-async fn pause_before(started: Instant, seconds: u64) {
-    let time = Duration::from_secs(seconds) - Duration::from_millis(150);
-    pause(time.saturating_sub(started.elapsed()).as_millis() as u64).await;
+async fn check_rearm(sample: &Sample) {
+    let cap = Duration::from_millis(600);
+    EXPIRY_INTERVAL.set(Some(cap));
+    let popup = TimedPopup::open(sample).await;
+    assert_eq!(popup.interval(), Some(cap));
+    until(Duration::from_millis(850), || {
+        popup.interval().is_some_and(|interval| interval < cap)
+    })
+    .await;
+    assert!(popup.active());
+    popup.assert_expiry(1).await;
+    assert!(!popup.window.window().is_visible());
+    EXPIRY_INTERVAL.set(None);
+}
+
+struct TimedPopup {
+    window: SmsWindow,
+    id: u64,
+    before_open: Instant,
+    after_open: Instant,
+}
+
+impl TimedPopup {
+    async fn open(sample: &Sample) -> Self {
+        let before_open = Instant::now();
+        let window = show(sample).await;
+        let after_open = Instant::now();
+        let hwnd = handle(&window);
+        let id = STACK.with_borrow(|stack| {
+            *stack
+                .visible
+                .iter()
+                .find(|(_, popup)| popup.hwnd == hwnd)
+                .unwrap()
+                .0
+        });
+        Self {
+            window,
+            id,
+            before_open,
+            after_open,
+        }
+    }
+
+    fn active(&self) -> bool {
+        STACK.with_borrow(|stack| stack.visible.contains_key(&self.id))
+    }
+
+    fn interval(&self) -> Option<Duration> {
+        STACK.with_borrow(|stack| {
+            let timer = &stack.visible.get(&self.id)?.expiry;
+            timer.running().then(|| timer.interval())
+        })
+    }
+
+    async fn assert_expiry(&self, seconds: u64) {
+        let duration = Duration::from_secs(seconds);
+        let earliest = self.before_open + duration;
+        let latest = self.after_open + duration + Duration::from_millis(150);
+        let expired_at = || REMOVALS.with_borrow(|times| times.get(&self.id).copied());
+        until(
+            latest.saturating_duration_since(Instant::now()) + Duration::from_millis(10),
+            || expired_at().is_some() || Instant::now() >= latest,
+        )
+        .await;
+        let actual = expired_at().unwrap_or_else(|| {
+            panic!(
+                "popup {} did not expire by its {seconds}s deadline",
+                self.id
+            );
+        });
+        assert!(
+            (earliest..=latest).contains(&actual),
+            "popup {} expired after {:?}, outside its {:?}..={:?} deadline window",
+            self.id,
+            actual.duration_since(self.before_open),
+            duration,
+            latest.duration_since(self.before_open)
+        );
+    }
 }

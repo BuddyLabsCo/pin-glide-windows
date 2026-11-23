@@ -51,6 +51,10 @@ fn invalid_or_future_settings_survive_every_save_attempt() {
         br#"{"version":1,"popup_duration_seconds":45}"#,
         br#"{"version":1,"popup_duration_seconds":null}"#,
         br#"{"version":2,"popup_duration_seconds":0}"#,
+        br#"{"version":2,"popup_duration_seconds":{"$serde_json::private::Number":"45"}}"#,
+        br#"{"version":2,"popup_duration_seconds":"45"}"#,
+        br#"{"version":2,"popup_duration_seconds":45.0}"#,
+        br#"{"version":2,"popup_duration_seconds":45e0}"#,
     ] {
         fs::write(&path, bytes).unwrap();
         assert_eq!(store.read().unwrap_err().kind(), io::ErrorKind::InvalidData);
