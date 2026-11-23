@@ -1,0 +1,22 @@
+export component SingleLineViewport inherits Rectangle {
+    clip: true;
+    @children
+}
+
+export component SingleLineInput inherits TextInput {
+    in property <length> viewport-width;
+    private property <length> offset;
+    x: max(self.viewport-width - self.width, min(0px, self.offset));
+    width: max(self.viewport-width, self.preferred-width + self.text-cursor-width);
+    height: 100%;
+    single-line: true;
+    vertical-alignment: center;
+
+    cursor-position-changed(position) => {
+        if position.x + self.x < 0px {
+            self.offset = -position.x;
+        } else if position.x + self.x + self.text-cursor-width > self.viewport-width {
+            self.offset = self.viewport-width - position.x - self.text-cursor-width;
+        }
+    }
+}

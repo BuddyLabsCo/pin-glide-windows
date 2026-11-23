@@ -1,7 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
     io,
-    num::NonZeroU32,
 };
 
 use i_slint_core::{MotionPreference, window::WindowInner};
@@ -10,7 +9,7 @@ use slint::{CloseRequestResponse, ComponentHandle, PlatformError, SharedString};
 use crate::{
     MainWindow, PopupDurationError, SettingsWindow,
     platform::{self, launch_at_login::LaunchAtLogin},
-    storage::settings::{Language, Settings, SettingsStore, default_popup_duration_seconds},
+    storage::settings::{Language, PopupDuration, Settings, SettingsStore},
 };
 
 #[cfg(test)]
@@ -60,18 +59,18 @@ impl Preferences {
     }
 
     fn save_language(&mut self, language: Language) -> io::Result<()> {
-        let mut next = self.settings;
+        let mut next = self.settings.clone();
         next.language = language;
-        self.store.save(next)?;
+        self.store.save(&next)?;
         self.settings = next;
         Ok(())
     }
 
-    fn save_popup_duration(&mut self, seconds: NonZeroU32) -> io::Result<()> {
+    fn save_popup_duration(&mut self, seconds: PopupDuration) -> io::Result<()> {
         if self.settings.popup_duration_seconds != seconds {
-            let mut next = self.settings;
+            let mut next = self.settings.clone();
             next.popup_duration_seconds = seconds;
-            self.store.save(next)?;
+            self.store.save(&next)?;
             self.settings = next;
         }
         Ok(())
@@ -79,9 +78,9 @@ impl Preferences {
 
     fn save_startup(&mut self, enabled: bool) -> Result<(), StartupError> {
         let change_error = |error| StartupError::Change(enabled, error);
-        let mut next = self.settings;
+        let mut next = self.settings.clone();
         next.launch_at_login = enabled;
-        let staged = self.store.stage(next).map_err(change_error)?;
+        let staged = self.store.stage(&next).map_err(change_error)?;
         let startup = self.startup().map_err(change_error)?;
         let entry = startup.read().map_err(change_error)?;
         let desired = startup.command_for(enabled).map_err(change_error)?;
@@ -137,27 +136,48 @@ fn install(preferences: Preferences) {
     PREFERENCES.replace(Some(preferences));
 }
 
-pub(super) fn popup_duration_seconds() -> NonZeroU32 {
+fn popup_duration() -> PopupDuration {
     PREFERENCES.with_borrow(|preferences| {
         preferences
             .as_ref()
-            .map_or_else(default_popup_duration_seconds, |state| {
-                state.settings.popup_duration_seconds
+            .map_or_else(PopupDuration::default, |state| {
+                state.settings.popup_duration_seconds.clone()
             })
     })
 }
 
+pub(super) fn popup_duration_seconds() -> Option<u64> {
+    popup_duration().seconds()
+}
+
 #[cfg(test)]
-pub(super) fn save_test_popup_duration(path: &std::path::Path, seconds: NonZeroU32) {
-    let store = SettingsStore::new(path.to_owned());
-    let settings = store.read().unwrap().unwrap_or_default();
-    let mut preferences = Preferences {
-        store,
-        settings,
-        startup: Err(io::ErrorKind::NotFound.into()),
-    };
-    preferences.save_popup_duration(seconds).unwrap();
-    PREFERENCES.replace(Some(preferences));
+pub(super) fn test_window(path: &std::path::Path) -> SettingsWindow {
+    install(Preferences::load(
+        SettingsStore::new(path.to_owned()),
+        Err(io::ErrorKind::NotFound.into()),
+    ));
+    new_window().unwrap()
+}
+
+fn new_window() -> Result<SettingsWindow, PlatformError> {
+    let window = SettingsWindow::new()?;
+    window.set_popup_duration(popup_duration().to_string().into());
+    let weak = window.as_weak();
+    window.window().on_close_requested(move || {
+        if let Some(window) = weak.upgrade() {
+            window.invoke_focus_page();
+        }
+        CloseRequestResponse::HideWindow
+    });
+    window.on_choose_language(choose_language);
+    window.on_toggle_startup(toggle_startup);
+    let weak = window.as_weak();
+    window.on_apply_popup_duration(move |draft| {
+        if let Some(window) = weak.upgrade() {
+            apply_popup_duration(&window, draft);
+        }
+    });
+    Ok(window)
 }
 
 pub(super) fn show(
@@ -168,23 +188,7 @@ pub(super) fn show(
         if let Some(window) = current {
             return Ok(window.clone_strong());
         }
-        let window = SettingsWindow::new()?;
-        window.set_popup_duration(popup_duration_seconds().to_string().into());
-        let weak = window.as_weak();
-        window.window().on_close_requested(move || {
-            if let Some(window) = weak.upgrade() {
-                window.invoke_focus_page();
-            }
-            CloseRequestResponse::HideWindow
-        });
-        window.on_choose_language(choose_language);
-        window.on_toggle_startup(toggle_startup);
-        let weak = window.as_weak();
-        window.on_apply_popup_duration(move |draft| {
-            if let Some(window) = weak.upgrade() {
-                apply_popup_duration(&window, draft);
-            }
-        });
+        let window = new_window()?;
         *current = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
@@ -251,11 +255,7 @@ fn apply_motion(window: &SettingsWindow) {
 
 fn apply_popup_duration(window: &SettingsWindow, draft: SharedString) {
     let text = draft.trim();
-    let Some(seconds) = text
-        .parse::<NonZeroU32>()
-        .ok()
-        .filter(|_| !text.starts_with('+'))
-    else {
+    let Ok(seconds) = PopupDuration::parse(text) else {
         window.set_popup_duration_error(PopupDurationError::Invalid);
         return;
     };
@@ -268,7 +268,7 @@ fn apply_popup_duration(window: &SettingsWindow, draft: SharedString) {
         window.set_popup_duration(text.into());
         window.set_popup_duration_error(PopupDurationError::None);
     } else {
-        window.set_popup_duration(popup_duration_seconds().to_string().into());
+        window.set_popup_duration(popup_duration().to_string().into());
         window.set_popup_duration_error(PopupDurationError::Save);
     }
 }

@@ -91,7 +91,7 @@ fn launch_at_login_respects_the_windows_override_and_recovers_after_it_is_cleare
     let startup = RegistryCleanup(LaunchAtLogin::for_test(name));
     startup.0.set(true).unwrap();
     let store = SettingsStore::new(path.clone());
-    store.save(Default::default()).unwrap();
+    store.save(&Default::default()).unwrap();
     let committed = fs::read(&path).unwrap();
     let mut preferences = Preferences::load(store, Ok(LaunchAtLogin::for_test(name)));
     startup.0.set_test_approval(false);

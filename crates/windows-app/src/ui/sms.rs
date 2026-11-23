@@ -16,6 +16,7 @@ use receiver_core::delivery::Sms;
 
 use crate::{SmsWindow, platform, service::ReceivedSms};
 
+mod expiry;
 #[cfg(test)]
 mod tests;
 
@@ -394,8 +395,9 @@ async fn show_sms_for_session(
         CloseRequestResponse::KeepWindowShown
     });
     let timer = Timer::default();
-    let duration = Duration::from_secs(super::settings::popup_duration_seconds().get().into());
-    timer.start(TimerMode::SingleShot, duration, move || dismiss(id));
+    if let Some(seconds) = super::settings::popup_duration_seconds() {
+        expiry::start(&timer, id, Instant::now(), Duration::from_secs(seconds));
+    }
     let animate = platform::animations_enabled();
     let visible = STACK.with_borrow_mut(|stack| {
         if let Some((_, previous)) = stack.visible.last_key_value()

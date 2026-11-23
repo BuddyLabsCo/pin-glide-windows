@@ -95,6 +95,22 @@ pub(super) fn accessible_name(handle: usize, expected: &str) -> windows::core::R
 }
 
 #[allow(dead_code)]
+pub(super) fn live_region_is_polite(handle: usize, label: &str) -> bool {
+    use windows::{
+        Win32::UI::Accessibility::{IUIAutomationElement2, Polite},
+        core::Interface,
+    };
+
+    with_automation(|automation| {
+        let error = named_element(automation, handle, label, false)?.expect("visible error");
+        let error: IUIAutomationElement2 = error.cast()?;
+        // SAFETY: COM is initialized and the element belongs to the fixture.
+        Ok(unsafe { error.CurrentLiveSetting()? == Polite })
+    })
+    .unwrap()
+}
+
+#[allow(dead_code)]
 pub(super) fn toggle(window: usize, label: &str) {
     use windows::Win32::UI::Accessibility::{IUIAutomationTogglePattern, UIA_TogglePatternId};
     with_automation(|automation| {

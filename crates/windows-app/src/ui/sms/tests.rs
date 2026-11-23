@@ -8,6 +8,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::*;
 
+mod timeout;
+
 thread_local! {
     pub(super) static TIME: Cell<Option<Instant>> = const { Cell::new(None) };
     pub(super) static WORK_AREA: Cell<Option<WorkArea>> = const { Cell::new(None) };
@@ -66,7 +68,9 @@ fn sms_stack_matches_the_reference_timeline() {
         platform::set_animation_preference_override(Some(true));
         check_arrival(&samples, area).await;
         check_middle(&samples).await;
-        check_timeout(&samples).await;
+        timeout::check(&samples, true).await;
+        timeout::check(&samples, false).await;
+        platform::set_animation_preference_override(Some(true));
         let short_area = fixture_area(800.0, area.scale);
         let tall_area = fixture_area(900.0, area.scale);
         check_overflow(&samples[2], "height-overflow", short_area, 4).await;
@@ -143,37 +147,6 @@ async fn check_middle(samples: &[Sample]) {
     capture("reduced-motion", 0);
     close_all();
     platform::set_animation_preference_override(Some(true));
-}
-
-async fn check_timeout(samples: &[Sample]) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("settings.json");
-    crate::ui::settings::save_test_popup_duration(&path, 2.try_into().unwrap());
-    let bottom = show(&samples[0]).await;
-    crate::ui::settings::save_test_popup_duration(&path, 5.try_into().unwrap());
-    let middle = show(&samples[2]).await;
-    let top = show(&samples[1]).await;
-    advance(220);
-    let before = bounds(&bottom);
-    let area = STACK.with_borrow(|stack| stack.area.unwrap());
-    until(Duration::from_secs(3), || {
-        STACK.with_borrow(|stack| {
-            stack
-                .leaving
-                .iter()
-                .any(|popup| std::ptr::eq(popup.window.window(), bottom.window()))
-        })
-    })
-    .await;
-    advance(SAMPLE_TIME);
-    assert_exit(&bottom, before, area.margin());
-    capture("bottom-timeout", SAMPLE_TIME);
-    advance(155);
-    assert!(!bottom.window().is_visible());
-    assert!(top.window().is_visible());
-    assert_eq!(bounds(&middle).bottom, area.edges[3] - area.margin());
-    until(Duration::from_secs(5), || popup_count() == 0).await;
-    close_all();
 }
 
 async fn check_overflow(sample: &Sample, name: &str, area: WorkArea, incoming: usize) {
