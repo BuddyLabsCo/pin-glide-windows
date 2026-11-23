@@ -231,6 +231,7 @@ export component SenderRow inherits Rectangle {
         height: root.editor-height;
         visible: root.expanded;
         enabled: root.expanded;
+        focus-on-tab-navigation: false;
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.toggle-row(false);

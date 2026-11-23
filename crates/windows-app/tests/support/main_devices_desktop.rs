@@ -13,7 +13,7 @@ use i_slint_core::{
 use serde_json::{Value, json};
 use slint::{
     ComponentHandle, LogicalPosition, Model, Window,
-    platform::{Key, PointerEventButton, WindowEvent},
+    platform::{Key, WindowEvent},
 };
 use tokio_tungstenite::tungstenite::Message;
 use windows_app::{MainWindow, NamePaste, service::DeliveryStatus, ui};
@@ -29,6 +29,7 @@ use super::{
     capture, click,
     fixture::*,
     main_capture::{accessible_name, capture_client},
+    name_clipboard::with_modifier,
     select_backend,
 };
 
@@ -55,6 +56,7 @@ fn edits_sender_rows_and_deletes_only_the_unreadable_pairing() {
             ("two-phones", 2, false),
             ("many-devices", 7, false),
             ("one-key", 2, true),
+            ("one-key-pointer", 2, true),
         ] {
             exercise(state, count, broken).await;
             ui::close();
@@ -117,7 +119,13 @@ async fn exercise(state: &str, count: usize, broken: bool) {
     }
 
     if broken {
-        delete_with_keyboard(window);
+        let pointer = state == "one-key-pointer";
+        if pointer {
+            open_row(window, 0);
+            click(window, 332.0, 336.0);
+        } else {
+            delete_with_keyboard(window);
+        }
         advance.send(()).unwrap();
         assert_eq!(main.get_sender_devices().row_count(), 1);
         assert_eq!(
@@ -135,9 +143,15 @@ async fn exercise(state: &str, count: usize, broken: bool) {
             stored["protected_receiver_token"]
         );
         tick().await;
-        evidence(window, "main-one-key-after-delete");
+        assert_focused_header(window, "编辑名称 备用设备", "false");
+        assert_eq!(
+            window_pixel(window, 26.0, 292.0).r < 100,
+            !pointer,
+            "only keyboard deletion should show a focus outline on the surviving row",
+        );
+        evidence(window, &format!("main-{state}-after-delete"));
         send_key(window, Key::Return);
-        assert_editor(window, Some((NAMES[1], "")));
+        assert_editor(window, NAMES[1], "");
         wait_for_pong(&ready).await;
         assert_eq!(ui::delivery_status(), DeliveryStatus::Ready);
     }
@@ -155,10 +169,10 @@ fn check_rows(main: &MainWindow, state: &str, count: usize, first_healthy: usize
     }
     for (index, name) in NAMES.iter().enumerate().take(count).skip(first_healthy) {
         open_row(window, index);
-        assert_editor(window, Some((name, "")));
+        assert_editor(window, name, "");
         evidence(window, &format!("main-{state}-edit-row-{}", index + 1));
         send_key(window, Key::Escape);
-        assert_editor(window, None);
+        assert_focused_header(window, &format!("编辑名称 {name}"), "false");
         scroll(window, 500.0);
     }
 
@@ -182,7 +196,7 @@ fn check_rows(main: &MainWindow, state: &str, count: usize, first_healthy: usize
                 invalid_text: true,
                 ..Default::default()
             });
-            control(window, "v");
+            with_modifier(window, Key::Control, || send_key(window, "v"));
         }
         click(window, 330.0, 388.0 + offset);
         evidence(window, &format!("main-{state}-edit-error-{scenario}"));
@@ -190,7 +204,7 @@ fn check_rows(main: &MainWindow, state: &str, count: usize, first_healthy: usize
         assert_eq!(row.name, NAMES[first_healthy]);
         assert!(shows_error(window, offset), "{state}: {scenario}");
         if scenario == "invalid-character" {
-            assert_editor(window, Some((&draft, "名称包含无效字符，请重新输入。")));
+            assert_editor(window, &draft, "名称包含无效字符，请重新输入。");
         }
         send_key(window, "可");
         assert!(!shows_error(window, offset), "editing clears the error");
@@ -292,54 +306,58 @@ unsafe extern "system" fn find_sms(window: HWND, output: LPARAM) -> i32 {
     1
 }
 
-fn assert_editor(window: &Window, expected: Option<(&str, &str)>) {
+fn assert_editor(window: &Window, name: &str, error: &str) {
     let focus = WindowInner::from_pub(window)
         .focus_item
         .borrow()
         .upgrade()
         .expect("the row or its editor should hold focus");
-    if let Some((name, error)) = expected {
-        assert!(
-            focus.downcast::<TextInput>().is_some(),
-            "expected focus on the draft {name:?}"
-        );
-        let value = focus.accessible_string_property(AccessibleStringProperty::Value);
-        let description = focus.accessible_string_property(AccessibleStringProperty::Description);
-        assert_eq!(value.as_deref(), Some(name));
-        assert_eq!(description.as_deref(), Some(error));
-    } else {
-        let header = focus
-            .parent_item(ParentItemTraversalMode::FindAllParents)
-            .unwrap();
-        let expanded = header.accessible_string_property(AccessibleStringProperty::Expanded);
-        assert_eq!(
-            expanded.as_deref(),
-            Some("false"),
-            "Escape should collapse the row"
-        );
-    }
+    assert!(
+        focus.downcast::<TextInput>().is_some(),
+        "expected focus on the draft {name:?}"
+    );
+    let value = focus.accessible_string_property(AccessibleStringProperty::Value);
+    let description = focus.accessible_string_property(AccessibleStringProperty::Description);
+    assert_eq!(value.as_deref(), Some(name));
+    assert_eq!(description.as_deref(), Some(error));
+}
+
+fn assert_focused_header(window: &Window, label: &str, expanded: &str) {
+    let header = WindowInner::from_pub(window)
+        .focus_item
+        .borrow()
+        .upgrade()
+        .and_then(|focus| focus.parent_item(ParentItemTraversalMode::FindAllParents))
+        .expect("the Sender header should hold focus");
+    assert_eq!(
+        header
+            .accessible_string_property(AccessibleStringProperty::Label)
+            .as_deref(),
+        Some(label),
+        "focus should be on the expected Sender row",
+    );
+    assert_eq!(
+        header
+            .accessible_string_property(AccessibleStringProperty::Expanded)
+            .as_deref(),
+        Some(expanded),
+        "unexpected expansion state for {label}",
+    );
 }
 
 fn delete_with_keyboard(window: &Window) {
+    open_row(window, 0);
+    assert_focused_header(window, "收起 我的设备", "true");
     window.dispatch_event(WindowEvent::PointerMoved {
         position: LogicalPosition::new(200.0, 292.0),
     });
-    let pixel = |window: &Window| {
-        let image = window.take_snapshot().unwrap();
-        let width = image.width() as usize;
-        let scale = width as f32 / 400.0;
-        image.as_slice()[(311.0 * scale) as usize * width + (200.0 * scale) as usize]
-    };
-    let hovered = pixel(window);
-    let position = LogicalPosition::new(200.0, 292.0);
-    let button = PointerEventButton::Left;
-    window.dispatch_event(WindowEvent::PointerPressed { position, button });
-    window.dispatch_event(WindowEvent::PointerReleased { position, button });
+    let hovered = window_pixel(window, 200.0, 311.0);
     window.dispatch_event(WindowEvent::PointerMoved {
         position: LogicalPosition::new(332.0, 336.0),
     });
+    assert_focused_header(window, "收起 我的设备", "true");
     assert!(
-        pixel(window).r > hovered.r,
+        window_pixel(window, 200.0, 311.0).r > hovered.r,
         "expanded header retains its hover tint"
     );
     window.dispatch_event(WindowEvent::PointerExited);
@@ -359,7 +377,17 @@ fn delete_with_keyboard(window: &Window) {
         Some("删除"),
         "Tab should move to Delete"
     );
+    with_modifier(window, Key::Shift, || send_key(window, Key::Tab));
+    assert_focused_header(window, "收起 我的设备", "true");
+    send_key(window, Key::Tab);
     send_key(window, Key::Return);
+}
+
+fn window_pixel(window: &Window, x: f32, y: f32) -> slint::Rgba8Pixel {
+    let image = window.take_snapshot().unwrap();
+    let width = image.width() as usize;
+    let scale = width as f32 / 400.0;
+    image.as_slice()[(y * scale) as usize * width + (x * scale) as usize]
 }
 
 fn open_row(window: &Window, index: usize) {
@@ -375,22 +403,12 @@ fn open_row(window: &Window, index: usize) {
 }
 
 fn replace_draft(window: &Window, draft: &str) {
-    control(window, "a");
+    with_modifier(window, Key::Control, || send_key(window, "a"));
     if draft.is_empty() {
         send_key(window, Key::Backspace);
     } else {
         send_key(window, draft);
     }
-}
-
-fn control(window: &Window, text: &str) {
-    window.dispatch_event(WindowEvent::KeyPressed {
-        text: Key::Control.into(),
-    });
-    send_key(window, text);
-    window.dispatch_event(WindowEvent::KeyReleased {
-        text: Key::Control.into(),
-    });
 }
 
 fn send_key(window: &Window, text: impl Into<slint::SharedString>) {
