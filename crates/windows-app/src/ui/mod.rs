@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 
 use slint::winit_030::WinitWindowAccessor;
-use slint::{CloseRequestResponse, ComponentHandle, PlatformError, VecModel, Window};
+use slint::{CloseRequestResponse, ComponentHandle, Model, PlatformError, VecModel, Window};
 
 use crate::service::{DeliveryStatus, PairingOperation, PairingStart, Service};
-use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
+use crate::storage::{RegistrationStore, SenderDevice, SenderNameError};
+use crate::{MainWindow, SenderRowData, WelcomeWindow, platform};
 
 mod pairing;
 mod sms;
@@ -158,10 +159,10 @@ fn show_registered_with(
     chinese: bool,
     connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
 ) -> Result<Option<MainWindow>, PlatformError> {
-    let Ok(names) = store.sender_names() else {
+    let Ok(devices) = store.sender_devices() else {
         return Ok(None);
     };
-    if names.is_empty() && !store.has_registration() {
+    if devices.is_empty() && !store.has_registration() {
         return Ok(None);
     }
     let window = MAIN.with_borrow_mut(|main| {
@@ -191,7 +192,8 @@ fn show_registered_with(
         *main = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
-    set_sender_names(&window, names.into_values());
+    set_sender_devices(&window, devices);
+    register_sender_actions(&window, store.clone());
     window.show()?;
     platform::configure_main_chrome(window.window());
     focus(window.window());
@@ -202,16 +204,77 @@ fn refresh_visible_main(store: &RegistrationStore) {
     MAIN.with_borrow(|main| {
         if let Some(window) = main
             && window.window().is_visible()
-            && let Ok(names) = store.sender_names()
+            && let Ok(devices) = store.sender_devices()
         {
-            set_sender_names(window, names.into_values());
+            set_sender_devices(window, devices);
         }
     });
 }
 
-fn set_sender_names(window: &MainWindow, names: impl Iterator<Item = String>) {
-    let names = names.map(Into::into).collect::<Vec<_>>();
-    window.set_sender_names(VecModel::from_slice(&names));
+fn set_sender_devices(window: &MainWindow, devices: Vec<SenderDevice>) {
+    let rows = devices
+        .into_iter()
+        .map(|device| SenderRowData {
+            pairing_id: device.pairing_id.into(),
+            name: device.name.into(),
+            needs_repair: device.needs_repair,
+        })
+        .collect::<Vec<_>>();
+    if !window.get_sender_devices().iter().eq(rows.iter().cloned()) {
+        window.invoke_close_editor();
+        window.set_sender_devices(VecModel::from_slice(&rows));
+    }
+}
+
+fn register_sender_actions(window: &MainWindow, store: RegistrationStore) {
+    let chinese = window.get_chinese();
+    window.on_read_name_paste(move || pairing::read_name_paste(chinese));
+    let weak = window.as_weak();
+    window.on_insert_name_paste(move |text| {
+        if let Some(window) = weak.upgrade() {
+            pairing::insert_name_paste(window.window(), text);
+        }
+    });
+
+    let rename_store = store.clone();
+    let weak = window.as_weak();
+    window.on_rename_sender(move |index, draft, invalid| {
+        let result = (|| {
+            if invalid {
+                return Err(SenderNameError::InvalidCharacter);
+            }
+            let window = weak.upgrade().ok_or(SenderNameError::Storage)?;
+            let rows = window.get_sender_devices();
+            let index = index as usize;
+            let mut row = rows.row_data(index).ok_or(SenderNameError::Storage)?;
+            let name = rename_store
+                .name_sender(&row.pairing_id, &draft.encode_utf16().collect::<Vec<_>>())?;
+            row.name = name.into();
+            rows.set_row_data(index, row);
+            Ok(())
+        })();
+        result.err().map_or_else(Default::default, |error| {
+            pairing::name_error(chinese, error).into()
+        })
+    });
+
+    let weak = window.as_weak();
+    window.on_delete_sender(move |index| {
+        if let Some(window) = weak.upgrade()
+            && let Some(row) = window.get_sender_devices().row_data(index as usize)
+            && store.delete_unreadable_pairing(&row.pairing_id).is_ok()
+        {
+            window.invoke_close_editor();
+            refresh_visible_main(&store);
+            update_delivery_status();
+            return "".into();
+        }
+        if chinese {
+            "无法删除设备，请重试。".into()
+        } else {
+            "Could not delete the device. Try again.".into()
+        }
+    });
 }
 
 fn show_welcome() -> Result<(), PlatformError> {

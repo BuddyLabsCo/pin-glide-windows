@@ -1,10 +1,33 @@
 import { Button, Palette, ScrollView } from "std-widgets.slint";
+import { NamePaste } from "pairing.slint";
+import { SenderRow, SenderRowData } from "sender_row.slint";
 import { SenderScrollbar } from "sender_scrollbar.slint";
 
 export component MainWindow inherits Window {
     in property <bool> chinese;
-    in property <[string]> sender-names;
+    in property <[SenderRowData]> sender-devices;
+    private property <int> editor: -1;
+    private property <string> editor-error;
+    private property <length> editor-height: root.editor < 0 ? 0px
+        : (root.sender-devices[root.editor].needs-repair ? 44px : 100px)
+        + (root.editor-error == "" ? 0px : 24px);
     callback open-pairing();
+    callback rename-sender(int, string, bool) -> string;
+    callback delete-sender(int) -> string;
+    callback read-name-paste() -> NamePaste;
+    callback insert-name-paste(string);
+
+    public function close-editor() {
+        root.editor = -1;
+        root.editor-error = "";
+    }
+
+    function reveal(top: length, bottom: length) {
+        let offset = -sender-scroll.content-y;
+        let target = max(bottom - sender-scroll.visible-height, min(top, offset));
+        sender-scroll.content-y = -clamp(target, 0px, max(0px, list.height - sender-scroll.visible-height));
+    }
+
     title: root.chinese ? "鹊信" : "Pin Glide";
     icon: @image-url("assets/app-icon.png");
     min-width: 400px;
@@ -221,12 +244,13 @@ export component MainWindow inherits Window {
                     list := Rectangle {
                         y: 0px;
                         width: parent.width;
-                        height: root.sender-names.length == 0 ? 48px : root.sender-names.length * 49px - 1px;
+                        height: root.sender-devices.length == 0 ? 48px
+                            : root.sender-devices.length * 49px - 1px + root.editor-height;
                         border-width: 1px;
                         border-color: #deebe5;
                         border-radius: 10px;
                         background: white;
-                        if root.sender-names.length == 0: Text {
+                        if root.sender-devices.length == 0: Text {
                             x: 16px;
                             width: parent.width - 32px;
                             text: root.chinese ? "还没有已配对的设备。" : "No devices paired yet.";
@@ -235,62 +259,34 @@ export component MainWindow inherits Window {
                             vertical-alignment: center;
                         }
 
-                        for sender[index] in root.sender-names: Rectangle {
-                            y: index * 49px;
-                            height: 48px;
-                            HorizontalLayout {
-                                padding-left: 16px;
-                                padding-right: 12px;
-                                spacing: 12px;
-                                Rectangle {
-                                    width: 20px;
-                                    Rectangle {
-                                        width: 16px;
-                                        height: 20px;
-                                        border-radius: 4px;
-                                        border-width: 1.5px;
-                                        border-color: #4c8074;
-                                        Rectangle {
-                                            y: 14px;
-                                            width: 5px;
-                                            height: 1.5px;
-                                            border-radius: 1px;
-                                            background: #4c8074;
-                                        }
-                                    }
-                                }
-
-                                Text {
-                                    text: sender;
-                                    accessible-role: text;
-                                    accessible-label: sender;
-                                    color: #25322e;
-                                    horizontal-stretch: 1;
-                                    overflow: elide;
-                                    vertical-alignment: center;
-                                }
-
-                                Rectangle {
-                                    width: 32px;
-                                    Path {
-                                        width: 12px;
-                                        height: 8px;
-                                        viewbox-width: 12;
-                                        viewbox-height: 8;
-                                        commands: "M 1 2 L 6 6 L 11 2";
-                                        stroke: #4c8074;
-                                        stroke-width: 1.5px;
-                                    }
+                        for sender[index] in root.sender-devices: SenderRow {
+                            y: index * 49px + (root.editor >= 0 && index > root.editor ? root.editor-height : 0px);
+                            height: 48px + self.editor-height + (self.separator ? 1px : 0px);
+                            device: sender;
+                            chinese: root.chinese;
+                            expanded: index == root.editor;
+                            separator: index + 1 < root.sender-devices.length;
+                            editor-height: self.expanded ? root.editor-height : 0px;
+                            error <=> root.editor-error;
+                            toggle => {
+                                if self.expanded {
+                                    root.close-editor();
+                                } else {
+                                    root.editor = index;
+                                    root.editor-error = "";
+                                    self.reveal-editor();
                                 }
                             }
-
-                            if index + 1 < root.sender-names.length: Rectangle {
-                                x: 1px;
-                                y: 48px;
-                                width: parent.width - 2px;
-                                height: 1px;
-                                background: #dfe5e3;
+                            submit(draft, invalid) => {
+                                if sender.needs-repair {
+                                    return root.delete-sender(index);
+                                }
+                                return root.rename-sender(index, draft, invalid);
                             }
+                            read-paste => { root.read-name-paste() }
+                            insert-paste(text) => { root.insert-name-paste(text); }
+                            reveal-editor => { root.reveal(self.y + 48px, self.y + 48px + self.editor-height); }
+                            reveal-row => { root.reveal(self.y, self.y + 48px); }
                         }
                     }
                 }

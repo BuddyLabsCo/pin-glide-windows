@@ -12,17 +12,16 @@ use i_slint_core::animations::{current_tick, update_animations};
 use serde_json::{Value, json};
 use slint::{
     ComponentHandle, LogicalPosition, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer,
-    VecModel, Window,
-    platform::{PointerEventButton, WindowEvent},
+    VecModel, Window, platform::WindowEvent,
 };
 use windows_app::{
     PairingStage, PairingWindow, service::DeliveryStatus, set_animation_preference_override, ui,
 };
 
-use super::{assert_redeem, capture, fixture::*, select_backend};
+use super::{assert_redeem, capture, click, fixture::*, select_backend};
 
 #[path = "dpapi.rs"]
-mod dpapi;
+pub(super) mod dpapi;
 
 const CHILD: &str = "PIN_GLIDE_ADD_DESKTOP_CHILD";
 
@@ -177,11 +176,15 @@ async fn finish_add_sender(
         window.set_sender_name("备用设备".into());
         window.invoke_finish_naming();
         assert!(main.window().is_visible());
-        assert_eq!(
-            main.get_sender_names().iter().collect::<Vec<_>>(),
-            ["我的设备", "备用设备"]
-        );
+        assert_eq!(sender_names(main), ["我的设备", "备用设备"]);
     }
+}
+
+fn sender_names(main: &windows_app::MainWindow) -> Vec<slint::SharedString> {
+    main.get_sender_devices()
+        .iter()
+        .map(|row| row.name)
+        .collect()
 }
 
 async fn verify_refresh(
@@ -207,7 +210,7 @@ async fn verify_refresh(
 async fn verify_hidden_name(window: &PairingWindow, main: &windows_app::MainWindow) {
     stage(window, PairingStage::Completed).await;
     assert!(ui::visible_pairing().is_none());
-    let names = || main.get_sender_names().iter().collect::<Vec<_>>();
+    let names = || sender_names(main);
     assert_eq!(names(), ["未命名设备", "未命名设备-2"]);
     main.hide().unwrap();
     ui::open();
@@ -322,7 +325,8 @@ fn scroll() {
     let track = window.take_snapshot().unwrap();
     evidence(window, "main-many-devices-list-scrolled");
     click(window, 395.0, 292.0);
-    main.set_sender_names(ModelRc::new(VecModel::from(vec![names[6].0.into()])));
+    let last = main.get_sender_devices().row_data(6).unwrap();
+    main.set_sender_devices(ModelRc::new(VecModel::from(vec![last])));
     let reference = window.take_snapshot().unwrap();
     let seventh_name = region(&reference, 70, 281, 70, 20);
     assert!(seventh_name.iter().any(|pixel| pixel.r < 100));
@@ -343,7 +347,7 @@ fn scroll() {
     }
 }
 
-fn registration(token: Option<Vec<u8>>, senders: &[(&str, &str)]) -> Value {
+pub(super) fn registration(token: Option<Vec<u8>>, senders: &[(&str, &str)]) -> Value {
     let active: serde_json::Map<_, _> = senders
         .iter()
         .enumerate()
@@ -454,15 +458,6 @@ fn qr_pixels(window: &PairingWindow) -> Vec<u8> {
         .iter()
         .map(|pixel| pixel.r)
         .collect()
-}
-
-fn click(window: &Window, x: f32, y: f32) {
-    let position = LogicalPosition::new(x, y);
-    let button = PointerEventButton::Left;
-    window.dispatch_event(WindowEvent::PointerMoved { position });
-    window.dispatch_event(WindowEvent::PointerPressed { position, button });
-    window.dispatch_event(WindowEvent::PointerReleased { position, button });
-    window.dispatch_event(WindowEvent::PointerExited);
 }
 
 async fn stage(window: &PairingWindow, stage: PairingStage) {

@@ -52,7 +52,7 @@ fn match_key(name: &str) -> String {
 
 #[cfg(windows)]
 mod windows_names {
-    use std::{collections::BTreeMap, io};
+    use std::io;
 
     use super::super::RegistrationStore;
 
@@ -80,16 +80,11 @@ mod windows_names {
                 .and_then(|pairing| pairing.name))
         }
 
-        pub(crate) fn sender_names(&self) -> io::Result<BTreeMap<String, String>> {
-            Ok(self
-                .read()?
-                .active_pairings
-                .into_iter()
-                .filter_map(|(id, pairing)| pairing.name.map(|name| (id, name)))
-                .collect())
-        }
-
-        pub(crate) fn name_sender(&self, id: &str, input: &[u16]) -> Result<(), SenderNameError> {
+        pub(crate) fn name_sender(
+            &self,
+            id: &str,
+            input: &[u16],
+        ) -> Result<String, SenderNameError> {
             let name = String::from_utf16(input).map_err(|_| SenderNameError::InvalidCharacter)?;
             let name = name.trim_matches(|character: char| {
                 character.is_whitespace() && character != '\u{0085}'
@@ -110,7 +105,7 @@ mod windows_names {
                     .get_mut(id)
                     .ok_or(SenderNameError::Storage)?;
                 pairing.name = Some(name.into());
-                Ok(())
+                Ok(name.into())
             })
         }
     }

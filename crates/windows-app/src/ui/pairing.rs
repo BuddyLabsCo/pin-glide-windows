@@ -270,7 +270,7 @@ fn refresh() {
     });
 }
 
-fn read_name_paste(chinese: bool) -> NamePaste {
+pub(super) fn read_name_paste(chinese: bool) -> NamePaste {
     let mut pasted = NamePaste::default();
     match platform::read_unicode_clipboard() {
         Ok(Some(text)) => {
@@ -293,7 +293,7 @@ fn read_name_paste(chinese: bool) -> NamePaste {
     pasted
 }
 
-fn insert_name_paste(window: &slint::Window, text: slint::SharedString) {
+pub(super) fn insert_name_paste(window: &slint::Window, text: slint::SharedString) {
     let inner = WindowInner::from_pub(window);
     let field = inner.focus_item.borrow().upgrade();
     if let Some(field) = field {
@@ -331,7 +331,7 @@ fn finish_naming() {
             store.name_sender(&pairing_id, &input.encode_utf16().collect::<Vec<_>>())
         };
         let error = match result {
-            Ok(()) => match super::show_registered(store, view.window.get_chinese()) {
+            Ok(_) => match super::show_registered(store, view.window.get_chinese()) {
                 Ok(true) => {
                     view.named = true;
                     let _ = view.window.hide();
@@ -347,7 +347,7 @@ fn finish_naming() {
     });
 }
 
-fn name_error(chinese: bool, error: SenderNameError) -> &'static str {
+pub(super) fn name_error(chinese: bool, error: SenderNameError) -> &'static str {
     match (chinese, error) {
         (true, SenderNameError::Empty) => "请填写设备名称。",
         (true, SenderNameError::TooLong) => "设备名称最多 40 个字符。",
