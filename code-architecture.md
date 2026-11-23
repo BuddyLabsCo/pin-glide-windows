@@ -55,6 +55,9 @@ within 500 lines.
   before first use. Resume a persisted R with a bounded delivery handshake
   independent of the redemption deadline. A terminal pairing state determines
   the outcome when followed by Close `1008`.
+  In `add_sender`, save the new key provisionally before confirmation and
+  promote it on `completed` on the existing Receiver. Keep the delivery
+  worker and its connection running during this operation.
 - The delivery adapter captures arrival time and order, then attempts the
   Receipt before decryption. It owns reconnect, heartbeat, and Close handling.
   The same worker owns first enrollment and subsequent reconnects, or starts
@@ -63,7 +66,12 @@ within 500 lines.
   triggers an immediate replacement attempt. Keep control frames responsive
   during Receipt writes and authentication. Reserve space in the ordered
   authentication queue before writing a Receipt. Keep that queue across
-  socket replacements. The tray tooltip shows Ready only while connected
+  socket replacements. Hold deliveries for the in-flight add-Sender
+  association with a separate capacity until its key is promoted or the
+  attempt ends. Leave excess deliveries for that association unacknowledged
+  and continue authenticating deliveries from active Pairings. Drain
+  released deliveries before authenticating later arrivals for the same Pairing.
+  The tray tooltip shows Ready only while connected
   with at least one active Pairing.
   Core `delivery/` selects the key by Pairing ID and orders OTPs by `receivedAt`
   with arrival time as fallback and arrival order as the tiebreaker. An empty

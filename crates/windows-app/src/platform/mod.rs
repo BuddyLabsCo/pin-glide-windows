@@ -10,9 +10,9 @@ pub use instance::{ActivationListener, Instance};
 pub(crate) use popup::{new_popup, place_popup, popup_attributes, prepare_popup};
 pub(crate) use session::popup_epoch;
 pub use tray::Tray;
-pub(crate) use tray::set_delivery_status;
+pub(crate) use tray::{delivery_status, set_delivery_status};
 
-use std::io;
+use std::{cell::Cell, io};
 
 use slint::{
     Window,
@@ -26,6 +26,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
 };
 
+thread_local! {
+    static ANIMATION_PREFERENCE_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+pub fn set_animation_preference_override(enabled: Option<bool>) {
+    ANIMATION_PREFERENCE_OVERRIDE.set(enabled);
+}
+
 pub fn enable_per_monitor_dpi() -> io::Result<()> {
     // SAFETY: called before either Win32 or Slint creates a window.
     if unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) } == 0 {
@@ -35,6 +43,9 @@ pub fn enable_per_monitor_dpi() -> io::Result<()> {
 }
 
 pub fn animations_enabled() -> bool {
+    if let Some(enabled) = ANIMATION_PREFERENCE_OVERRIDE.get() {
+        return enabled;
+    }
     let mut enabled = 0i32;
     // SAFETY: SPI_GETCLIENTAREAANIMATION writes a BOOL to the supplied pointer.
     let result = unsafe {

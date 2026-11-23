@@ -30,6 +30,22 @@ pub type Socket = WebSocket<Connection>;
 pub const TOKEN: &str = "fixture-pairing-b";
 pub const RECEIVER_TOKEN: &str = "fixture-receiver-r";
 
+pub fn decode_qr(code: &qrcode::QrCode) -> Value {
+    let width = (code.width() + 8) * 4;
+    let mut pixels = vec![255; width * width];
+    for row in 0..code.width() {
+        for column in 0..code.width() {
+            if code[(column, row)] == qrcode::Color::Dark {
+                for offset in 0..4 {
+                    let left = ((row + 4) * 4 + offset) * width + (column + 4) * 4;
+                    pixels[left..left + 4].fill(0);
+                }
+            }
+        }
+    }
+    decode_pixels(width, width, &pixels)
+}
+
 pub fn listen() -> (TcpListener, Service) {
     let (listener, origin) = tls::listen("localhost");
     let root =
@@ -70,6 +86,21 @@ pub fn assert_bearer(headers: &[String]) {
             name.eq_ignore_ascii_case("authorization") && value.trim() == format!("Bearer {TOKEN}")
         })
     }));
+}
+
+pub fn accept_completion(connection: Connection, session_id: &str) -> BufReader<Connection> {
+    let mut stream = BufReader::new(connection);
+    let (request, headers, body) = read_request_parts(&mut stream);
+    assert_eq!(
+        request,
+        format!("POST /v1/pairing-sessions/{session_id}/complete HTTP/1.1\r\n")
+    );
+    assert_bearer(&headers);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"keyConfirmation":"confirmed"})
+    );
+    stream
 }
 
 pub fn write_response(stream: &mut impl Write, status: &str, body: &Value) {

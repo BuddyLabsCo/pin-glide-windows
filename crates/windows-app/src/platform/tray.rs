@@ -197,6 +197,10 @@ pub(crate) fn set_delivery_status(status: DeliveryStatus) {
     }
 }
 
+pub(crate) fn delivery_status() -> DeliveryStatus {
+    DELIVERY_STATUS.get()
+}
+
 fn set_tooltip(data: &mut NOTIFYICONDATAW, chinese: bool) {
     use DeliveryStatus::*;
     let (english, chinese_reason) = match DELIVERY_STATUS.get() {

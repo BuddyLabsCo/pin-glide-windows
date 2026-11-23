@@ -10,7 +10,10 @@ use super::{
     PairingProgress, PairingStart, ProgressUpdates, RegistrationStore, Service, SessionState,
     watch_session,
 };
-use crate::service::{DeliveryStatus, enrollment::finish_enrollment, reconnect::Reconnect};
+use crate::service::{
+    CreateError, DeliveryStatus, PairingSession, enrollment::finish_enrollment,
+    pairing_session_view, reconnect::Reconnect,
+};
 
 async fn receive_registered(
     service: &Service,
@@ -66,7 +69,22 @@ pub(super) async fn drive(
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
         return;
     };
-    drive_session(service, updates, stopping, now, material, store).await;
+    let existing = if matches!(start, PairingStart::AddSender) {
+        let Some(credential) = store.and_then(|store| store.receiver_credential().ok()) else {
+            updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
+            return;
+        };
+        Some(credential)
+    } else {
+        None
+    };
+    let create = async {
+        match existing {
+            Some((id, token)) => service.add_sender(id, &token).await,
+            None => service.new_receiver().await,
+        }
+    };
+    drive_session(service, updates, stopping, now, material, store, create).await;
 }
 
 async fn drive_session(
@@ -76,9 +94,10 @@ async fn drive_session(
     now: impl FnOnce() -> SystemTime,
     material: PairingMaterial,
     store: Option<&RegistrationStore>,
+    create: impl Future<Output = Result<PairingSession, CreateError>>,
 ) {
     let created = tokio::select! {
-        result = service.new_receiver() => result,
+        result = create => result,
         _ = &mut stopping => {
             updates.publish(PairingProgress::Finished(PairingOutcome::Canceled));
             return;
@@ -88,13 +107,16 @@ async fn drive_session(
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
         return;
     };
+    let pending_add = store
+        .filter(|_| session.mode == pairing_session_view::Mode::AddSender)
+        .map(|store| store.pending_add_guard(&session.session_id));
     let lifetime = pairing_lifetime(
         now(),
         session.expires_at.into(),
         session.pairing_token_expires_at.into(),
     );
     let deadline = Instant::now() + lifetime;
-    let (outcome, exiting) = tokio::select! {
+    let (mut outcome, exiting) = tokio::select! {
         biased;
         _ = &mut stopping => (PairingOutcome::Canceled, true),
         outcome = watch_session(service, &session, &material, deadline, updates, store) => (outcome, false),
@@ -108,6 +130,20 @@ async fn drive_session(
         }
         return;
     }
+    if session.mode == pairing_session_view::Mode::AddSender
+        && let Some(store) = store
+    {
+        let completed = outcome == PairingOutcome::KeyConfirmed(SessionState::Completed);
+        let result = store.finish_add_sender(&session.session_id, &session.receiver_id, completed);
+        drop(pending_add);
+        if completed {
+            if let Ok(Some(pairing_id)) = result {
+                updates.publish(PairingProgress::Completed { pairing_id });
+                return;
+            }
+            outcome = PairingOutcome::Failed;
+        }
+    }
     updates.publish(PairingProgress::Finished(outcome));
     if exiting
         || matches!(
@@ -115,6 +151,6 @@ async fn drive_session(
             PairingOutcome::CreateFailed | PairingOutcome::Failed
         )
     {
-        let _ = timeout(Duration::from_secs(2), service.cancel_receiver(&session)).await;
+        let _ = timeout(Duration::from_secs(2), service.cancel_session(&session)).await;
     }
 }

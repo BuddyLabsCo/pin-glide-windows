@@ -10,8 +10,8 @@ use tokio::sync::oneshot;
 use zeroize::Zeroizing;
 
 use super::{
-    NewReceiverSession, PairingOutcome, PairingProgress, Service,
-    pairing_events::PairingEventError, pairing_operation::ProgressUpdates, reconnect::Reconnect,
+    PairingOutcome, PairingProgress, PairingSession, Service, pairing_events::PairingEventError,
+    pairing_operation::ProgressUpdates, reconnect::Reconnect,
 };
 use crate::storage::{Enrollment, RegistrationStore};
 
@@ -20,7 +20,7 @@ pub(super) async fn finish_enrollment(
     store: &RegistrationStore,
     updates: &ProgressUpdates,
     mut stopping: oneshot::Receiver<()>,
-    session: Option<&NewReceiverSession>,
+    session: Option<&PairingSession>,
 ) {
     let outcome = tokio::select! {
         biased;
@@ -43,7 +43,7 @@ async fn issue_credential(
     service: &Service,
     store: &RegistrationStore,
     updates: &ProgressUpdates,
-    session: Option<&NewReceiverSession>,
+    session: Option<&PairingSession>,
 ) -> Result<Enrollment, PairingOutcome> {
     let mut pending = match session {
         Some(session) => {
@@ -128,7 +128,7 @@ async fn connect_and_promote(
     }
 }
 
-fn start(service: &Service, session: &NewReceiverSession) -> Result<Enrollment, PairingOutcome> {
+fn start(service: &Service, session: &PairingSession) -> Result<Enrollment, PairingOutcome> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| PairingOutcome::Failed)?;
     let operation_id = format!("{:032x}", u128::from_be_bytes(bytes));

@@ -7,20 +7,21 @@ use std::{
 
 use qrcode::QrCode;
 use receiver_core::{
-    delivery::Inbox,
+    delivery::{Inbox, Sms},
     pairing::{PairingMaterial, PairingOutcome},
 };
 use reqwest::StatusCode;
 use tokio::{
-    sync::{oneshot, watch},
+    sync::{Semaphore, oneshot, watch},
     time::{Instant, sleep_until, timeout},
 };
 use zeroize::Zeroizing;
 
 use super::{
-    CompletionError, DeliveryStatus, NewReceiverSession, Service, SessionState,
+    CompletionError, DeliveryStatus, PairingSession, Service, SessionState,
     delivery::ReceivedSms,
     pairing_events::{PairingEvent, PairingEventError, PairingEvents},
+    pairing_session_view,
     pairing_snapshot::{Claim, Snapshot},
 };
 use crate::storage::{PairingReference, RegistrationStore};
@@ -47,7 +48,6 @@ pub struct PairingOperation {
     delivery: watch::Receiver<DeliveryStatus>,
     worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
     inbox: Arc<Mutex<Inbox>>,
-    #[cfg(windows)]
     store: Option<RegistrationStore>,
 }
 
@@ -56,6 +56,13 @@ pub enum PairingStart {
     ResumePending,
     Fresh,
     Registered,
+    AddSender,
+}
+
+#[derive(Clone)]
+pub(super) enum SmsReceiver {
+    Popup(fn(ReceivedSms)),
+    Observe(Arc<dyn Fn(Sms) + Send + Sync>),
 }
 
 pub(super) struct ProgressUpdates {
@@ -63,7 +70,8 @@ pub(super) struct ProgressUpdates {
     pub(super) delivery: watch::Sender<DeliveryStatus>,
     notify: fn(),
     pub(super) inbox: Arc<Mutex<Inbox>>,
-    pub(super) notify_sms: fn(ReceivedSms),
+    pub(super) notify_sms: SmsReceiver,
+    pub(super) delivery_capacity: Arc<Semaphore>,
 }
 
 impl ProgressUpdates {
@@ -139,28 +147,42 @@ impl PairingOperation {
         Self::spawn(connect, notify, Some(store), start, drop)
     }
 
-    #[cfg(windows)]
-    pub(crate) fn start_registered(
+    pub fn start_receiving_with_registration(
         connect: impl FnOnce() -> Option<Service> + Send + 'static,
-        notify: fn(),
-        store: RegistrationStore,
-        notify_sms: fn(ReceivedSms),
+        path: PathBuf,
+        receive: impl Fn(Sms) + Send + Sync + 'static,
     ) -> Self {
-        Self::spawn(
+        Self::spawn_worker(
             connect,
-            notify,
-            Some(store),
+            || {},
+            Some(RegistrationStore::new(path)),
             PairingStart::Registered,
-            notify_sms,
+            SmsReceiver::Observe(Arc::new(receive)),
         )
     }
 
-    fn spawn(
+    pub(crate) fn spawn(
         connect: impl FnOnce() -> Option<Service> + Send + 'static,
         notify: fn(),
         store: Option<RegistrationStore>,
         start: PairingStart,
         notify_sms: fn(ReceivedSms),
+    ) -> Self {
+        Self::spawn_worker(
+            connect,
+            notify,
+            store,
+            start,
+            SmsReceiver::Popup(notify_sms),
+        )
+    }
+
+    fn spawn_worker(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        store: Option<RegistrationStore>,
+        start: PairingStart,
+        notify_sms: SmsReceiver,
     ) -> Self {
         let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
         let (delivery_updates, delivery) = watch::channel(DeliveryStatus::Unregistered);
@@ -172,8 +194,8 @@ impl PairingOperation {
             notify,
             inbox: Arc::clone(&inbox),
             notify_sms,
+            delivery_capacity: Arc::new(Semaphore::new(super::delivery::MAX_PENDING_DELIVERIES)),
         };
-        #[cfg(windows)]
         let window_store = store.clone();
         let worker = thread::Builder::new()
             .name("pairing".into())
@@ -210,7 +232,6 @@ impl PairingOperation {
             delivery,
             worker,
             inbox,
-            #[cfg(windows)]
             store: window_store,
         }
     }
@@ -233,7 +254,13 @@ impl PairingOperation {
     }
 
     pub fn delivery_status(&self) -> DeliveryStatus {
-        *self.delivery.borrow()
+        let status = *self.delivery.borrow();
+        if status == DeliveryStatus::Ready
+            && let Some(store) = &self.store
+        {
+            return super::reconnect::connected_status(store);
+        }
+        status
     }
 
     pub fn latest_otp(&self) -> Option<Zeroizing<String>> {
@@ -250,7 +277,7 @@ impl PairingOperation {
 
 async fn watch_session(
     service: &Service,
-    session: &NewReceiverSession,
+    session: &PairingSession,
     material: &PairingMaterial,
     deadline: Instant,
     updates: &ProgressUpdates,
@@ -290,7 +317,7 @@ async fn watch_session(
         return PairingOutcome::Failed;
     };
     if snapshot.state != SessionState::AwaitingConfirmation {
-        return outcome(snapshot.state, false);
+        return outcome(snapshot.state, None);
     }
     let Some(claim) = snapshot.into_claim() else {
         return PairingOutcome::Failed;
@@ -299,17 +326,23 @@ async fn watch_session(
     if let Err(outcome) = verify_and_save(&mut events, session, &claim, material, store).await {
         return outcome;
     }
+    let milestone = if session.mode == pairing_session_view::Mode::AddSender {
+        SessionState::Completed
+    } else {
+        SessionState::CredentialReady
+    };
     wait_for_confirmation(
         service.confirm_receiver(session),
-        confirmation_milestone(&mut events, &claim),
+        confirmation_milestone(&mut events, &claim, milestone),
         &claim,
+        milestone,
     )
     .await
 }
 
 async fn wait_for_claim(
     events: &mut PairingEvents,
-    session: &NewReceiverSession,
+    session: &PairingSession,
     material: &PairingMaterial,
     deadline: Instant,
     updates: &ProgressUpdates,
@@ -350,7 +383,7 @@ async fn next_relay(events: &mut PairingEvents, claim: &Claim) -> Result<String,
         {
             PairingEvent::State(snapshot) if snapshot.matches_claim(claim) => {
                 if snapshot.state != SessionState::AwaitingConfirmation {
-                    return Err(outcome(snapshot.state, false));
+                    return Err(outcome(snapshot.state, None));
                 }
             }
             PairingEvent::Relay(payload) => return Ok(payload),
@@ -361,7 +394,7 @@ async fn next_relay(events: &mut PairingEvents, claim: &Claim) -> Result<String,
 
 async fn verify_and_save(
     events: &mut PairingEvents,
-    session: &NewReceiverSession,
+    session: &PairingSession,
     claim: &Claim,
     material: &PairingMaterial,
     store: Option<&RegistrationStore>,
@@ -383,15 +416,21 @@ async fn verify_and_save(
         sender_id: &claim.sender_id,
     };
     let store = store.ok_or(PairingOutcome::Failed)?;
+    let adding_sender = session.mode == pairing_session_view::Mode::AddSender;
     store
-        .commit_provisional(&reference, key.as_bytes())
-        .map_err(|_| PairingOutcome::Failed)
+        .commit_provisional(&reference, key.as_bytes(), adding_sender)
+        .map_err(|_| PairingOutcome::Failed)?;
+    if adding_sender {
+        store.track_pending_add(&reference);
+    }
+    Ok(())
 }
 
 async fn wait_for_confirmation(
     report: impl Future<Output = Result<Snapshot, CompletionError>>,
     milestone: impl Future<Output = Option<PairingOutcome>>,
     claim: &Claim,
+    expected: SessionState,
 ) -> PairingOutcome {
     let mut milestone = std::pin::pin!(milestone);
     let response = tokio::select! {
@@ -404,7 +443,7 @@ async fn wait_for_confirmation(
             if snapshot.state == SessionState::AwaitingConfirmation {
                 return milestone.await.unwrap_or(PairingOutcome::Failed);
             }
-            return outcome(snapshot.state, true);
+            return outcome(snapshot.state, Some(expected));
         }
         Err(CompletionError::Rejected {
             status: StatusCode::GONE,
@@ -428,12 +467,13 @@ async fn wait_for_confirmation(
 async fn confirmation_milestone(
     events: &mut PairingEvents,
     claim: &Claim,
+    expected: SessionState,
 ) -> Option<PairingOutcome> {
     while let Ok(event) = events.next_event().await {
         match event {
             PairingEvent::State(snapshot) if snapshot.matches_claim(claim) => {
                 if snapshot.state != SessionState::AwaitingConfirmation {
-                    return Some(outcome(snapshot.state, true));
+                    return Some(outcome(snapshot.state, Some(expected)));
                 }
             }
             PairingEvent::CredentialReady => {}
@@ -443,13 +483,11 @@ async fn confirmation_milestone(
     None
 }
 
-fn outcome(state: SessionState, saved: bool) -> PairingOutcome {
+fn outcome(state: SessionState, expected: Option<SessionState>) -> PairingOutcome {
     match state {
         SessionState::Canceled => PairingOutcome::Canceled,
         SessionState::Expired => PairingOutcome::Expired,
-        SessionState::CredentialReady if saved => {
-            PairingOutcome::KeyConfirmed(SessionState::CredentialReady)
-        }
+        state if Some(state) == expected => PairingOutcome::KeyConfirmed(state),
         _ => PairingOutcome::Failed,
     }
 }

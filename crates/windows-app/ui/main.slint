@@ -1,8 +1,10 @@
 import { Button, Palette, ScrollView } from "std-widgets.slint";
+import { SenderScrollbar } from "sender_scrollbar.slint";
 
 export component MainWindow inherits Window {
     in property <bool> chinese;
     in property <[string]> sender-names;
+    callback open-pairing();
     title: root.chinese ? "鹊信" : "Pin Glide";
     icon: @image-url("assets/app-icon.png");
     min-width: 400px;
@@ -149,17 +151,52 @@ export component MainWindow inherits Window {
                 }
             }
 
-            Rectangle {
+            pair-button := Rectangle {
                 x: 16px;
                 y: 96px;
                 width: parent.width - 32px;
                 height: 40px;
                 border-radius: 6px;
+                property <string> label: root.chinese ? "配对新设备" : "Pair a new device";
                 background: #006b60;
+                accessible-role: button;
+                accessible-label: self.label;
+                accessible-action-default => { root.open-pairing(); }
+                forward-focus: key-focus;
                 Text {
-                    text: root.chinese ? "配对新设备" : "Pair a new device";
+                    text: pair-button.label;
                     color: white;
                     font-weight: 600;
+                }
+
+                Rectangle {
+                    border-radius: 6px;
+                    background: press.has-hover ? #284e7912 : transparent;
+                }
+
+                if key-focus.has-focus: Rectangle {
+                    x: -4px;
+                    y: -4px;
+                    width: parent.width + 8px;
+                    height: parent.height + 8px;
+                    border-radius: 10px;
+                    border-width: 2px;
+                    border-color: #284e79;
+                }
+
+                key-focus := FocusScope {
+                    key-pressed(event) => {
+                        if event.text == Key.Return || event.text == Key.Space {
+                            root.open-pairing();
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+
+                press := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-pairing(); }
                 }
             }
         }
@@ -176,62 +213,94 @@ export component MainWindow inherits Window {
                 vertical-alignment: center;
             }
 
-            ScrollView {
+            Rectangle {
                 vertical-stretch: 1;
-                VerticalLayout {
-                    y: 0px;
-                    for sender in root.sender-names: Rectangle {
-                        height: 48px;
+                sender-scroll := ScrollView {
+                    vertical-scrollbar-policy: always-off;
+                    content-height: list.height;
+                    list := Rectangle {
+                        y: 0px;
+                        width: parent.width;
+                        height: root.sender-names.length == 0 ? 48px : root.sender-names.length * 49px - 1px;
                         border-width: 1px;
                         border-color: #deebe5;
                         border-radius: 10px;
                         background: white;
-                        HorizontalLayout {
-                            padding-left: 16px;
-                            padding-right: 12px;
-                            spacing: 12px;
-                            Rectangle {
-                                width: 20px;
+                        if root.sender-names.length == 0: Text {
+                            x: 16px;
+                            width: parent.width - 32px;
+                            text: root.chinese ? "还没有已配对的设备。" : "No devices paired yet.";
+                            font-size: 13px;
+                            color: #65716e;
+                            vertical-alignment: center;
+                        }
+
+                        for sender[index] in root.sender-names: Rectangle {
+                            y: index * 49px;
+                            height: 48px;
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 12px;
+                                spacing: 12px;
                                 Rectangle {
-                                    width: 16px;
-                                    height: 20px;
-                                    border-radius: 4px;
-                                    border-width: 1.5px;
-                                    border-color: #4c8074;
+                                    width: 20px;
                                     Rectangle {
-                                        y: 14px;
-                                        width: 5px;
-                                        height: 1.5px;
-                                        border-radius: 1px;
-                                        background: #4c8074;
+                                        width: 16px;
+                                        height: 20px;
+                                        border-radius: 4px;
+                                        border-width: 1.5px;
+                                        border-color: #4c8074;
+                                        Rectangle {
+                                            y: 14px;
+                                            width: 5px;
+                                            height: 1.5px;
+                                            border-radius: 1px;
+                                            background: #4c8074;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: sender;
+                                    accessible-role: text;
+                                    accessible-label: sender;
+                                    color: #25322e;
+                                    horizontal-stretch: 1;
+                                    overflow: elide;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    width: 32px;
+                                    Path {
+                                        width: 12px;
+                                        height: 8px;
+                                        viewbox-width: 12;
+                                        viewbox-height: 8;
+                                        commands: "M 1 2 L 6 6 L 11 2";
+                                        stroke: #4c8074;
+                                        stroke-width: 1.5px;
                                     }
                                 }
                             }
 
-                            Text {
-                                text: sender;
-                                accessible-role: text;
-                                accessible-label: sender;
-                                color: #25322e;
-                                horizontal-stretch: 1;
-                                overflow: elide;
-                                vertical-alignment: center;
-                            }
-
-                            Rectangle {
-                                width: 32px;
-                                Path {
-                                    width: 12px;
-                                    height: 8px;
-                                    viewbox-width: 12;
-                                    viewbox-height: 8;
-                                    commands: "M 1 2 L 6 6 L 11 2";
-                                    stroke: #4c8074;
-                                    stroke-width: 1.5px;
-                                }
+                            if index + 1 < root.sender-names.length: Rectangle {
+                                x: 1px;
+                                y: 48px;
+                                width: parent.width - 2px;
+                                height: 1px;
+                                background: #dfe5e3;
                             }
                         }
                     }
+                }
+
+                if list.height > sender-scroll.visible-height: SenderScrollbar {
+                    x: parent.width + 12px;
+                    height: parent.height;
+                    content-height: list.height;
+                    offset <=> sender-scroll.content-y;
+                    label: root.chinese ? "滚动已配对设备列表" : "Scroll paired devices";
                 }
             }
         }

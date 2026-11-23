@@ -100,7 +100,7 @@ fn verify_migration(version: u32) {
         .unwrap();
     assert!(
         store
-            .commit_provisional(&reference("first"), &[42; 32])
+            .commit_provisional(&reference("first"), &[42; 32], false)
             .is_err()
     );
     assert_eq!(fs::read(&path).unwrap(), legacy_bytes);
@@ -108,7 +108,7 @@ fn verify_migration(version: u32) {
     drop(locked);
 
     store
-        .commit_provisional(&reference("first"), &[42; 32])
+        .commit_provisional(&reference("first"), &[42; 32], false)
         .unwrap();
     let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(current["version"], 4);
@@ -141,7 +141,7 @@ fn refuses_unreadable_and_newer_registration_files_without_overwriting_them() {
         fs::write(&path, content).unwrap();
         assert!(
             store
-                .commit_provisional(&reference("session"), &[42; 32])
+                .commit_provisional(&reference("session"), &[42; 32], false)
                 .is_err()
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), content);

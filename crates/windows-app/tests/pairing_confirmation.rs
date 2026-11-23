@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+#[path = "support/add_sender.rs"]
+mod add_sender;
 #[path = "support/delivery.rs"]
 mod delivery;
 #[path = "support/dpapi.rs"]
@@ -236,7 +238,8 @@ fn confirmation_service(
             assert_delete(connection, "session-1");
             return;
         }
-        let complete = accept_completion(connection, &path, &key);
+        let complete = accept_completion(connection, "session-1").into_inner();
+        assert_provisional_pairing(&path, &key);
         finish_scenario(scenario, &acceptor, &listener, complete, socket, claimed);
         if matches!(
             scenario,
@@ -274,18 +277,7 @@ fn assert_no_further_requests(listener: &std::net::TcpListener, terminal: mpsc::
     }
 }
 
-fn accept_completion(connection: Connection, path: &std::path::Path, key: &[u8; 32]) -> Connection {
-    let mut complete = BufReader::new(connection);
-    let (request, headers, body) = read_request_parts(&mut complete);
-    assert_bearer(&headers);
-    assert_eq!(
-        request,
-        "POST /v1/pairing-sessions/session-1/complete HTTP/1.1\r\n"
-    );
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"keyConfirmation":"confirmed"})
-    );
+fn assert_provisional_pairing(path: &std::path::Path, key: &[u8; 32]) {
     let stored = read_registration(path);
     let pending = &stored["provisional_pairing"];
     assert_eq!(pending["session_id"], "session-1");
@@ -293,7 +285,6 @@ fn accept_completion(connection: Connection, path: &std::path::Path, key: &[u8; 
     assert_eq!(pending["sender_id"], "sender-1");
     assert_eq!(pending["receiver_id"], "receiver-1");
     assert!(dpapi::unprotect(&pending["protected_key"]) == key);
-    complete.into_inner()
 }
 
 fn finish_scenario(
@@ -463,20 +454,4 @@ fn exercise_enrollment(
         "sender-1"
     );
     assert_eq!(stored["active_pairings"]["pairing-1"]["name"], "未命名设备");
-}
-
-fn decode_qr(code: &qrcode::QrCode) -> Value {
-    let width = (code.width() + 8) * 4;
-    let mut pixels = vec![255; width * width];
-    for row in 0..code.width() {
-        for column in 0..code.width() {
-            if code[(column, row)] == qrcode::Color::Dark {
-                for offset in 0..4 {
-                    let left = ((row + 4) * 4 + offset) * width + (column + 4) * 4;
-                    pixels[left..left + 4].fill(0);
-                }
-            }
-        }
-    }
-    decode_pixels(width, width, &pixels)
 }

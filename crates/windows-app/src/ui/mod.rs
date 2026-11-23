@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{CloseRequestResponse, ComponentHandle, PlatformError, VecModel, Window};
 
-use crate::service::{DeliveryStatus, PairingOperation};
+use crate::service::{DeliveryStatus, PairingOperation, PairingStart, Service};
 use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
 
 mod pairing;
@@ -11,7 +11,7 @@ mod sms;
 #[cfg(test)]
 pub(crate) use sms::{popup_count, receive as receive_sms};
 
-pub use pairing::open_pairing;
+pub use pairing::{open_pairing, visible_pairing};
 pub use sms::show_sms;
 
 pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
@@ -21,14 +21,7 @@ pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
     if let Ok(store) = RegistrationStore::for_current_user()
         && store.has_registration()
     {
-        let operation = PairingOperation::start_registered(
-            pairing::connect_service,
-            pairing::notify_progress,
-            store,
-            sms::receive,
-        );
-        REGISTERED.set(Some(operation));
-        update_delivery_status();
+        start_registered(store, pairing::connect_service);
     }
     Ok(())
 }
@@ -84,6 +77,45 @@ fn update_delivery_status() {
     platform::set_delivery_status(status);
 }
 
+fn start_registered(
+    store: RegistrationStore,
+    connect: impl FnOnce() -> Option<Service> + Send + 'static,
+) {
+    let operation = PairingOperation::spawn(
+        connect,
+        pairing::notify_progress,
+        Some(store),
+        PairingStart::Registered,
+        sms::receive,
+    );
+    replace_registered(Some(operation));
+    update_delivery_status();
+}
+
+fn replace_registered(next: Option<PairingOperation>) {
+    let previous = REGISTERED.replace(next);
+    if let Some(operation) = previous {
+        operation.shutdown();
+    }
+}
+
+pub fn open_registered(
+    chinese: bool,
+    path: std::path::PathBuf,
+    connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
+) -> Result<Option<MainWindow>, PlatformError> {
+    let store = RegistrationStore::new(path);
+    let window = show_registered_with(&store, chinese, connect.clone())?;
+    if window.is_some() {
+        start_registered(store, connect);
+    }
+    Ok(window)
+}
+
+pub fn delivery_status() -> DeliveryStatus {
+    platform::delivery_status()
+}
+
 pub fn update_motion() {
     pairing::update_motion();
     WELCOME.with_borrow(|welcome| {
@@ -98,7 +130,11 @@ pub fn update_motion() {
 }
 
 fn show() -> Result<(), PlatformError> {
-    if pairing::reopen()? {
+    let main_visible = MAIN.with_borrow(|main| {
+        main.as_ref()
+            .is_some_and(|window| window.window().is_visible())
+    });
+    if !main_visible && pairing::reopen()? {
         return hide_welcome();
     }
     if let Ok(store) = RegistrationStore::for_current_user()
@@ -114,11 +150,19 @@ fn hide_welcome() -> Result<(), PlatformError> {
 }
 
 fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, PlatformError> {
+    show_registered_with(store, chinese, pairing::connect_service).map(|window| window.is_some())
+}
+
+fn show_registered_with(
+    store: &RegistrationStore,
+    chinese: bool,
+    connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
+) -> Result<Option<MainWindow>, PlatformError> {
     let Ok(names) = store.sender_names() else {
-        return Ok(false);
+        return Ok(None);
     };
     if names.is_empty() && !store.has_registration() {
-        return Ok(false);
+        return Ok(None);
     }
     let window = MAIN.with_borrow_mut(|main| {
         if let Some(window) = main {
@@ -129,15 +173,45 @@ fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, Pla
         window
             .window()
             .on_close_requested(|| CloseRequestResponse::HideWindow);
+        let weak = window.as_weak();
+        let store = store.clone();
+        window.on_open_pairing(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let adding = store.receiver_credential().is_ok() && !pairing::enrolling();
+            let result =
+                pairing::open_from_main(window.get_chinese(), &store, connect.clone(), adding);
+            match result {
+                Ok(pairing) if pairing.window().is_visible() => {
+                    let _ = window.hide();
+                }
+                Ok(_) => {}
+                Err(error) => eprintln!("Could not open pairing: {error}"),
+            }
+        });
         *main = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
-    let names = names.into_values().map(Into::into).collect::<Vec<_>>();
-    window.set_sender_names(VecModel::from_slice(&names));
+    set_sender_names(&window, names.into_values());
     window.show()?;
     platform::configure_main_chrome(window.window());
     focus(window.window());
-    Ok(true)
+    Ok(Some(window))
+}
+
+fn refresh_visible_main(store: &RegistrationStore) {
+    MAIN.with_borrow(|main| {
+        if let Some(window) = main
+            && window.window().is_visible()
+            && let Ok(names) = store.sender_names()
+        {
+            set_sender_names(window, names.into_values());
+        }
+    });
+}
+
+fn set_sender_names(window: &MainWindow, names: impl Iterator<Item = String>) {
+    let names = names.map(Into::into).collect::<Vec<_>>();
+    window.set_sender_names(VecModel::from_slice(&names));
 }
 
 fn show_welcome() -> Result<(), PlatformError> {

@@ -14,7 +14,9 @@ use tokio_tungstenite::{
     },
 };
 
-use super::{NewReceiverSession, Service, SessionState, pairing_snapshot::Snapshot};
+use super::{
+    PairingSession, Service, SessionState, pairing_session_view, pairing_snapshot::Snapshot,
+};
 
 const PROTOCOL: &str = "pin-glide.v1";
 pub(super) type Socket = WebSocketStream<reqwest::Upgraded>;
@@ -23,6 +25,7 @@ pub(super) struct PairingEvents {
     socket: Socket,
     session_id: String,
     receiver_id: String,
+    mode: pairing_session_view::Mode,
 }
 
 pub(super) enum PairingEvent {
@@ -48,7 +51,7 @@ pub(super) enum PairingEventError {
 impl Service {
     pub(super) async fn pairing_events(
         &self,
-        session: &NewReceiverSession,
+        session: &PairingSession,
     ) -> Result<PairingEvents, PairingEventError> {
         let session_id = pin_glide_http::apis::urlencode(&session.session_id);
         let socket = self
@@ -61,6 +64,7 @@ impl Service {
             socket,
             session_id: session.session_id.clone(),
             receiver_id: session.receiver_id.clone(),
+            mode: session.mode,
         })
     }
 
@@ -219,7 +223,10 @@ impl PairingEvents {
             Some("credential_ready") => {
                 let ready: CredentialReady =
                     serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
-                if ready.session_id != self.session_id || ready.receiver_id != self.receiver_id {
+                if self.mode != pairing_session_view::Mode::NewReceiver
+                    || ready.session_id != self.session_id
+                    || ready.receiver_id != self.receiver_id
+                {
                     return Err(PairingEventError::Protocol);
                 }
                 Ok(PairingEvent::CredentialReady)
@@ -240,7 +247,16 @@ impl PairingEvents {
         let state: PairingState =
             serde_json::from_value(event).map_err(|_| PairingEventError::Protocol)?;
         let session = state.session;
-        if *session.mode != AnonymousSchema26::NewReceiver {
+        if !matches!(
+            (self.mode, *session.mode),
+            (
+                pairing_session_view::Mode::NewReceiver,
+                AnonymousSchema26::NewReceiver
+            ) | (
+                pairing_session_view::Mode::AddSender,
+                AnonymousSchema26::AddSender
+            )
+        ) {
             return Err(PairingEventError::Protocol);
         }
         let phase = match *session.state {

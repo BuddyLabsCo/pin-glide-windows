@@ -202,7 +202,10 @@ pub(in crate::service) fn progress_channel() -> (ProgressUpdates, watch::Receive
             delivery: watch::channel(super::DeliveryStatus::Unregistered).0,
             notify: || {},
             inbox: Default::default(),
-            notify_sms: drop,
+            notify_sms: super::SmsReceiver::Popup(drop),
+            delivery_capacity: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                crate::service::delivery::MAX_PENDING_DELIVERIES,
+            )),
         },
         progress,
     )
@@ -406,7 +409,12 @@ async fn waits_for_cancellation_after_handling_a_closed_session_response() {
             code: Some("pairing_session_closed".into()),
         })
     };
-    let result = wait_for_confirmation(report, async { milestone.await.unwrap() }, &claim);
+    let result = wait_for_confirmation(
+        report,
+        async { milestone.await.unwrap() },
+        &claim,
+        super::SessionState::CredentialReady,
+    );
     let mut result = std::pin::pin!(result);
 
     assert!(

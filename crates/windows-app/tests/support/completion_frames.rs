@@ -34,12 +34,18 @@ pub(super) fn verify_transition(evidence: Option<&Path>) {
     let halfway = moving.window().take_snapshot().unwrap();
     let loading = loading.window().take_snapshot().unwrap();
     if let Some(directory) = evidence {
-        super::capture(&moving, &directory.join("pair-done-transition-1.ppm"));
+        super::capture(
+            moving.window(),
+            &directory.join("pair-done-transition-1.ppm"),
+        );
     }
     update_animations(start + Duration::from_millis(165));
     let before_end = moving.window().take_snapshot().unwrap();
     if let Some(directory) = evidence {
-        super::capture(&moving, &directory.join("pair-done-transition-2.ppm"));
+        super::capture(
+            moving.window(),
+            &directory.join("pair-done-transition-2.ppm"),
+        );
     }
     update_animations(start + Duration::from_millis(195));
     let settled = moving.window().take_snapshot().unwrap();

@@ -1,15 +1,15 @@
-use std::time::Duration;
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use pin_glide_wss::{Delivery, Receipt};
 use receiver_core::delivery::{Arrival, Envelope, Sms};
 use serde::Deserialize;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, mpsc, watch};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 
 use super::{
     DeliveryStatus, Service,
     pairing_events::{PairingEventError, Socket},
-    pairing_operation::ProgressUpdates,
+    pairing_operation::{ProgressUpdates, SmsReceiver},
     reconnect::Connectivity,
 };
 
@@ -31,7 +31,8 @@ pub(crate) struct ReceivedSms {
 
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 const HEARTBEAT_LIMIT: Duration = Duration::from_secs(20);
-const MAX_PENDING_DELIVERIES: usize = 32;
+pub(super) const MAX_PENDING_DELIVERIES: usize = 32;
+const MAX_HELD_DELIVERIES: usize = 32;
 
 #[derive(Debug)]
 pub(super) struct ConnectionLoss {
@@ -42,8 +43,40 @@ pub(super) struct ConnectionLoss {
 pub(super) struct IncomingDelivery {
     text: Utf8Bytes,
     arrival: Arrival,
+    hold_capacity: Option<OwnedSemaphorePermit>,
     #[cfg(windows)]
     epoch: Option<u64>,
+}
+
+pub(super) struct QueuedDelivery {
+    incoming: IncomingDelivery,
+    held_capacity: bool,
+    _capacity: OwnedSemaphorePermit,
+}
+
+pub(super) struct DeliveryQueue {
+    send: mpsc::Sender<QueuedDelivery>,
+    store: RegistrationStore,
+    receiver_id: String,
+    hold_capacity: Arc<Semaphore>,
+}
+
+impl DeliveryQueue {
+    fn reserve_hold(
+        &self,
+        text: &str,
+        header: &EventHeader,
+    ) -> Result<Option<OwnedSemaphorePermit>, TryAcquireError> {
+        if let Some(pending) = self.store.current_pending_add()
+            && let Some(sender) = header.sender_id.as_deref()
+            && let Ok(address) = serde_json::from_str::<DeliveryAddress>(text)
+            && address.receiver_id == self.receiver_id
+            && pending.matches(&self.receiver_id, sender, &address.pairing_id)
+        {
+            return self.hold_capacity.clone().try_acquire_owned().map(Some);
+        }
+        Ok(None)
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,6 +87,13 @@ struct EventHeader {
     kind: String,
     sender_id: Option<String>,
     message_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveryAddress {
+    receiver_id: String,
+    pairing_id: String,
 }
 
 #[cfg(windows)]
@@ -103,14 +143,13 @@ impl DeliveryConnection {
 
     pub(super) async fn run(
         self,
-        store: &RegistrationStore,
         updates: &ProgressUpdates,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
-        authenticate: &mpsc::Sender<IncomingDelivery>,
+        authenticate: &DeliveryQueue,
     ) -> ConnectionLoss {
-        Transport::new(self.socket, store, updates)
-            .run(state, order, authenticate)
+        Transport::new(self.socket, updates, Some(authenticate))
+            .run(state, order, &authenticate.send)
             .await
     }
 }
@@ -119,45 +158,94 @@ pub(super) fn start_processing(
     store: &RegistrationStore,
     updates: &ProgressUpdates,
     receiver_id: String,
-) -> mpsc::Sender<IncomingDelivery> {
-    let (send, mut receive) = mpsc::channel::<IncomingDelivery>(MAX_PENDING_DELIVERIES);
+) -> DeliveryQueue {
+    let (send, mut receive) =
+        mpsc::channel::<QueuedDelivery>(MAX_PENDING_DELIVERIES + MAX_HELD_DELIVERIES);
+    let queue = DeliveryQueue {
+        send,
+        store: store.clone(),
+        receiver_id: receiver_id.clone(),
+        hold_capacity: Arc::new(Semaphore::new(MAX_HELD_DELIVERIES)),
+    };
     let store = store.clone();
     let inbox = updates.inbox.clone();
-    let notify = updates.notify_sms;
+    let notify = updates.notify_sms.clone();
+    let mut pending = store.watch_pending_adds();
+    let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        while let Some(incoming) = receive.blocking_recv() {
-            let result = match serde_json::from_str::<Delivery>(&incoming.text) {
-                Ok(delivery) if delivery.receiver_id == receiver_id => {
-                    authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
-                }
-                Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
-                Err(_) => Err(DeliveryRejection::InvalidEnvelope),
-            };
+        let mut held = VecDeque::new();
+        let process = |queued: QueuedDelivery, delivery: Result<Delivery, DeliveryRejection>| {
+            let incoming = queued.incoming;
+            let result = delivery.and_then(|delivery| {
+                authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
+            });
             match result {
-                Ok((sms, sender_name)) => {
-                    #[cfg(windows)]
-                    let Some(epoch) = incoming.epoch else {
-                        continue;
-                    };
-                    notify(ReceivedSms {
-                        sms,
-                        sender_name,
+                Ok((sms, sender_name)) => match &notify {
+                    SmsReceiver::Observe(receive) => receive(sms),
+                    SmsReceiver::Popup(notify) => {
                         #[cfg(windows)]
-                        epoch,
-                    });
-                }
+                        let Some(epoch) = incoming.epoch else {
+                            return;
+                        };
+                        notify(ReceivedSms {
+                            sms,
+                            sender_name,
+                            #[cfg(windows)]
+                            epoch,
+                        });
+                    }
+                },
                 Err(category) => {
                     let _ = store.record_delivery_rejection(category);
                 }
             }
-        }
+        };
+        runtime.block_on(async {
+            loop {
+                let queued = tokio::select! {
+                    biased;
+                    _ = pending.changed(), if !held.is_empty() => None,
+                    queued = receive.recv() => match queued {
+                        Some(queued) => Some(queued),
+                        None => break,
+                    },
+                };
+                let snapshot = store.pending_add(&pending.borrow_and_update()).cloned();
+                let is_pending = |delivery: &Delivery| {
+                    snapshot.as_ref().is_some_and(|entry| {
+                        entry.matches(
+                            &delivery.receiver_id,
+                            &delivery.sender_id,
+                            &delivery.pairing_id,
+                        )
+                    })
+                };
+                for _ in 0..held.len() {
+                    let (queued, delivery) = held.pop_front().unwrap();
+                    if is_pending(&delivery) {
+                        held.push_back((queued, delivery));
+                    } else {
+                        process(queued, Ok(delivery));
+                    }
+                }
+                let Some(queued) = queued else { continue };
+                match serde_json::from_str::<Delivery>(&queued.incoming.text) {
+                    Ok(delivery) if delivery.receiver_id != receiver_id => {
+                        process(queued, Err(DeliveryRejection::ReceiverMismatch));
+                    }
+                    Ok(delivery) if queued.held_capacity && is_pending(&delivery) => {
+                        held.push_back((queued, delivery));
+                    }
+                    Ok(delivery) => process(queued, Ok(delivery)),
+                    Err(_) => process(queued, Err(DeliveryRejection::InvalidEnvelope)),
+                }
+            }
+        });
     });
-    send
+    queue
 }
 
-fn receipt(text: &str) -> Result<Option<String>, PairingEventError> {
-    let header: EventHeader =
-        serde_json::from_str(text).map_err(|_| PairingEventError::Protocol)?;
+fn receipt(header: &EventHeader) -> Result<Option<String>, PairingEventError> {
     if header.version != 1 {
         return Err(PairingEventError::Protocol);
     }
@@ -167,8 +255,8 @@ fn receipt(text: &str) -> Result<Option<String>, PairingEventError> {
         _ => return Err(PairingEventError::Protocol),
     }
     let receipt = Receipt {
-        sender_id: correlation(header.sender_id)?,
-        message_id: correlation(header.message_id)?,
+        sender_id: correlation(header.sender_id.as_deref())?.into(),
+        message_id: correlation(header.message_id.as_deref())?.into(),
         reserved_type: "receipt".into(),
         version: 1,
     };
@@ -206,7 +294,7 @@ fn authenticate(
     Ok((sms, sender_name))
 }
 
-fn correlation(value: Option<String>) -> Result<String, PairingEventError> {
+fn correlation(value: Option<&str>) -> Result<&str, PairingEventError> {
     value
         .filter(|id| !id.trim().is_empty())
         .ok_or(PairingEventError::Protocol)

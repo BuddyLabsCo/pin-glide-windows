@@ -15,25 +15,23 @@ use super::*;
 
 #[tokio::test]
 async fn attempts_the_receipt_before_handing_off_authentication() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     for fail in [false, true] {
-        let (send, mut deliveries) = mpsc::channel::<IncomingDelivery>(1);
+        let (send, mut deliveries) = mpsc::channel::<QueuedDelivery>(1);
         let (attempted, receipt_attempt) = tokio::sync::oneshot::channel();
         let socket = ReceiptSocket {
             attempted: Some(attempted),
             fail,
             read: false,
         };
-        let mut transport = Transport::new(socket, &store, &updates);
+        let mut transport = Transport::new(socket, &updates, None);
         let (_power, mut state) = watch::channel(Connectivity::default());
         let mut order = 0;
         let verify = async {
             let mut receipt_attempt = receipt_attempt;
             let delivery = deliveries.recv().await.unwrap();
             assert_eq!(receipt_attempt.try_recv().unwrap(), "message");
-            assert!(delivery.text.contains("\"messageId\":\"message\""));
+            assert!(delivery.incoming.text.contains("\"messageId\":\"message\""));
         };
         timeout(WRITE_LIMIT, async {
             if fail {
@@ -62,7 +60,9 @@ impl Stream for ReceiptSocket {
         if std::mem::replace(&mut self.read, true) {
             return Poll::Pending;
         }
-        Poll::Ready(Some(Ok(delivery_frame("message"))))
+        Poll::Ready(Some(Ok(Message::text(
+            r#"{"type":"delivery","version":1,"senderId":"sender","messageId":"message","receiverId":42,"pairingId":false}"#,
+        ))))
     }
 }
 
@@ -100,8 +100,6 @@ impl Sink<Message> for ReceiptSocket {
 
 #[tokio::test(start_paused = true)]
 async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     let (client, peer) = tokio::io::duplex(4096);
     let (blocked, receipt_blocked) = tokio::sync::oneshot::channel();
@@ -112,7 +110,7 @@ async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
     };
     let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
-    let mut transport = Transport::new(socket, &store, &updates);
+    let mut transport = Transport::new(socket, &updates, None);
     let (_power, mut state) = watch::channel(Connectivity::default());
     let (send, _deliveries) = mpsc::channel(1);
     let mut order = 0;
@@ -135,13 +133,11 @@ async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
 
 #[tokio::test(start_paused = true)]
 async fn stalled_authentication_defers_receipts_without_blocking_pong() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     let (client, peer) = tokio::io::duplex(16 * 1024);
     let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
-    let mut transport = Transport::new(socket, &store, &updates);
+    let mut transport = Transport::new(socket, &updates, None);
     let (_power, mut state) = watch::channel(Connectivity::default());
     let (send, mut deliveries) = mpsc::channel(MAX_PENDING_DELIVERIES);
     let mut order = 0;
@@ -163,8 +159,9 @@ async fn stalled_authentication_defers_receipts_without_blocking_pong() {
             );
             for sequence in 0..burst {
                 let delivery = deliveries.recv().await.unwrap();
-                let header: EventHeader = serde_json::from_str(&delivery.text).unwrap();
+                let header: EventHeader = serde_json::from_str(&delivery.incoming.text).unwrap();
                 assert_eq!(header.message_id.unwrap(), sequence.to_string());
+                drop(delivery);
                 if sequence + MAX_PENDING_DELIVERIES < burst {
                     let next = sequence + MAX_PENDING_DELIVERIES;
                     assert_receipt(peer.next().await.unwrap().unwrap(), &next.to_string());
@@ -274,7 +271,7 @@ async fn checks_the_existing_socket_after_resume() {
     let run = async {
         let mut order = 0;
         connection
-            .run(&store, &updates, &mut state, &mut order, &authenticate)
+            .run(&updates, &mut state, &mut order, &authenticate)
             .await
     };
     timeout(Duration::from_secs(5), async {
