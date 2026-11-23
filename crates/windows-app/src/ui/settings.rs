@@ -3,6 +3,7 @@ use std::{
     io,
 };
 
+use i_slint_core::{MotionPreference, window::WindowInner};
 use slint::{CloseRequestResponse, ComponentHandle, PlatformError};
 
 use crate::{
@@ -13,14 +14,12 @@ use crate::{
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-pub(super) use tests::test_registration;
 
 thread_local! {
     static PREFERENCES: RefCell<Option<Preferences>> = const { RefCell::new(None) };
     static WINDOW: RefCell<Option<SettingsWindow>> = const { RefCell::new(None) };
     static LANGUAGE_FAILED: Cell<bool> = const { Cell::new(false) };
-    static STARTUP_FAILED: Cell<Option<bool>> = const { Cell::new(None) };
+    static STARTUP_FAILED: RefCell<Option<StartupError>> = const { RefCell::new(None) };
     static STARTUP_ENABLED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -28,6 +27,19 @@ struct Preferences {
     store: SettingsStore,
     settings: Settings,
     startup: io::Result<LaunchAtLogin>,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum StartupError {
+    #[error("Windows Startup Apps has disabled launch at login")]
+    WindowsOverride,
+    #[error("{change}. Could not restore the prior Windows startup entry: {restore}")]
+    Rollback {
+        change: Box<StartupError>,
+        restore: io::Error,
+    },
+    #[error("could not set launch at login to {0}: {1}")]
+    Change(bool, io::Error),
 }
 
 impl Preferences {
@@ -40,8 +52,8 @@ impl Preferences {
             startup,
         };
         if first_launch && let Err(error) = preferences.save_startup(true) {
-            STARTUP_FAILED.set(Some(true));
             eprintln!("Could not initialize launch at login: {error}");
+            STARTUP_FAILED.replace(Some(error));
         }
         preferences
     }
@@ -54,26 +66,37 @@ impl Preferences {
         Ok(())
     }
 
-    fn save_startup(&mut self, enabled: bool) -> io::Result<()> {
-        let startup = self.startup()?;
-        let entry = startup.read()?;
-        let changed = if enabled {
-            !startup.is_enabled(entry.as_deref())?
-        } else {
-            entry.is_some()
-        };
-        if changed {
-            startup.set(enabled)?;
-            if enabled && !startup.enabled().unwrap_or(false) {
-                startup.replace(entry.as_deref())?;
-                return Err(io::ErrorKind::PermissionDenied.into());
-            }
-        }
+    fn save_startup(&mut self, enabled: bool) -> Result<(), StartupError> {
+        let change_error = |error| StartupError::Change(enabled, error);
         let mut next = self.settings;
         next.launch_at_login = enabled;
-        if let Err(error) = self.store.save(next) {
-            if changed && let Err(rollback) = startup.replace(entry.as_deref()) {
-                eprintln!("Could not restore launch at login: {rollback}");
+        let staged = self.store.stage(next).map_err(change_error)?;
+        let startup = self.startup().map_err(change_error)?;
+        let entry = startup.read().map_err(change_error)?;
+        let desired = startup.command_for(enabled).map_err(change_error)?;
+        if enabled && !startup.approved().map_err(change_error)? {
+            // Keep the disabled entry visible in Windows Startup Apps so the user can enable it there.
+            if entry.as_deref() != desired {
+                startup.replace(desired).map_err(change_error)?;
+            }
+            return Err(StartupError::WindowsOverride);
+        }
+        let changed = entry.as_deref() != desired;
+        if changed {
+            startup.replace(desired).map_err(change_error)?;
+        }
+        let commit = (|| {
+            if enabled && !startup.approved().map_err(change_error)? {
+                return Err(StartupError::WindowsOverride);
+            }
+            staged.commit().map_err(change_error)
+        })();
+        if let Err(error) = commit {
+            if changed && let Err(restore) = startup.replace(entry.as_deref()) {
+                return Err(StartupError::Rollback {
+                    change: Box::new(error),
+                    restore,
+                });
             }
             return Err(error);
         }
@@ -107,7 +130,10 @@ fn install(preferences: Preferences) {
     PREFERENCES.replace(Some(preferences));
 }
 
-pub(super) fn show(main: &MainWindow) -> Result<(), PlatformError> {
+pub(super) fn show(
+    main: &MainWindow,
+    store: &crate::storage::RegistrationStore,
+) -> Result<(), PlatformError> {
     let window = WINDOW.with_borrow_mut(|current| {
         if let Some(window) = current {
             return Ok(window.clone_strong());
@@ -122,14 +148,18 @@ pub(super) fn show(main: &MainWindow) -> Result<(), PlatformError> {
         Ok::<_, PlatformError>(window)
     })?;
     let weak = main.as_weak();
+    let store = store.clone();
     window.on_back(move || {
-        if let Some(main) = weak.upgrade()
-            && let Err(error) = super::show_main(&main).and_then(|()| hide())
-        {
+        let Some(main) = weak.upgrade() else { return };
+        if let Ok(devices) = store.sender_devices() {
+            super::set_sender_devices(&main, devices);
+        }
+        if let Err(error) = super::show_main(&main).and_then(|()| hide()) {
             eprintln!("Could not return to Main: {error}");
         }
     });
     refresh(platform::chinese());
+    window.invoke_focus_page();
     window.show()?;
     main.hide()?;
     super::focus(window.window());
@@ -142,6 +172,25 @@ pub(super) fn hide() -> Result<(), PlatformError> {
 
 pub(super) fn close() {
     WINDOW.take();
+}
+
+pub(super) fn update_motion() {
+    WINDOW.with_borrow(|window| {
+        if let Some(window) = window {
+            apply_motion(window);
+        }
+    });
+}
+
+fn apply_motion(window: &SettingsWindow) {
+    let preference = if platform::animations_enabled() {
+        MotionPreference::NoPreference
+    } else {
+        MotionPreference::Reduced
+    };
+    WindowInner::from_pub(window.window())
+        .context()
+        .set_motion_preference(preference);
 }
 
 fn choose_language(index: i32) {
@@ -164,12 +213,16 @@ fn choose_language(index: i32) {
 }
 
 fn toggle_startup(enabled: bool) {
-    let saved = PREFERENCES.with_borrow_mut(|preferences| {
+    let result = PREFERENCES.with_borrow_mut(|preferences| {
         preferences
             .as_mut()
-            .is_some_and(|state| state.save_startup(enabled).is_ok())
+            .ok_or_else(|| StartupError::Change(enabled, io::ErrorKind::NotFound.into()))?
+            .save_startup(enabled)
     });
-    STARTUP_FAILED.set((!saved).then_some(enabled));
+    if let Err(error) = &result {
+        eprintln!("{error}");
+    }
+    STARTUP_FAILED.replace(result.err());
     refresh(platform::chinese());
 }
 
@@ -190,6 +243,7 @@ pub(super) fn refresh(chinese: bool) {
             STARTUP_ENABLED.set(enabled);
         }
         window.set_chinese(chinese);
+        apply_motion(window);
         window.set_language_index(match language {
             Language::System => 0,
             Language::Chinese => 1,
@@ -204,14 +258,19 @@ pub(super) fn refresh(chinese: bool) {
             }
             .into(),
         );
-        window.set_startup_error(
-            match (STARTUP_FAILED.get(), startup, chinese) {
-                (Some(true), _, true) => "无法启用开机启动，可再次打开开关重试。",
-                (Some(true), _, false) => {
+        STARTUP_FAILED.with_borrow(|error| window.set_startup_error(
+            match (error, startup, chinese) {
+                (Some(StartupError::WindowsOverride), Some(true), _) => "",
+                (Some(StartupError::WindowsOverride), _, true) => "请在 Windows 设置 → 应用 → 启动中启用鹊信。",
+                (Some(StartupError::WindowsOverride), _, false) => "Enable Pin Glide in Windows Settings → Apps → Startup.",
+                (Some(StartupError::Rollback { .. }), _, true) => "无法恢复原开机启动设置，请在 Windows 设置 → 应用 → 启动中检查。",
+                (Some(StartupError::Rollback { .. }), _, false) => "Could not restore launch at login. Check Windows Settings → Apps → Startup.",
+                (Some(StartupError::Change(true, _)), _, true) => "无法启用开机启动，可再次打开开关重试。",
+                (Some(StartupError::Change(true, _)), _, false) => {
                     "Could not enable launch at login. Turn the switch on again to retry."
                 }
-                (Some(false), _, true) => "无法关闭开机启动，可再次关闭开关重试。",
-                (Some(false), _, false) => {
+                (Some(StartupError::Change(false, _)), _, true) => "无法关闭开机启动，可再次关闭开关重试。",
+                (Some(StartupError::Change(false, _)), _, false) => {
                     "Could not disable launch at login. Turn the switch off again to retry."
                 }
                 (None, None, true) => "无法读取开机启动状态，请重试。",
@@ -219,6 +278,6 @@ pub(super) fn refresh(chinese: bool) {
                 _ => "",
             }
             .into(),
-        );
+        ));
     });
 }

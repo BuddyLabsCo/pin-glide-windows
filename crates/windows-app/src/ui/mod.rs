@@ -42,25 +42,23 @@ pub fn open() {
 }
 
 pub fn open_settings() {
-    let store = RegistrationStore::for_current_user().ok();
-    #[cfg(test)]
-    let store = settings::test_registration().or(store);
+    let store = pairing::registration().or_else(|| RegistrationStore::for_current_user().ok());
     if let Err(error) = open_settings_with(store) {
         eprintln!("Could not open Settings: {error}");
     }
 }
 
 fn open_settings_with(store: Option<RegistrationStore>) -> Result<(), PlatformError> {
-    if pairing::reopen_pending_name()? {
-        return hide_welcome();
-    }
     if let Some(store) = store
         && let Some(main) =
             registered_window(&store, platform::chinese(), pairing::connect_service)?
     {
-        settings::show(&main)?;
+        settings::show(&main, &store)?;
         hide_welcome()?;
         return pairing::hide();
+    }
+    if pairing::reopen_pending_name()? {
+        return hide_welcome();
     }
     show_welcome().and_then(|()| pairing::hide())
 }
@@ -128,6 +126,7 @@ pub fn delivery_status() -> DeliveryStatus {
 }
 
 pub fn update_motion() {
+    settings::update_motion();
     pairing::update_motion();
     sms::refresh_layout(false);
     WELCOME.with_borrow(|welcome| {
@@ -224,12 +223,16 @@ fn registered_window(
             .window()
             .on_close_requested(|| CloseRequestResponse::HideWindow);
         let weak = window.as_weak();
-        let store = store.clone();
+        let pairing_store = store.clone();
         window.on_open_pairing(move || {
             let Some(window) = weak.upgrade() else { return };
-            let adding = store.receiver_credential().is_ok() && !pairing::enrolling();
-            let result =
-                pairing::open_from_main(window.get_chinese(), &store, connect.clone(), adding);
+            let adding = pairing_store.receiver_credential().is_ok() && !pairing::enrolling();
+            let result = pairing::open_from_main(
+                window.get_chinese(),
+                &pairing_store,
+                connect.clone(),
+                adding,
+            );
             match result {
                 Ok(pairing) if pairing.window().is_visible() => {
                     let _ = window.hide();
@@ -239,9 +242,10 @@ fn registered_window(
             }
         });
         let weak = window.as_weak();
+        let store = store.clone();
         window.on_open_settings(move || {
             if let Some(main) = weak.upgrade()
-                && let Err(error) = settings::show(&main)
+                && let Err(error) = settings::show(&main, &store)
             {
                 eprintln!("Could not open Settings: {error}");
             }

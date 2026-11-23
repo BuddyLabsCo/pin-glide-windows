@@ -4,6 +4,11 @@ pub fn launch(explicit: bool) -> Result<(), Box<dyn std::error::Error>> {
     let Some(instance) = platform::Instance::claim(explicit)? else {
         return Ok(());
     };
+    if crate::test_environment::directory().is_some()
+        && std::env::var_os("PINGLIDE_TEST_REDUCED_MOTION").is_some()
+    {
+        platform::set_animation_preference_override(Some(false));
+    }
     ui::initialize_preferences();
     run(
         instance,

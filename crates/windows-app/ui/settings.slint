@@ -27,10 +27,12 @@ component SettingCard inherits Rectangle {
             spacing: 8px;
             Text {
                 text: root.label;
-                font-weight: 600;
+                font-weight: 550;
                 color: #25322e;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
+                min-width: 0px;
+                wrap: word-wrap;
             }
 
             @children
@@ -69,6 +71,19 @@ export component SettingsWindow inherits Window {
     default-font-family: "Microsoft YaHei UI";
     default-font-size: 14px;
     init => { Palette.color-scheme = ColorScheme.light; }
+
+    public function focus-page() {
+        page-focus.focus();
+    }
+
+    page-focus := FocusScope {
+        width: 0px;
+        height: 0px;
+    }
+
+    TouchArea {
+        clicked => { root.focus-page(); }
+    }
 
     VerticalLayout {
         padding: 20px;
@@ -132,7 +147,8 @@ export component SettingsWindow inherits Window {
 
                     Button {
                         text: root.chinese ? "修改" : "Change";
-                        width: 52px;
+                        width: root.chinese ? 52px : 64px;
+                        enabled: false;
                     }
 
                     Button {

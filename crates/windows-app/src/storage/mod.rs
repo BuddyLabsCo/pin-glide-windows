@@ -109,11 +109,7 @@ impl RegistrationStore {
 
     pub(crate) fn for_current_user() -> io::Result<Self> {
         #[cfg(windows)]
-        return Ok(Self::new(
-            windows::local_app_data()?
-                .join("Pin Glide")
-                .join("registration.json"),
-        ));
+        return Ok(Self::new(windows::app_data()?.join("registration.json")));
         #[cfg(not(windows))]
         Err(io::ErrorKind::Unsupported.into())
     }
@@ -320,6 +316,13 @@ impl RegistrationStore {
 }
 
 fn replace_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    stage_json(path, value)?
+        .persist(path)
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn stage_json(path: &Path, value: &impl Serialize) -> io::Result<tempfile::NamedTempFile> {
     let directory = path
         .parent()
         .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
@@ -327,8 +330,7 @@ fn replace_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
     let mut stage = tempfile::NamedTempFile::new_in(directory)?;
     serde_json::to_writer(stage.as_file_mut(), value).map_err(io::Error::from)?;
     stage.as_file().sync_all()?;
-    stage.persist(path).map_err(|error| error.error)?;
-    Ok(())
+    Ok(stage)
 }
 
 impl Registration {

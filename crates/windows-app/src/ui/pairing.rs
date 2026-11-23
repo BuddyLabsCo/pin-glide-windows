@@ -164,6 +164,10 @@ pub(super) fn reopen_pending_name() -> Result<bool, PlatformError> {
     reopen_view(true)
 }
 
+pub(super) fn registration() -> Option<RegistrationStore> {
+    PAIRING.with_borrow(|pairing| pairing.as_ref()?.operation.registration().cloned())
+}
+
 fn reopen_view(pending_name_only: bool) -> Result<bool, PlatformError> {
     PAIRING.with_borrow_mut(|pairing| {
         let Some(view) = pairing else {

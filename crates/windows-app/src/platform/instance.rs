@@ -28,7 +28,13 @@ pub struct Instance {
 
 impl Instance {
     pub fn claim(explicit: bool) -> io::Result<Option<Self>> {
-        let unique_name = format!("BuddyLabsCo.PinGlide.{}", user_sid()?);
+        let mut unique_name = format!("BuddyLabsCo.PinGlide.{}", user_sid()?);
+        if let Some(directory) = crate::test_environment::directory()
+            && let Some(name) = crate::test_environment::name(&directory)
+        {
+            unique_name.push('.');
+            unique_name.push_str(name);
+        }
         let window_name = wide(&unique_name);
         let open_name = wide(&format!(r"Global\{unique_name}.Open"));
         let mutex_name = wide(&format!(r"Global\{unique_name}.Instance"));

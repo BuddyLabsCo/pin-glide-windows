@@ -1,8 +1,14 @@
-use std::{fs::File, io, io::BufReader, path::PathBuf};
+use std::{
+    fs::File,
+    io,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::MutexGuard,
+};
 
 use serde::{Deserialize, Serialize};
 
-use super::{WRITER, replace_json, windows};
+use super::{WRITER, stage_json, windows};
 
 #[cfg(test)]
 mod tests;
@@ -48,11 +54,7 @@ pub(crate) struct SettingsStore {
 
 impl SettingsStore {
     pub(crate) fn for_current_user() -> io::Result<Self> {
-        Ok(Self::new(
-            windows::local_app_data()?
-                .join("Pin Glide")
-                .join("settings.json"),
-        ))
+        Ok(Self::new(windows::app_data()?.join("settings.json")))
     }
 
     pub(crate) fn new(path: PathBuf) -> Self {
@@ -74,10 +76,31 @@ impl SettingsStore {
     }
 
     pub(crate) fn save(&self, settings: Settings) -> io::Result<()> {
-        let _writer = WRITER
+        self.stage(settings)?.commit()
+    }
+
+    pub(crate) fn stage(&self, settings: Settings) -> io::Result<StagedSettings<'_>> {
+        let writer = WRITER
             .lock()
             .map_err(|_| io::Error::other("settings writer is unavailable"))?;
         self.read()?;
-        replace_json(&self.path, &settings)
+        Ok(StagedSettings {
+            _writer: writer,
+            file: stage_json(&self.path, &settings)?,
+            path: &self.path,
+        })
+    }
+}
+
+pub(crate) struct StagedSettings<'a> {
+    file: tempfile::NamedTempFile,
+    path: &'a Path,
+    _writer: MutexGuard<'a, ()>,
+}
+
+impl StagedSettings<'_> {
+    pub(crate) fn commit(self) -> io::Result<()> {
+        self.file.persist(self.path).map_err(|error| error.error)?;
+        Ok(())
     }
 }
