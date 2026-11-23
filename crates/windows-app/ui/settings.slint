@@ -8,9 +8,12 @@ import {
 } from "std-widgets.slint";
 import { BackButton } from "back_button.slint";
 
+export enum PopupDurationError { None, Invalid, Save }
+
 component SettingCard inherits Rectangle {
     in property <string> label;
     in property <string> error;
+    in property <string> label-error;
     background: white;
     border-color: #deebe5;
     border-width: 1px;
@@ -25,14 +28,24 @@ component SettingCard inherits Rectangle {
             padding-top: 10px;
             padding-bottom: 10px;
             spacing: 8px;
-            Text {
-                text: root.label;
-                font-weight: 600;
-                color: #25322e;
-                vertical-alignment: center;
+            VerticalLayout {
                 horizontal-stretch: 1;
                 min-width: 0px;
-                wrap: word-wrap;
+                alignment: center;
+                Text {
+                    text: root.label;
+                    font-weight: 600;
+                    color: #25322e;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                if root.label-error != "": Text {
+                    text: root.label-error;
+                    color: #903d34;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
             }
 
             @children
@@ -54,12 +67,21 @@ export component SettingsWindow inherits Window {
     in property <bool> chinese;
     in property <string> language-error;
     in property <string> startup-error;
+    in property <PopupDurationError> popup-duration-error;
+    in-out property <string> popup-duration;
     in-out property <int> language-index;
     in-out property <bool> startup;
     callback back();
     callback choose-language(int);
     callback toggle-startup(bool);
+    callback apply-popup-duration(string);
     private property <string> heading: root.chinese ? "设置" : "Settings";
+    private property <string> duration-error-label:
+        root.popup-duration-error == PopupDurationError.Invalid
+        ? (root.chinese ? "请输入大于零的整数秒数。" : "Enter whole seconds greater than zero.")
+        : root.popup-duration-error == PopupDurationError.Save
+        ? (root.chinese ? "无法保存弹窗显示时长，请重试。" : "Could not save the duration. Try again.")
+        : "";
 
     title: root.chinese ? "鹊信 · 设置" : "Pin Glide · Settings";
     icon: @image-url("assets/app-icon.png");
@@ -161,11 +183,52 @@ export component SettingsWindow inherits Window {
 
                 SettingCard {
                     label: root.chinese ? "弹窗显示时长" : "Popup duration";
-                    LineEdit {
+                    label-error: root.duration-error-label;
+                    Rectangle {
                         width: 56px;
-                        text: "30";
-                        read-only: true;
-                        accessible-label: root.chinese ? "弹窗显示时长（秒）" : "Popup duration (seconds)";
+                        height: 32px;
+                        background: white;
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: root.duration-error-label != "" ? #903d34 : #e5e5e5;
+
+                        TouchArea {
+                            mouse-cursor: text;
+                            clicked => { duration.focus(); }
+                        }
+
+                        Rectangle {
+                            x: 11px;
+                            width: parent.width - 22px;
+                            height: parent.height;
+                            clip: true;
+
+                            duration := TextInput {
+                                private property <length> caret-x;
+                                x: min(0px, max(parent.width - self.width, parent.width - self.caret-x - self.text-cursor-width));
+                                width: max(parent.width, self.preferred-width + self.text-cursor-width);
+                                height: parent.height;
+                                text <=> root.popup-duration;
+                                color: #242424;
+                                vertical-alignment: center;
+                                single-line: true;
+                                input-method-hints: { capitalization: none, auto-correct: false, auto-complete: false };
+                                accessible-label: root.chinese ? "弹窗显示时长（秒）" : "Popup duration (seconds)";
+                                accessible-description: root.duration-error-label;
+                                cursor-position-changed(position) => { self.caret-x = position.x; }
+                                changed has-focus => {
+                                    if !self.has-focus {
+                                        root.apply-popup-duration(self.text);
+                                    }
+                                }
+                            }
+                        }
+
+                        if duration.has-focus: Rectangle {
+                            border-radius: parent.border-radius;
+                            border-width: 1px;
+                            border-color: #101010;
+                        }
                     }
 
                     Text {

@@ -146,14 +146,17 @@ async fn check_middle(samples: &[Sample]) {
 }
 
 async fn check_timeout(samples: &[Sample]) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    crate::ui::settings::save_test_popup_duration(&path, 2.try_into().unwrap());
     let bottom = show(&samples[0]).await;
-    pause(1500).await;
+    crate::ui::settings::save_test_popup_duration(&path, 5.try_into().unwrap());
     let middle = show(&samples[2]).await;
     let top = show(&samples[1]).await;
     advance(220);
     let before = bounds(&bottom);
     let area = STACK.with_borrow(|stack| stack.area.unwrap());
-    until(Duration::from_secs(31), || {
+    until(Duration::from_secs(3), || {
         STACK.with_borrow(|stack| {
             stack
                 .leaving
@@ -169,6 +172,7 @@ async fn check_timeout(samples: &[Sample]) {
     assert!(!bottom.window().is_visible());
     assert!(top.window().is_visible());
     assert_eq!(bounds(&middle).bottom, area.edges[3] - area.margin());
+    until(Duration::from_secs(5), || popup_count() == 0).await;
     close_all();
 }
 

@@ -110,6 +110,27 @@ pub(super) fn toggle(window: usize, label: &str) {
     .unwrap();
 }
 
+#[allow(dead_code)]
+pub(super) fn edit_value(window: usize, label: &str, value: Option<&str>) -> String {
+    use windows::{
+        Win32::UI::Accessibility::{IUIAutomationValuePattern, UIA_ValuePatternId},
+        core::BSTR,
+    };
+    with_automation(|automation| {
+        let element = named_element(automation, window, label, false)?.expect("visible input");
+        // SAFETY: the live fixture element and its value pattern are used on the COM thread.
+        unsafe {
+            let input =
+                element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)?;
+            if let Some(value) = value {
+                input.SetValue(&BSTR::from(value))?;
+            }
+            Ok(input.CurrentValue()?.to_string())
+        }
+    })
+    .unwrap()
+}
+
 fn named_element(
     automation: &windows::Win32::UI::Accessibility::IUIAutomation,
     handle: usize,

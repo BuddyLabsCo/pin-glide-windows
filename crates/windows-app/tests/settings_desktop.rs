@@ -35,11 +35,11 @@ use windows_sys::Win32::{
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow,
             SetThreadDpiAwarenessContext,
         },
-        Input::KeyboardAndMouse::{VK_DOWN, VK_ESCAPE, VK_RETURN},
+        Input::KeyboardAndMouse::{VK_DOWN, VK_ESCAPE, VK_RETURN, VK_TAB},
         WindowsAndMessaging::{
             EnumWindows, GetClassNameW, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
-            PostMessageW, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-            WM_RBUTTONUP,
+            PostMessageW, WM_APP, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MOUSEMOVE, WM_RBUTTONUP,
         },
     },
 };
@@ -190,6 +190,116 @@ fn startup_switch_settles_immediately_with_reduced_motion() {
     };
     assert_off_transition(false);
     assert_off_transition(true);
+}
+
+#[test]
+#[ignore = "requires an unlocked interactive Windows desktop"]
+fn popup_duration_saves_on_blur_and_preserves_the_saved_value_on_errors() {
+    use main_capture::edit_value;
+
+    // SAFETY: set the thread's DPI context before using fixture window coordinates.
+    unsafe {
+        assert!(!SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_null())
+    };
+    let fixture = Fixture::new();
+    seed_registration(&fixture.path().join("registration.json"), false);
+    let path = fixture.path().join("settings.json");
+    let child = AppProcess(fixture.command().spawn().unwrap());
+    let main = wait_for_window(child.0.id(), |window| {
+        window_size::client_size(window, 400, 576).is_some()
+    });
+    click(main, 360, 40);
+    let settings = wait_for_window(child.0.id(), |window| {
+        window_size::client_size(window, 420, 392).is_some()
+    });
+    // SAFETY: Windows returns the current user's UI language without side effects.
+    let system_chinese = unsafe { GetUserDefaultUILanguage() & 0x03ff == 4 };
+    if !system_chinese {
+        click(settings, 350, 90);
+        key(settings, VK_DOWN);
+        key(settings, VK_RETURN);
+    }
+    let label = "弹窗显示时长（秒）";
+    assert_label(settings, label);
+    let handle = settings as usize;
+    let edit = |value| {
+        click(settings, 330, 270);
+        edit_value(handle, label, Some(value));
+        wait_for(
+            || edit_value(handle, label, None) == value,
+            "duration draft",
+        );
+    };
+    assert_eq!(edit_value(handle, label, None), "30");
+    capture_client(settings, 420, 392, "settings-duration-default");
+    let previous = fs::read(&path).unwrap();
+    for (draft, state) in [
+        ("", "settings-duration-empty"),
+        ("-1", "settings-duration-negative"),
+        ("1.5", "settings-duration-fraction"),
+        ("0", "settings-duration-invalid"),
+        ("abc", "settings-duration-non-numeric"),
+    ] {
+        edit(draft);
+        key(settings, VK_TAB);
+        assert_label(settings, "请输入大于零的整数秒数。");
+        assert_eq!(edit_value(handle, label, None), draft);
+        assert_eq!(fs::read(&path).unwrap(), previous);
+        click(settings, 210, 350);
+        capture_client(settings, 420, 392, state);
+    }
+    edit(" 45 ");
+    assert_eq!(fs::read(&path).unwrap(), previous);
+    click(settings, 210, 350);
+    wait_for(
+        || read_settings(&path)["popup_duration_seconds"] == 45,
+        "duration save",
+    );
+    assert_eq!(edit_value(handle, label, None), "45");
+    capture_client(settings, 420, 392, "settings-duration-saved");
+
+    let locked = OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&path)
+        .unwrap();
+    edit("60");
+    click(settings, 210, 350);
+    assert_label(settings, "无法保存弹窗显示时长，请重试。");
+    assert_eq!(edit_value(handle, label, None), "45");
+    assert_eq!(read_settings(&path)["popup_duration_seconds"], 45);
+    capture_client(settings, 420, 392, "settings-duration-save-failed");
+    drop(locked);
+    edit("60");
+    click(settings, 35, 36);
+    wait_for(|| visible(main), "Back must show Main");
+    wait_for(
+        || read_settings(&path)["popup_duration_seconds"] == 60,
+        "duration retry",
+    );
+    click(main, 360, 40);
+    wait_for(|| visible(settings), "Main must reopen Settings");
+    edit("90");
+    post(settings, WM_CLOSE, 0, 0);
+    wait_for(|| !visible(settings), "native Close must hide Settings");
+    wait_for(
+        || read_settings(&path)["popup_duration_seconds"] == 90,
+        "native Close must save",
+    );
+    drop(child);
+
+    let restarted = AppProcess(fixture.command().spawn().unwrap());
+    let main = wait_for_window(restarted.0.id(), |window| {
+        window_size::client_size(window, 400, 576).is_some()
+    });
+    click(main, 360, 40);
+    let settings = wait_for_window(restarted.0.id(), |window| {
+        window_size::client_size(window, 420, 392).is_some()
+    });
+    assert_label(settings, label);
+    assert_eq!(edit_value(settings as usize, label, None), "90");
+    drop(restarted);
+    fixture.verify_system_settings();
 }
 
 fn assert_off_transition(reduced: bool) {

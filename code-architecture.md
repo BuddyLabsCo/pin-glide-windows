@@ -92,7 +92,9 @@ within 500 lines.
   formats and leave unreadable or newer unsupported files intact.
 - Store interface language and launch-at-login preferences in
   `Pin Glide/settings.json`. Version 1 defaults to following the Windows UI
-  language and enabling launch at login. Use the per-user Windows Run entry
+  language and enabling launch at login. Version 2 adds the popup duration
+  in positive whole seconds, defaulting to 30. Each new SMS popup takes the
+  saved duration when its timer starts. Use the per-user Windows Run entry
   for `--startup` and show its effective state in Settings. Respect Windows
   Startup Apps overrides. Stage and flush the settings file before changing
   the Run entry. Restore the previous entry if replacement fails and show

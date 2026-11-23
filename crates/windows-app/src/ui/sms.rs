@@ -394,9 +394,8 @@ async fn show_sms_for_session(
         CloseRequestResponse::KeepWindowShown
     });
     let timer = Timer::default();
-    timer.start(TimerMode::SingleShot, Duration::from_secs(30), move || {
-        dismiss(id)
-    });
+    let duration = Duration::from_secs(super::settings::popup_duration_seconds().get().into());
+    timer.start(TimerMode::SingleShot, duration, move || dismiss(id));
     let animate = platform::animations_enabled();
     let visible = STACK.with_borrow_mut(|stack| {
         if let Some((_, previous)) = stack.visible.last_key_value()

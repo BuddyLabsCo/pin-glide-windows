@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io,
     io::BufReader,
+    num::NonZeroU32,
     path::{Path, PathBuf},
     sync::MutexGuard,
 };
@@ -13,7 +14,7 @@ use super::{WRITER, stage_json, windows};
 #[cfg(test)]
 mod tests;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,10 +33,16 @@ pub(crate) struct Settings {
     pub(crate) language: Language,
     #[serde(default = "default_launch_at_login")]
     pub(crate) launch_at_login: bool,
+    #[serde(default = "default_popup_duration_seconds")]
+    pub(crate) popup_duration_seconds: NonZeroU32,
 }
 
 fn default_launch_at_login() -> bool {
     true
+}
+
+pub(crate) const fn default_popup_duration_seconds() -> NonZeroU32 {
+    NonZeroU32::new(30).unwrap()
 }
 
 impl Default for Settings {
@@ -44,6 +51,7 @@ impl Default for Settings {
             version: VERSION,
             language: Language::System,
             launch_at_login: default_launch_at_login(),
+            popup_duration_seconds: default_popup_duration_seconds(),
         }
     }
 }
@@ -67,11 +75,12 @@ impl SettingsStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let settings: Settings = serde_json::from_reader(BufReader::new(file))
+        let mut settings: Settings = serde_json::from_reader(BufReader::new(file))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if settings.version != VERSION {
+        if !matches!(settings.version, 1 | VERSION) {
             return Err(io::ErrorKind::InvalidData.into());
         }
+        settings.version = VERSION;
         Ok(Some(settings))
     }
 

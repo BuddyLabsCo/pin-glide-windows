@@ -12,8 +12,10 @@ fn settings_read_defaults_and_migrate_supported_partial_files_on_save() {
     let mut settings = store.read().unwrap().unwrap();
     assert_eq!(settings.language, Language::System);
     assert!(settings.launch_at_login);
+    assert_eq!(settings.popup_duration_seconds.get(), 30);
     settings.language = Language::Chinese;
     settings.launch_at_login = false;
+    settings.popup_duration_seconds = 45.try_into().unwrap();
     store.save(settings).unwrap();
 
     let reopened = SettingsStore::new(path).read().unwrap().unwrap();
@@ -27,8 +29,9 @@ fn invalid_or_future_settings_survive_every_save_attempt() {
     let store = SettingsStore::new(path.clone());
     for bytes in [
         b"broken JSON".as_slice(),
-        br#"{"version":2,"language":"english"}"#,
+        br#"{"version":3,"language":"english"}"#,
         br#"{"version":1,"language":"unknown"}"#,
+        br#"{"version":2,"popup_duration_seconds":0}"#,
     ] {
         fs::write(&path, bytes).unwrap();
         assert_eq!(store.read().unwrap_err().kind(), io::ErrorKind::InvalidData);
