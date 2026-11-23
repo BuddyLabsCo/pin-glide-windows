@@ -203,6 +203,9 @@ pub(in crate::service) fn progress_channel() -> (ProgressUpdates, watch::Receive
             notify: || {},
             inbox: Default::default(),
             notify_sms: drop,
+            delivery_capacity: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                crate::service::delivery::MAX_PENDING_DELIVERIES,
+            )),
         },
         progress,
     )

@@ -19,6 +19,10 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_app::{PairingStage, PairingWindow, service::PairingOperation, ui};
+#[path = "support/add_sender_desktop.rs"]
+mod add_sender_desktop;
+#[path = "support/add_sender_service.rs"]
+mod add_sender_service;
 #[path = "support/completion_frames.rs"]
 mod completion_frames;
 #[path = "support/main_capture.rs"]
@@ -64,14 +68,7 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
     let reduced = mode == "reduced";
     let duplicate = mode == "duplicate";
     let saved_name_evidence = mode == "name-saved";
-    let mut builder = EventLoop::with_user_event();
-    builder.with_any_thread(true);
-    slint::BackendSelector::new()
-        .backend_name("winit".into())
-        .renderer_name("software".into())
-        .with_winit_event_loop_builder(builder)
-        .select()
-        .unwrap();
+    select_backend();
     if mode == "motion" {
         let evidence = std::env::var_os("PIN_GLIDE_PAIRING_EVIDENCE");
         completion_frames::verify_transition(evidence.as_deref().map(Path::new));
@@ -222,7 +219,7 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
                 if !window.get_motion_enabled() {
                     assert!(previous.as_slice() == current.as_slice());
                     if let Some(path) = &evidence_path {
-                        capture(&window, path);
+                        capture(window.window(), path);
                     }
                     window.set_motion_enabled(true);
                     return;
@@ -236,7 +233,7 @@ fn pairing_window_tracks_claim_terminal_states_and_credential_readiness() {
         } else if let Some(path) = &evidence_path
             && !duplicate
         {
-            capture(&window, path);
+            capture(window.window(), path);
         }
         states.next();
         match step {
@@ -313,7 +310,7 @@ fn verify_naming(
         window.set_name_error("".into());
         if let Some(directory) = evidence {
             capture(
-                window,
+                window.window(),
                 &directory.join(format!("pair-done-input-{state}.ppm")),
             );
         }
@@ -323,7 +320,7 @@ fn verify_naming(
         assert_eq!(saved_name(store), "未命名设备");
         if let Some(directory) = evidence {
             capture(
-                window,
+                window.window(),
                 &directory.join(format!("pair-done-error-{state}.ppm")),
             );
         }
@@ -336,7 +333,7 @@ fn verify_naming(
         assert_eq!(saved_name(store), "未命名设备");
         if let Some(directory) = evidence {
             capture(
-                window,
+                window.window(),
                 &directory.join("pair-done-error-invalid-character.ppm"),
             );
         }
@@ -349,8 +346,8 @@ fn verify_naming(
     }
 }
 
-fn capture(window: &PairingWindow, path: &Path) {
-    let pixels = window.window().take_snapshot().unwrap();
+fn capture(window: &slint::Window, path: &Path) {
+    let pixels = window.take_snapshot().unwrap();
     let mut file = fs::File::create(path).unwrap();
     write!(file, "P6\n{} {}\n255\n", pixels.width(), pixels.height()).unwrap();
     let rgb: Vec<_> = pixels
@@ -424,6 +421,17 @@ fn issue_sessions(
             }
         }
     })
+}
+
+fn select_backend() {
+    let mut builder = EventLoop::with_user_event();
+    builder.with_any_thread(true);
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("software".into())
+        .with_winit_event_loop_builder(builder)
+        .select()
+        .unwrap();
 }
 
 fn issue_credential(

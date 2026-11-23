@@ -48,40 +48,57 @@ pub fn open_pairing(
     create_view(chinese, start, true, false)
 }
 
-pub(super) fn open_add_sender(
+pub fn visible_pairing() -> Option<PairingWindow> {
+    PAIRING.with_borrow(|view| {
+        view.as_ref()
+            .filter(|view| view.window.window().is_visible())
+            .map(|view| view.window.clone_strong())
+    })
+}
+
+pub(super) fn enrolling() -> bool {
+    PAIRING.with_borrow(|view| {
+        view.as_ref().is_some_and(|view| {
+            !view.window.get_adding_device()
+                && !matches!(view.operation.current(), PairingProgress::Completed { .. })
+        })
+    })
+}
+
+pub(super) fn open_from_main(
     chinese: bool,
     store: &RegistrationStore,
-) -> Result<(), PlatformError> {
+    connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
+    adding: bool,
+) -> Result<PairingWindow, PlatformError> {
     let resumable = PAIRING.with_borrow_mut(|view| {
         view.as_mut().is_some_and(|view| {
             view.render();
-            !view.named
+            view.window.get_adding_device() == adding && !view.named
         })
     });
     if resumable && reopen()? {
-        return Ok(());
-    }
-    if let Some(view) = PAIRING.take()
-        && !view.window.get_adding_device()
-    {
-        super::REGISTERED.set(Some(view.operation));
+        return Ok(PAIRING.with_borrow(|view| view.as_ref().unwrap().window.clone_strong()));
     }
     let store = store.clone();
     create_view(
         chinese,
-        move |notify, _| {
+        move |notify, start| {
             PairingOperation::spawn(
-                operation_service(),
+                connect.clone(),
                 notify,
                 Some(store.clone()),
-                PairingStart::AddSender,
-                drop,
+                if adding {
+                    PairingStart::AddSender
+                } else {
+                    start
+                },
+                if adding { drop } else { super::sms::receive },
             )
         },
         true,
-        true,
+        adding,
     )
-    .map(drop)
 }
 
 fn create_view(
@@ -112,7 +129,7 @@ fn create_view(
         window.show()?;
         super::focus(window.window());
     }
-    PAIRING.with_borrow_mut(|pairing| {
+    let previous = PAIRING.with_borrow_mut(|pairing| {
         let mut view = View {
             window: window.clone_strong(),
             operation: start(notify_progress, PairingStart::ResumePending),
@@ -121,8 +138,16 @@ fn create_view(
             named: false,
         };
         view.render();
-        *pairing = Some(view);
+        pairing.replace(view)
     });
+    if let Some(previous) = previous {
+        let _ = previous.window.hide();
+        if adding_device && !previous.window.get_adding_device() {
+            super::replace_registered(Some(previous.operation));
+        } else {
+            previous.operation.shutdown();
+        }
+    }
     Ok(window)
 }
 
@@ -210,6 +235,11 @@ pub(super) fn notify_progress() {
         PAIRING.with_borrow_mut(|pairing| {
             if let Some(view) = pairing {
                 view.render();
+                if !view.window.get_adding_device()
+                    && view.window.get_stage() == PairingStage::Completed
+                {
+                    super::replace_registered(None);
+                }
             }
         });
         super::update_delivery_status();

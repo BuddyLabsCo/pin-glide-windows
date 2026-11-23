@@ -6,7 +6,7 @@ use std::{
 use serde_json::{Value, json};
 use tempfile::tempdir;
 #[path = "../../tests/support/dpapi.rs"]
-pub(crate) mod dpapi;
+mod dpapi;
 
 use super::{PairingReference, RegistrationStore};
 

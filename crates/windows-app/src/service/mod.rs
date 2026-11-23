@@ -39,7 +39,7 @@ pub struct Service {
     config: Configuration,
 }
 
-pub struct NewReceiverSession {
+pub struct PairingSession {
     mode: pairing_session_view::Mode,
     pub session_id: String,
     pub receiver_id: String,
@@ -113,7 +113,7 @@ impl Service {
         })
     }
 
-    pub async fn new_receiver(&self) -> Result<NewReceiverSession, CreateError> {
+    pub async fn new_receiver(&self) -> Result<PairingSession, CreateError> {
         self.create_session(
             &self.config,
             CreateRequest::new(create_request::Mode::NewReceiver),
@@ -126,7 +126,7 @@ impl Service {
         &self,
         receiver_id: String,
         token: &str,
-    ) -> Result<NewReceiverSession, CreateError> {
+    ) -> Result<PairingSession, CreateError> {
         let mut config = self.config.clone();
         config.bearer_access_token = Some(token.to_owned());
         let mut request = CreateRequest::new(create_request::Mode::AddSender);
@@ -140,7 +140,7 @@ impl Service {
         config: &Configuration,
         request: CreateRequest,
         mode: pairing_session_view::Mode,
-    ) -> Result<NewReceiverSession, CreateError> {
+    ) -> Result<PairingSession, CreateError> {
         let receiver_id = request.receiver_id.clone();
         let response = post_pairing_sessions(config, request)
             .await
@@ -163,7 +163,7 @@ impl Service {
             return Err(CreateError::InvalidResponse);
         }
 
-        Ok(NewReceiverSession {
+        Ok(PairingSession {
             mode,
             session_id: session.session_id,
             receiver_id: session.receiver_id,
@@ -183,7 +183,7 @@ impl Service {
         })
     }
 
-    pub async fn cancel_receiver(&self, session: &NewReceiverSession) -> bool {
+    pub async fn cancel_session(&self, session: &PairingSession) -> bool {
         let mut config = self.config.clone();
         config.bearer_access_token = Some(session.pairing_token.clone());
         matches!(
@@ -194,7 +194,7 @@ impl Service {
 
     async fn confirm_receiver(
         &self,
-        session: &NewReceiverSession,
+        session: &PairingSession,
     ) -> Result<pairing_snapshot::Snapshot, CompletionError> {
         let mut config = self.config.clone();
         config.bearer_access_token = Some(session.pairing_token.clone());

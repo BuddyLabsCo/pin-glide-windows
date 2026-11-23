@@ -15,14 +15,14 @@ use tokio_tungstenite::tungstenite::{
 };
 use windows_app::service::Service;
 
-pub(crate) mod socket;
+mod socket;
 use socket::accept_socket;
 
 #[path = "sender.rs"]
 mod sender;
 pub use sender::{decode_pixels, sender_handshake};
 #[path = "tls.rs"]
-pub(crate) mod tls;
+mod tls;
 pub use tls::acceptor;
 
 pub type Connection = TlsStream<TcpStream>;

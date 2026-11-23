@@ -15,7 +15,7 @@ use tokio_tungstenite::{
 };
 
 use super::{
-    NewReceiverSession, Service, SessionState, pairing_session_view, pairing_snapshot::Snapshot,
+    PairingSession, Service, SessionState, pairing_session_view, pairing_snapshot::Snapshot,
 };
 
 const PROTOCOL: &str = "pin-glide.v1";
@@ -51,7 +51,7 @@ pub(super) enum PairingEventError {
 impl Service {
     pub(super) async fn pairing_events(
         &self,
-        session: &NewReceiverSession,
+        session: &PairingSession,
     ) -> Result<PairingEvents, PairingEventError> {
         let session_id = pin_glide_http::apis::urlencode(&session.session_id);
         let socket = self

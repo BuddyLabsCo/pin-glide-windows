@@ -66,7 +66,10 @@ within 500 lines.
   triggers an immediate replacement attempt. Keep control frames responsive
   during Receipt writes and authentication. Reserve space in the ordered
   authentication queue before writing a Receipt. Keep that queue across
-  socket replacements. The tray tooltip shows Ready only while connected
+  socket replacements. Hold deliveries for the in-flight add-Sender
+  association in the same bounded queue until its key is promoted or the
+  attempt ends. Continue authenticating deliveries from active Pairings.
+  The tray tooltip shows Ready only while connected
   with at least one active Pairing.
   Core `delivery/` selects the key by Pairing ID and orders OTPs by `receivedAt`
   with arrival time as fallback and arrival order as the tiebreaker. An empty

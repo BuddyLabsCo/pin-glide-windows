@@ -17,7 +17,7 @@ use super::*;
 async fn attempts_the_receipt_before_handing_off_authentication() {
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     for fail in [false, true] {
-        let (send, mut deliveries) = mpsc::channel::<IncomingDelivery>(1);
+        let (send, mut deliveries) = mpsc::channel::<QueuedDelivery>(1);
         let (attempted, receipt_attempt) = tokio::sync::oneshot::channel();
         let socket = ReceiptSocket {
             attempted: Some(attempted),
@@ -31,7 +31,7 @@ async fn attempts_the_receipt_before_handing_off_authentication() {
             let mut receipt_attempt = receipt_attempt;
             let delivery = deliveries.recv().await.unwrap();
             assert_eq!(receipt_attempt.try_recv().unwrap(), "message");
-            assert!(delivery.text.contains("\"messageId\":\"message\""));
+            assert!(delivery.incoming.text.contains("\"messageId\":\"message\""));
         };
         timeout(WRITE_LIMIT, async {
             if fail {
@@ -157,8 +157,9 @@ async fn stalled_authentication_defers_receipts_without_blocking_pong() {
             );
             for sequence in 0..burst {
                 let delivery = deliveries.recv().await.unwrap();
-                let header: EventHeader = serde_json::from_str(&delivery.text).unwrap();
+                let header: EventHeader = serde_json::from_str(&delivery.incoming.text).unwrap();
                 assert_eq!(header.message_id.unwrap(), sequence.to_string());
+                drop(delivery);
                 if sequence + MAX_PENDING_DELIVERIES < burst {
                     let next = sequence + MAX_PENDING_DELIVERIES;
                     assert_receipt(peer.next().await.unwrap().unwrap(), &next.to_string());

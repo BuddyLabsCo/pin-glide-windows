@@ -1,0 +1,59 @@
+export component SenderScrollbar inherits Rectangle {
+    in property <length> content-height;
+    in-out property <length> offset;
+    private property <length> range: max(0px, root.content-height - root.height);
+    private property <length> track: max(0px, root.height - 24px);
+    private property <length> thumb-height: root.track * root.height / max(1px, root.content-height);
+    width: 14px;
+    in property <string> label;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: "\{round(-root.offset / 1px)}";
+    accessible-value-minimum: 0;
+    accessible-value-maximum: root.range / 1px;
+    accessible-value-step: 10;
+    accessible-action-increment => { root.offset = max(-root.range, root.offset - 10px); }
+    accessible-action-decrement => { root.offset = min(0px, root.offset + 10px); }
+
+    Rectangle {
+        x: 4px;
+        y: 12px + (root.track - root.thumb-height) * (-root.offset / max(1px, root.range));
+        width: 6px;
+        height: root.thumb-height;
+        border-radius: 3px;
+        background: #8da99e;
+        TouchArea {
+            property <length> drag-start;
+            property <length> start-offset;
+            mouse-cursor: pointer;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    self.drag-start = self.mouse-y + parent.y;
+                    self.start-offset = root.offset;
+                }
+            }
+            moved => {
+                if self.pressed {
+                    root.offset = clamp(self.start-offset - (self.mouse-y + parent.y - self.drag-start)
+                        * (root.range / max(1px, root.track - root.thumb-height)), -root.range, 0px);
+                }
+            }
+        }
+    }
+
+    for down in [false, true]: Rectangle {
+        y: down ? parent.height - 12px : 0px;
+        height: 12px;
+        Path {
+            width: 6px;
+            height: 5px;
+            commands: down ? "M 0 0 L 6 0 L 3 5 Z" : "M 0 5 L 6 5 L 3 0 Z";
+            fill: #8da99e;
+        }
+
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { root.offset = clamp(root.offset + (down ? -10px : 10px), -root.range, 0px); }
+        }
+    }
+}

@@ -1,9 +1,9 @@
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
 use pin_glide_wss::{Delivery, Receipt};
 use receiver_core::delivery::{Arrival, Envelope, Sms};
 use serde::Deserialize;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, mpsc, watch};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
 
 use super::{
@@ -31,7 +31,7 @@ pub(crate) struct ReceivedSms {
 
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 const HEARTBEAT_LIMIT: Duration = Duration::from_secs(20);
-const MAX_PENDING_DELIVERIES: usize = 32;
+pub(super) const MAX_PENDING_DELIVERIES: usize = 32;
 
 #[derive(Debug)]
 pub(super) struct ConnectionLoss {
@@ -44,6 +44,11 @@ pub(super) struct IncomingDelivery {
     arrival: Arrival,
     #[cfg(windows)]
     epoch: Option<u64>,
+}
+
+pub(super) struct QueuedDelivery {
+    incoming: IncomingDelivery,
+    _capacity: OwnedSemaphorePermit,
 }
 
 #[derive(Deserialize)]
@@ -106,7 +111,7 @@ impl DeliveryConnection {
         updates: &ProgressUpdates,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
-        authenticate: &mpsc::Sender<IncomingDelivery>,
+        authenticate: &mpsc::Sender<QueuedDelivery>,
     ) -> ConnectionLoss {
         Transport::new(self.socket, updates)
             .run(state, order, authenticate)
@@ -118,25 +123,33 @@ pub(super) fn start_processing(
     store: &RegistrationStore,
     updates: &ProgressUpdates,
     receiver_id: String,
-) -> mpsc::Sender<IncomingDelivery> {
-    let (send, mut receive) = mpsc::channel::<IncomingDelivery>(MAX_PENDING_DELIVERIES);
+) -> mpsc::Sender<QueuedDelivery> {
+    let (send, mut receive) = mpsc::channel::<QueuedDelivery>(MAX_PENDING_DELIVERIES);
     let store = store.clone();
     let inbox = updates.inbox.clone();
     let notify = updates.notify_sms;
+    let mut pending = store.watch_pending_adds();
+    let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        while let Some(incoming) = receive.blocking_recv() {
-            let result = match serde_json::from_str::<Delivery>(&incoming.text) {
-                Ok(delivery) if delivery.receiver_id == receiver_id => {
-                    authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
-                }
-                Ok(_) => Err(DeliveryRejection::ReceiverMismatch),
-                Err(_) => Err(DeliveryRejection::InvalidEnvelope),
-            };
+        let mut held = VecDeque::new();
+        let pending_add = |delivery: &Delivery, pending: &_| {
+            store.is_pending_add(
+                pending,
+                &receiver_id,
+                &delivery.sender_id,
+                &delivery.pairing_id,
+            )
+        };
+        let process = |queued: QueuedDelivery, delivery: Result<Delivery, DeliveryRejection>| {
+            let incoming = queued.incoming;
+            let result = delivery.and_then(|delivery| {
+                authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
+            });
             match result {
                 Ok((sms, sender_name)) => {
                     #[cfg(windows)]
                     let Some(epoch) = incoming.epoch else {
-                        continue;
+                        return;
                     };
                     notify(ReceivedSms {
                         sms,
@@ -149,7 +162,38 @@ pub(super) fn start_processing(
                     let _ = store.record_delivery_rejection(category);
                 }
             }
-        }
+        };
+        runtime.block_on(async {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = pending.changed(), if !held.is_empty() => {
+                        let mut remaining = VecDeque::new();
+                        while let Some((queued, delivery)) = held.pop_front() {
+                            if pending_add(&delivery, &pending.borrow()) {
+                                remaining.push_back((queued, delivery));
+                            } else {
+                                process(queued, Ok(delivery));
+                            }
+                        }
+                        held = remaining;
+                    }
+                    queued = receive.recv() => {
+                        let Some(queued) = queued else { break };
+                        match serde_json::from_str::<Delivery>(&queued.incoming.text) {
+                            Ok(delivery) if delivery.receiver_id != receiver_id => {
+                                process(queued, Err(DeliveryRejection::ReceiverMismatch));
+                            }
+                            Ok(delivery) if pending_add(&delivery, &pending.borrow()) => {
+                                held.push_back((queued, delivery));
+                            }
+                            Ok(delivery) => process(queued, Ok(delivery)),
+                            Err(_) => process(queued, Err(DeliveryRejection::InvalidEnvelope)),
+                        }
+                    }
+                }
+            }
+        });
     });
     send
 }

@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::{
 
 use super::{
     ConnectionLoss, DeliveryStatus, HEARTBEAT_LIMIT, IncomingDelivery, MAX_PENDING_DELIVERIES,
-    ProgressUpdates, WRITE_LIMIT, receipt,
+    ProgressUpdates, QueuedDelivery, WRITE_LIMIT, receipt,
 };
 use crate::service::reconnect::Connectivity;
 
@@ -54,7 +54,7 @@ where
         &mut self,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
-        authenticate: &mpsc::Sender<IncomingDelivery>,
+        authenticate: &mpsc::Sender<QueuedDelivery>,
     ) -> ConnectionLoss {
         let status = self.drive(state, order, authenticate).await;
         let resume_failed = self.probe.is_some();
@@ -78,7 +78,7 @@ where
         &mut self,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
-        authenticate: &mpsc::Sender<IncomingDelivery>,
+        authenticate: &mpsc::Sender<QueuedDelivery>,
     ) -> DeliveryStatus {
         let mut resumes = state.borrow().resumes;
         let mut capacity = None;
@@ -106,10 +106,14 @@ where
             let event = tokio::select! {
                 biased;
                 _ = state.wait_for(|power| power.suspended || power.resumes != resumes) => continue,
-                permit = authenticate.reserve(), if capacity.is_none() && self.receipt_pending() => {
+                permit = async {
+                    let queue = authenticate.reserve().await.ok()?;
+                    let delivery = self.updates.delivery_capacity.clone().acquire_owned().await.ok()?;
+                    Some((queue, delivery))
+                }, if capacity.is_none() && self.receipt_pending() => {
                     match permit {
-                        Ok(permit) => capacity = Some(permit),
-                        Err(_) => return DeliveryStatus::Disconnected,
+                        Some(permit) => capacity = Some(permit),
+                        None => return DeliveryStatus::Disconnected,
                     }
                     continue;
                 }
@@ -119,10 +123,11 @@ where
                 Ok(SocketEvent::Incoming(frame)) => self.handle_frame(frame, order).await,
                 Ok(SocketEvent::Outgoing(result, incoming)) => {
                     if let Some(incoming) = incoming {
-                        capacity
-                            .take()
-                            .expect("Receipt requires capacity")
-                            .send(incoming);
+                        let (queue, capacity) = capacity.take().expect("Receipt requires capacity");
+                        queue.send(QueuedDelivery {
+                            incoming,
+                            _capacity: capacity,
+                        });
                     }
                     result.map_err(|_| DeliveryStatus::Disconnected)
                 }

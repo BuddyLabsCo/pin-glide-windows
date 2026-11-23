@@ -13,12 +13,13 @@ mod diagnostics;
 pub(crate) use diagnostics::DeliveryRejection;
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
+mod pending_add;
 mod sender_names;
 #[cfg(windows)]
 pub(crate) use sender_names::SenderNameError;
 
 #[cfg(all(test, windows))]
-pub(crate) mod tests;
+mod tests;
 #[cfg(windows)]
 mod windows;
 

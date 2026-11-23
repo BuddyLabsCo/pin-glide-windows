@@ -11,7 +11,7 @@ use super::{
     watch_session,
 };
 use crate::service::{
-    CreateError, DeliveryStatus, NewReceiverSession, enrollment::finish_enrollment,
+    CreateError, DeliveryStatus, PairingSession, enrollment::finish_enrollment,
     pairing_session_view, reconnect::Reconnect,
 };
 
@@ -94,7 +94,7 @@ async fn drive_session(
     now: impl FnOnce() -> SystemTime,
     material: PairingMaterial,
     store: Option<&RegistrationStore>,
-    create: impl Future<Output = Result<NewReceiverSession, CreateError>>,
+    create: impl Future<Output = Result<PairingSession, CreateError>>,
 ) {
     let created = tokio::select! {
         result = create => result,
@@ -107,6 +107,9 @@ async fn drive_session(
         updates.publish(PairingProgress::Finished(PairingOutcome::CreateFailed));
         return;
     };
+    let pending_add = store
+        .filter(|_| session.mode == pairing_session_view::Mode::AddSender)
+        .map(|store| store.pending_add_guard(&session.session_id));
     let lifetime = pairing_lifetime(
         now(),
         session.expires_at.into(),
@@ -132,6 +135,7 @@ async fn drive_session(
     {
         let completed = outcome == PairingOutcome::KeyConfirmed(SessionState::Completed);
         let result = store.finish_add_sender(&session.session_id, &session.receiver_id, completed);
+        drop(pending_add);
         if completed {
             if let Ok(Some(pairing_id)) = result {
                 updates.publish(PairingProgress::Completed { pairing_id });
@@ -147,6 +151,6 @@ async fn drive_session(
             PairingOutcome::CreateFailed | PairingOutcome::Failed
         )
     {
-        let _ = timeout(Duration::from_secs(2), service.cancel_receiver(&session)).await;
+        let _ = timeout(Duration::from_secs(2), service.cancel_session(&session)).await;
     }
 }

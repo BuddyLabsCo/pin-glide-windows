@@ -8,15 +8,15 @@ use std::{
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
-use super::{CreateError, NewReceiverSession, Service, SessionState, client_builder};
+use super::{CreateError, PairingSession, Service, SessionState, client_builder};
 
 const TEST_CA: &[u8] = include_bytes!("../../tests/fixtures/service/ca.pem");
 
-#[path = "../../tests/support/pairing.rs"]
-pub(crate) mod pairing_fixture;
-pub(crate) use pairing_fixture::socket;
+#[path = "../../tests/support/socket.rs"]
+pub(crate) mod socket;
 
-use pairing_fixture::tls;
+#[path = "../../tests/support/tls.rs"]
+mod tls;
 pub(super) use tls::accept_loopback_with_timeout;
 pub(crate) use tls::{accept_loopback, acceptor, listen};
 
@@ -115,7 +115,7 @@ async fn creates_a_receiver_anonymously_and_decodes_the_session() {
 #[tokio::test]
 async fn cancels_the_receiver_session_using_its_restricted_token() {
     let deadline = time::OffsetDateTime::now_utc() + Duration::from_secs(300);
-    let session = NewReceiverSession {
+    let session = PairingSession {
         mode: super::pairing_session_view::Mode::NewReceiver,
         session_id: "session-1".into(),
         receiver_id: "receiver-1".into(),
@@ -160,7 +160,7 @@ async fn cancels_the_receiver_session_using_its_restricted_token() {
             .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
             .unwrap();
     });
-    assert!(service.cancel_receiver(&session).await);
+    assert!(service.cancel_session(&session).await);
     server.join().unwrap();
 }
 

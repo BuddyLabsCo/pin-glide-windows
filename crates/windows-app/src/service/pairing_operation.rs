@@ -12,13 +12,13 @@ use receiver_core::{
 };
 use reqwest::StatusCode;
 use tokio::{
-    sync::{oneshot, watch},
+    sync::{Semaphore, oneshot, watch},
     time::{Instant, sleep_until, timeout},
 };
 use zeroize::Zeroizing;
 
 use super::{
-    CompletionError, DeliveryStatus, NewReceiverSession, Service, SessionState,
+    CompletionError, DeliveryStatus, PairingSession, Service, SessionState,
     delivery::ReceivedSms,
     pairing_events::{PairingEvent, PairingEventError, PairingEvents},
     pairing_session_view,
@@ -65,6 +65,7 @@ pub(super) struct ProgressUpdates {
     notify: fn(),
     pub(super) inbox: Arc<Mutex<Inbox>>,
     pub(super) notify_sms: fn(ReceivedSms),
+    pub(super) delivery_capacity: Arc<Semaphore>,
 }
 
 impl ProgressUpdates {
@@ -157,6 +158,7 @@ impl PairingOperation {
             notify,
             inbox: Arc::clone(&inbox),
             notify_sms,
+            delivery_capacity: Arc::new(Semaphore::new(super::delivery::MAX_PENDING_DELIVERIES)),
         };
         let window_store = store.clone();
         let worker = thread::Builder::new()
@@ -239,7 +241,7 @@ impl PairingOperation {
 
 async fn watch_session(
     service: &Service,
-    session: &NewReceiverSession,
+    session: &PairingSession,
     material: &PairingMaterial,
     deadline: Instant,
     updates: &ProgressUpdates,
@@ -304,7 +306,7 @@ async fn watch_session(
 
 async fn wait_for_claim(
     events: &mut PairingEvents,
-    session: &NewReceiverSession,
+    session: &PairingSession,
     material: &PairingMaterial,
     deadline: Instant,
     updates: &ProgressUpdates,
@@ -356,7 +358,7 @@ async fn next_relay(events: &mut PairingEvents, claim: &Claim) -> Result<String,
 
 async fn verify_and_save(
     events: &mut PairingEvents,
-    session: &NewReceiverSession,
+    session: &PairingSession,
     claim: &Claim,
     material: &PairingMaterial,
     store: Option<&RegistrationStore>,
@@ -378,13 +380,14 @@ async fn verify_and_save(
         sender_id: &claim.sender_id,
     };
     let store = store.ok_or(PairingOutcome::Failed)?;
+    let adding_sender = session.mode == pairing_session_view::Mode::AddSender;
     store
-        .commit_provisional(
-            &reference,
-            key.as_bytes(),
-            session.mode == pairing_session_view::Mode::AddSender,
-        )
-        .map_err(|_| PairingOutcome::Failed)
+        .commit_provisional(&reference, key.as_bytes(), adding_sender)
+        .map_err(|_| PairingOutcome::Failed)?;
+    if adding_sender {
+        store.track_pending_add(&reference);
+    }
+    Ok(())
 }
 
 async fn wait_for_confirmation(

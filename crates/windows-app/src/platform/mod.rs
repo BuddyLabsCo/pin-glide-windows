@@ -10,7 +10,7 @@ pub use instance::{ActivationListener, Instance};
 pub(crate) use popup::{new_popup, place_popup, popup_attributes, prepare_popup};
 pub(crate) use session::popup_epoch;
 pub use tray::Tray;
-pub(crate) use tray::set_delivery_status;
+pub(crate) use tray::{delivery_status, set_delivery_status};
 
 use std::io;
 
