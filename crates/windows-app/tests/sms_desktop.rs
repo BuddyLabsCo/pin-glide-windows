@@ -13,7 +13,8 @@ use slint::{
     winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle},
 };
 use windows_sys::Win32::{
-    Foundation::HWND,
+    Foundation::{HWND, RECT},
+    Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow},
     System::{
         DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard},
         Memory::{GlobalLock, GlobalSize, GlobalUnlock},
@@ -21,11 +22,15 @@ use windows_sys::Win32::{
     },
     UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
     UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        GWL_EXSTYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, WS_EX_NOACTIVATE,
+        WS_EX_TOOLWINDOW,
     },
 };
 
-use windows_app::{select_backend, ui::show_sms};
+use windows_app::{select_backend, set_animation_preference_override, ui::show_sms};
+
+#[path = "support/sms_motion.rs"]
+mod sms_motion;
 
 const SENDER_NAME: &str = "我的设备";
 
@@ -38,13 +43,15 @@ struct Sample {
 
 #[test]
 #[ignore = "requires an unlocked interactive Windows desktop and writes a synthetic OTP to the clipboard"]
-fn renders_and_dismisses_the_five_approved_sms_states() {
+fn renders_stacks_and_dismisses_approved_sms_popups() {
     // SAFETY: set DPI awareness before creating any window in this test process.
     let enabled =
         unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     assert_ne!(enabled, 0);
     select_backend().unwrap();
+    set_animation_preference_override(Some(false));
     slint::spawn_local(async {
+        check_stack().await;
         let gallery = include_str!("../../../docs/prototypes/ui-tool/data/messages.js");
         let samples: Vec<Sample> = serde_json::from_str(
             gallery
@@ -56,30 +63,94 @@ fn renders_and_dismisses_the_five_approved_sms_states() {
         )
         .unwrap();
         let mut inbox = Inbox::default();
-        for sample in samples {
+        for sample in &samples {
             check_sample(&mut inbox, sample).await;
         }
+        sms_motion::check(&samples).await;
         slint::quit_event_loop().unwrap();
     })
     .unwrap();
     slint::run_event_loop_until_quit().unwrap();
 }
 
-async fn check_sample(inbox: &mut Inbox, sample: Sample) {
+async fn check_stack() {
+    let mut popups = Vec::new();
+    for body in ["Oldest SMS", "Middle SMS\nSecond line", "Newest SMS"] {
+        let popup = show_sms(
+            Sms {
+                body: body.into(),
+                otp: String::new(),
+            },
+            SENDER_NAME.into(),
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        popups.push(popup);
+    }
+    let (oldest, work) = native_bounds(popups[0].window()).await;
+    let (middle, _) = native_bounds(popups[1].window()).await;
+    let (newest, _) = native_bounds(popups[2].window()).await;
+    let scale = popups[0].window().scale_factor();
+    let margin = (12.0 * scale).round() as i32;
+    let gap = (8.0 * scale).round() as i32;
+    assert_eq!(oldest.right, work.right - margin);
+    assert_eq!(oldest.bottom, work.bottom - margin);
+    assert_eq!(middle.bottom, oldest.top - gap);
+    assert_eq!(newest.bottom, middle.top - gap);
+
+    click(popups[1].window(), LogicalPosition::new(30.0, 65.0));
+    assert!(!popups[1].window().is_visible());
+    let (still_oldest, _) = native_bounds(popups[0].window()).await;
+    let (moved_newest, _) = native_bounds(popups[2].window()).await;
+    assert_eq!(still_oldest.top, oldest.top);
+    assert_eq!(moved_newest.bottom, oldest.top - gap);
+    for popup in [popups.first().unwrap(), popups.last().unwrap()] {
+        click(popup.window(), LogicalPosition::new(30.0, 65.0));
+        assert!(!popup.window().is_visible());
+    }
+}
+
+async fn native_handle(window: &Window) -> HWND {
+    let native = window.winit_window().await.unwrap();
+    let RawWindowHandle::Win32(handle) = native.window_handle().unwrap().as_raw() else {
+        panic!("expected a native Windows popup");
+    };
+    handle.hwnd.get() as HWND
+}
+
+async fn native_bounds(window: &Window) -> (RECT, RECT) {
+    let hwnd = native_handle(window).await;
+    let mut bounds = RECT::default();
+    let mut monitor = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: the window keeps its handle live and both output buffers are writable.
+    unsafe {
+        assert_ne!(GetWindowRect(hwnd, &raw mut bounds), 0);
+        let display = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+        assert_ne!(GetMonitorInfoW(display, &raw mut monitor), 0);
+    }
+    (bounds, monitor.rcWork)
+}
+
+async fn check_sample(inbox: &mut Inbox, sample: &Sample) {
     let Sample { key, sms, otp } = sample;
     let height = match key.as_str() {
         "sms-no-otp" => 129,
         "sms-long" => 240,
         _ => 173,
     };
-    let message = deliver(inbox, &sms, &otp);
+    let message = deliver(inbox, sms, otp);
     let popup = show_sms(message, SENDER_NAME.into(), true)
         .await
         .unwrap()
         .unwrap();
     let window = popup.window();
     check_shell_behavior(window).await;
-    check_popup(window, &key, height);
+    check_popup(window, key, height);
     match key.as_str() {
         "sms-otp" => {
             check_control_states(window);
@@ -91,7 +162,7 @@ async fn check_sample(inbox: &mut Inbox, sample: Sample) {
         }
         "sms-long-code" => {
             dismiss_with_clipboard_busy(window);
-            check_copy(inbox, &sms, &otp).await;
+            check_copy(inbox, sms, otp).await;
         }
         _ => click(window, LogicalPosition::new(30.0, 95.0)),
     }

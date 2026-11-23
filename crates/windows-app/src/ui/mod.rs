@@ -119,6 +119,7 @@ pub fn delivery_status() -> DeliveryStatus {
 
 pub fn update_motion() {
     pairing::update_motion();
+    sms::update_motion();
     WELCOME.with_borrow(|welcome| {
         if let Some(window) = welcome {
             let enabled = platform::animations_enabled();
