@@ -8,18 +8,26 @@ export component MainWindow inherits Window {
     in property <[SenderRowData]> sender-devices;
     private property <int> editor: -1;
     private property <string> editor-error;
+    private property <bool> focus-first-row;
+    private property <bool> focus-by-pointer;
     private property <length> editor-height: root.editor < 0 ? 0px
         : (root.sender-devices[root.editor].needs-repair ? 44px : 100px)
         + (root.editor-error == "" ? 0px : 24px);
     callback open-pairing();
     callback rename-sender(int, string, bool) -> string;
-    callback delete-sender(int) -> string;
+    callback delete-sender(int, bool) -> string;
     callback read-name-paste() -> NamePaste;
     callback insert-name-paste(string);
 
     public function close-editor() {
         root.editor = -1;
         root.editor-error = "";
+        root.focus-first-row = false;
+    }
+
+    public function focus-first-sender(pointer: bool) {
+        root.focus-by-pointer = pointer;
+        root.focus-first-row = true;
     }
 
     function reveal(top: length, bottom: length) {
@@ -266,6 +274,8 @@ export component MainWindow inherits Window {
                             chinese: root.chinese;
                             expanded: index == root.editor;
                             separator: index + 1 < root.sender-devices.length;
+                            focus-requested: index == 0 && root.focus-first-row;
+                            focus-by-pointer: root.focus-by-pointer;
                             editor-height: self.expanded ? root.editor-height : 0px;
                             error <=> root.editor-error;
                             toggle => {
@@ -277,12 +287,8 @@ export component MainWindow inherits Window {
                                     self.reveal-editor();
                                 }
                             }
-                            submit(draft, invalid) => {
-                                if sender.needs-repair {
-                                    return root.delete-sender(index);
-                                }
-                                return root.rename-sender(index, draft, invalid);
-                            }
+                            rename(draft, invalid) => { root.rename-sender(index, draft, invalid) }
+                            delete-local(pointer) => { root.delete-sender(index, pointer) }
                             read-paste => { root.read-name-paste() }
                             insert-paste(text) => { root.insert-name-paste(text); }
                             reveal-editor => { root.reveal(self.y + 48px, self.y + 48px + self.editor-height); }

@@ -1,7 +1,5 @@
 use std::{fs, io::BufReader, sync::mpsc, time::Duration};
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
@@ -349,24 +347,18 @@ fn send_delivery(
     otp: &str,
     sequence: u8,
 ) {
-    let cipher = Aes256Gcm::new(key.into());
-    let nonce = [sequence; 12];
     let received_at = if pairing == "new" {
         "2026-01-01T00:01:00Z"
     } else {
         "2026-01-01T00:00:00Z"
     };
     let plaintext = json!({"type":"verification_message", "smsText":"Synthetic SMS", "otp":otp, "receivedAt":received_at});
-    let ciphertext = cipher
-        .encrypt(&Nonce::from(nonce), plaintext.to_string().as_bytes())
-        .unwrap();
-    send_event(
+    send_authenticated_delivery(
         socket,
-        json!({
-            "type":"delivery", "version":1, "receiverId":"receiver-1",
-            "senderId":format!("{sender}-sender"), "pairingId":format!("{pairing}-pairing"),
-            "messageId":format!("{sender}-{sequence}"), "cryptoVersion":1,
-            "nonce":STANDARD.encode(nonce), "ciphertext":STANDARD.encode(ciphertext),
-        }),
+        &format!("{pairing}-pairing"),
+        &format!("{sender}-sender"),
+        key,
+        (&format!("{sender}-{sequence}"), sequence),
+        plaintext,
     );
 }

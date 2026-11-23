@@ -476,7 +476,7 @@ async fn wait_for(mut condition: impl FnMut() -> bool, expectation: &str) {
     }
 }
 
-async fn tick() {
+pub(super) async fn tick() {
     let (send, receive) = tokio::sync::oneshot::channel();
     Timer::single_shot(Duration::from_millis(5), move || {
         let _ = send.send(());

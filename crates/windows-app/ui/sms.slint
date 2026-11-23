@@ -311,6 +311,8 @@ export component SmsWindow inherits Window {
             Text {
                 height: 15px;
                 text: root.sender-name;
+                accessible-role: text;
+                accessible-label: root.sender-name;
                 font-size: 11px;
                 color: #65716e;
                 overflow: elide;

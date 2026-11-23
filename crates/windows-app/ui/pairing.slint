@@ -10,6 +10,7 @@ export struct NamePaste {
 export component SenderNameForm inherits Rectangle {
     in property <bool> chinese;
     in property <bool> compact;
+    in property <bool> editable: true;
     in-out property <string> name;
     in-out property <string> error;
     in-out property <bool> invalid-paste;
@@ -127,7 +128,10 @@ export component SenderNameForm inherits Rectangle {
                     color: root.compact ? black : #242424;
                     vertical-alignment: center;
                     single-line: true;
+                    enabled: root.editable;
                     text <=> root.name;
+                    accessible-role: text-input;
+                    accessible-value: root.name;
                     accessible-label: root.chinese ? "设备名称" : "Device name";
                     accessible-description: root.error;
                     cursor-position-changed(position) => {

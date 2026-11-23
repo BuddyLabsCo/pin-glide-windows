@@ -4,6 +4,7 @@ component RowAction inherits Rectangle {
     in property <string> label;
     in property <bool> filled;
     in property <bool> destructive;
+    in property <bool> enabled: true;
     callback clicked(bool);
     width: 56px;
     height: 32px;
@@ -14,7 +15,12 @@ component RowAction inherits Rectangle {
         : root.filled ? #006b60 : white;
     accessible-role: button;
     accessible-label: root.label;
-    accessible-action-default => { root.clicked(false); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked(false);
+        }
+    }
     forward-focus: keys;
 
     Text {
@@ -34,6 +40,7 @@ component RowAction inherits Rectangle {
     }
 
     keys := FocusScope {
+        enabled: root.enabled;
         key-pressed(event) => {
             if event.text == Key.Return || event.text == Key.Space {
                 root.clicked(false);
@@ -44,6 +51,7 @@ component RowAction inherits Rectangle {
     }
 
     press := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: pointer;
         clicked => { root.clicked(true); }
     }
@@ -60,17 +68,32 @@ export component SenderRow inherits Rectangle {
     in property <bool> chinese;
     in property <bool> expanded;
     in property <bool> separator;
+    in property <bool> focus-requested;
+    in property <bool> focus-by-pointer;
     in property <length> editor-height;
     in-out property <string> error;
     private property <bool> invalid-paste;
     private property <string> draft;
     private property <bool> pointer-focus;
     callback toggle();
-    callback submit(string, bool) -> string;
+    callback rename(string, bool) -> string;
+    callback delete-local(bool) -> string;
     callback read-paste() -> NamePaste;
     callback insert-paste(string);
     callback reveal-editor();
     callback reveal-row();
+
+    init => {
+        if root.focus-requested {
+            root.focus-row(root.focus-by-pointer);
+        }
+    }
+
+    changed focus-requested => {
+        if root.focus-requested {
+            root.focus-row(root.focus-by-pointer);
+        }
+    }
 
     function toggle-row(pointer: bool) {
         root.toggle();
@@ -92,7 +115,7 @@ export component SenderRow inherits Rectangle {
     }
 
     function save(pointer: bool) {
-        root.error = root.submit(root.draft, root.invalid-paste);
+        root.error = root.rename(root.draft, root.invalid-paste);
         if root.error == "" {
             root.toggle-row(pointer);
         } else {
@@ -113,7 +136,7 @@ export component SenderRow inherits Rectangle {
         width: parent.width - 2px;
         height: 48px;
         border-radius: 9px;
-        background: press.has-hover || (root.expanded && root.device.needs-repair) ? #006b6012 : transparent;
+        background: press.has-hover ? #006b6012 : transparent;
         border-width: keys.has-focus && !root.pointer-focus ? 2px : 0px;
         border-color: #006b60;
         accessible-role: button;
@@ -183,6 +206,11 @@ export component SenderRow inherits Rectangle {
                 }
             }
             key-pressed(event) => {
+                if event.text == Key.Tab && !event.modifiers.shift
+                    && root.expanded && root.device.needs-repair {
+                    delete-action.focus();
+                    return accept;
+                }
                 if event.text == Key.Return || event.text == Key.Space
                     || (event.text == Key.Escape && root.expanded) {
                     root.toggle-row(false);
@@ -217,6 +245,7 @@ export component SenderRow inherits Rectangle {
             width: parent.width - 32px;
             height: root.error == "" ? 52px : 76px;
             visible: !root.device.needs-repair;
+            editable: root.expanded && !root.device.needs-repair;
             compact: true;
             chinese: root.chinese;
             name <=> root.draft;
@@ -231,22 +260,27 @@ export component SenderRow inherits Rectangle {
             x: parent.width - 136px;
             y: parent.height - 44px;
             label: root.chinese ? "取消" : "Cancel";
+            enabled: root.expanded;
             clicked(pointer) => { root.toggle-row(pointer); }
         }
 
-        RowAction {
+        if !root.device.needs-repair: RowAction {
             x: parent.width - 72px;
-            y: root.device.needs-repair ? 6px : parent.height - 44px;
-            label: root.device.needs-repair ? (root.chinese ? "删除" : "Delete") : (root.chinese ? "保存" : "Save");
-            filled: !root.device.needs-repair;
-            destructive: root.device.needs-repair;
-            clicked(pointer) => {
-                if root.device.needs-repair {
-                    root.error = root.submit("", false);
-                } else {
-                    root.save(pointer);
-                }
-            }
+            y: parent.height - 44px;
+            label: root.chinese ? "保存" : "Save";
+            filled: true;
+            enabled: root.expanded;
+            clicked(pointer) => { root.save(pointer); }
+        }
+
+        delete-action := RowAction {
+            x: parent.width - 72px;
+            y: 6px;
+            label: root.chinese ? "删除" : "Delete";
+            destructive: true;
+            visible: root.device.needs-repair;
+            enabled: root.expanded && root.device.needs-repair;
+            clicked(pointer) => { root.error = root.delete-local(pointer); }
         }
 
         if root.device.needs-repair && root.error != "": Text {

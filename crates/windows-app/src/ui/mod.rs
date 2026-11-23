@@ -259,13 +259,19 @@ fn register_sender_actions(window: &MainWindow, store: RegistrationStore) {
     });
 
     let weak = window.as_weak();
-    window.on_delete_sender(move |index| {
+    window.on_delete_sender(move |index, pointer| {
         if let Some(window) = weak.upgrade()
             && let Some(row) = window.get_sender_devices().row_data(index as usize)
             && store.delete_unreadable_pairing(&row.pairing_id).is_ok()
         {
             window.invoke_close_editor();
             refresh_visible_main(&store);
+            let weak = window.as_weak();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    window.invoke_focus_first_sender(pointer);
+                }
+            });
             update_delivery_status();
             return "".into();
         }
