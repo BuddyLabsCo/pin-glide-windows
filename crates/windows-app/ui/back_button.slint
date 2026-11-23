@@ -1,0 +1,39 @@
+export component BackButton inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    background: press.pressed ? #dceae3 : press.has-hover ? #eaf2ee : transparent;
+    border-color: #4c8074;
+    border-width: key-focus.has-focus ? 2px : 0px;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    forward-focus: key-focus;
+
+    Path {
+        width: 18px;
+        height: 18px;
+        viewbox-width: 18;
+        viewbox-height: 18;
+        commands: "M 9 3 L 3 9 L 9 15 M 3 9 H 15";
+        stroke: #344940;
+        stroke-width: 1.5px;
+    }
+
+    key-focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    press := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

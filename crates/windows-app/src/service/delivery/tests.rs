@@ -15,8 +15,6 @@ use super::*;
 
 #[tokio::test]
 async fn attempts_the_receipt_before_handing_off_authentication() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     for fail in [false, true] {
         let (send, mut deliveries) = mpsc::channel::<IncomingDelivery>(1);
@@ -26,7 +24,7 @@ async fn attempts_the_receipt_before_handing_off_authentication() {
             fail,
             read: false,
         };
-        let mut transport = Transport::new(socket, &store, &updates);
+        let mut transport = Transport::new(socket, &updates);
         let (_power, mut state) = watch::channel(Connectivity::default());
         let mut order = 0;
         let verify = async {
@@ -100,8 +98,6 @@ impl Sink<Message> for ReceiptSocket {
 
 #[tokio::test(start_paused = true)]
 async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     let (client, peer) = tokio::io::duplex(4096);
     let (blocked, receipt_blocked) = tokio::sync::oneshot::channel();
@@ -112,7 +108,7 @@ async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
     };
     let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
-    let mut transport = Transport::new(socket, &store, &updates);
+    let mut transport = Transport::new(socket, &updates);
     let (_power, mut state) = watch::channel(Connectivity::default());
     let (send, _deliveries) = mpsc::channel(1);
     let mut order = 0;
@@ -135,13 +131,11 @@ async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
 
 #[tokio::test(start_paused = true)]
 async fn stalled_authentication_defers_receipts_without_blocking_pong() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = RegistrationStore::new(dir.path().join("registration.json"));
     let (updates, _) = crate::service::pairing_operation::tests::progress_channel();
     let (client, peer) = tokio::io::duplex(16 * 1024);
     let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
-    let mut transport = Transport::new(socket, &store, &updates);
+    let mut transport = Transport::new(socket, &updates);
     let (_power, mut state) = watch::channel(Connectivity::default());
     let (send, mut deliveries) = mpsc::channel(MAX_PENDING_DELIVERIES);
     let mut order = 0;
@@ -274,7 +268,7 @@ async fn checks_the_existing_socket_after_resume() {
     let run = async {
         let mut order = 0;
         connection
-            .run(&store, &updates, &mut state, &mut order, &authenticate)
+            .run(&updates, &mut state, &mut order, &authenticate)
             .await
     };
     timeout(Duration::from_secs(5), async {

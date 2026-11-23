@@ -406,7 +406,12 @@ async fn waits_for_cancellation_after_handling_a_closed_session_response() {
             code: Some("pairing_session_closed".into()),
         })
     };
-    let result = wait_for_confirmation(report, async { milestone.await.unwrap() }, &claim);
+    let result = wait_for_confirmation(
+        report,
+        async { milestone.await.unwrap() },
+        &claim,
+        super::SessionState::CredentialReady,
+    );
     let mut result = std::pin::pin!(result);
 
     assert!(

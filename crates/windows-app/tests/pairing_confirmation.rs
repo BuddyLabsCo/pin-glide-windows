@@ -1,5 +1,7 @@
 #![cfg(windows)]
 
+#[path = "support/add_sender.rs"]
+mod add_sender;
 #[path = "support/delivery.rs"]
 mod delivery;
 #[path = "support/dpapi.rs"]
@@ -463,20 +465,4 @@ fn exercise_enrollment(
         "sender-1"
     );
     assert_eq!(stored["active_pairings"]["pairing-1"]["name"], "未命名设备");
-}
-
-fn decode_qr(code: &qrcode::QrCode) -> Value {
-    let width = (code.width() + 8) * 4;
-    let mut pixels = vec![255; width * width];
-    for row in 0..code.width() {
-        for column in 0..code.width() {
-            if code[(column, row)] == qrcode::Color::Dark {
-                for offset in 0..4 {
-                    let left = ((row + 4) * 4 + offset) * width + (column + 4) * 4;
-                    pixels[left..left + 4].fill(0);
-                }
-            }
-        }
-    }
-    decode_pixels(width, width, &pixels)
 }

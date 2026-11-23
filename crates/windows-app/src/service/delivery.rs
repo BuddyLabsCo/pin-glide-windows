@@ -103,13 +103,12 @@ impl DeliveryConnection {
 
     pub(super) async fn run(
         self,
-        store: &RegistrationStore,
         updates: &ProgressUpdates,
         state: &mut watch::Receiver<Connectivity>,
         order: &mut u64,
         authenticate: &mpsc::Sender<IncomingDelivery>,
     ) -> ConnectionLoss {
-        Transport::new(self.socket, store, updates)
+        Transport::new(self.socket, updates)
             .run(state, order, authenticate)
             .await
     }

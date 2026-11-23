@@ -21,7 +21,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::{
     platform,
     service::{
-        PairingOperation, ReceivedSms,
+        PairingOperation, PairingStart, ReceivedSms,
         tests::{accept_loopback, acceptor, listen, local_service, socket},
     },
     startup_tests::{select_test_backend, wait_for},
@@ -72,10 +72,11 @@ fn lock_immediately_closes_every_sms_and_unlock_only_shows_new_sms() {
             ack.send(sequence).unwrap();
         }
     });
-    let operation = PairingOperation::start_registered(
+    let operation = PairingOperation::spawn(
         move || Some(service),
         || {},
-        crate::storage::RegistrationStore::new(path),
+        Some(crate::storage::RegistrationStore::new(path)),
+        PairingStart::Registered,
         queue_popup,
     );
     slint::spawn_local(async move {

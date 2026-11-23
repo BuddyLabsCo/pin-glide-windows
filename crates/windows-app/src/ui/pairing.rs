@@ -3,7 +3,7 @@ use std::{cell::RefCell, sync::Arc};
 use crate::service::{
     DeliveryStatus, PairingOperation, PairingOutcome, PairingProgress, PairingStart, Service,
 };
-use crate::storage::SenderNameError;
+use crate::storage::{RegistrationStore, SenderNameError};
 use crate::{NamePaste, PairingStage, PairingWindow, platform};
 use i_slint_core::{
     input::{InternalKeyEvent, KeyEvent, KeyEventType},
@@ -34,7 +34,7 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
 }
 
 pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
-    create_view(chinese, start_operation, false)?;
+    create_view(chinese, start_operation, false, false)?;
     Ok(())
 }
 
@@ -45,22 +45,61 @@ pub fn open_pairing(
     if reopen()? {
         return Ok(PAIRING.with_borrow(|pairing| pairing.as_ref().unwrap().window.clone_strong()));
     }
-    create_view(chinese, start, true)
+    create_view(chinese, start, true, false)
+}
+
+pub(super) fn open_add_sender(
+    chinese: bool,
+    store: &RegistrationStore,
+) -> Result<(), PlatformError> {
+    let resumable = PAIRING.with_borrow_mut(|view| {
+        view.as_mut().is_some_and(|view| {
+            view.render();
+            !view.named
+        })
+    });
+    if resumable && reopen()? {
+        return Ok(());
+    }
+    if let Some(view) = PAIRING.take()
+        && !view.window.get_adding_device()
+    {
+        super::REGISTERED.set(Some(view.operation));
+    }
+    let store = store.clone();
+    create_view(
+        chinese,
+        move |notify, _| {
+            PairingOperation::spawn(
+                operation_service(),
+                notify,
+                Some(store.clone()),
+                PairingStart::AddSender,
+                drop,
+            )
+        },
+        true,
+        true,
+    )
+    .map(drop)
 }
 
 fn create_view(
     chinese: bool,
     start: impl Fn(fn(), PairingStart) -> PairingOperation + 'static,
     visible: bool,
+    adding_device: bool,
 ) -> Result<PairingWindow, PlatformError> {
     let window = PairingWindow::new()?;
     window.set_chinese(chinese);
+    window.set_adding_device(adding_device);
     window.set_motion_enabled(platform::animations_enabled());
     window.set_stage(PairingStage::Preparing);
     window
         .window()
         .on_close_requested(|| CloseRequestResponse::HideWindow);
     window.on_refresh(refresh);
+    window.on_back(back);
     window.on_finish_naming(finish_naming);
     window.on_read_name_paste(move || read_name_paste(chinese));
     let weak = window.as_weak();
@@ -143,16 +182,19 @@ pub(super) fn shutdown() {
 }
 
 fn start_operation(notify: fn(), start: PairingStart) -> PairingOperation {
+    PairingOperation::start_receiving(operation_service(), notify, start, super::sms::receive)
+}
+
+fn operation_service() -> impl FnOnce() -> Option<Service> + Send {
     #[cfg(test)]
-    if let Some(service) = tests::connect() {
-        return PairingOperation::start_receiving(
-            move || Some(service),
-            notify,
-            start,
-            super::sms::receive,
-        );
+    let fixture = tests::connect();
+    move || {
+        #[cfg(test)]
+        if fixture.is_some() {
+            return fixture;
+        }
+        connect_service()
     }
-    PairingOperation::start_receiving(connect_service, notify, start, super::sms::receive)
 }
 
 pub(super) fn connect_service() -> Option<Service> {
@@ -171,6 +213,20 @@ pub(super) fn notify_progress() {
             }
         });
         super::update_delivery_status();
+    });
+}
+
+fn back() {
+    PAIRING.with_borrow_mut(|pairing| {
+        let Some(view) = pairing else { return };
+        let Some(store) = view.operation.registration() else {
+            return;
+        };
+        if let Ok(true) = super::show_registered(store, view.window.get_chinese()) {
+            let _ = view.window.hide();
+            view.render();
+            view.named |= view.window.get_stage() == PairingStage::Completed;
+        }
     });
 }
 
@@ -314,6 +370,12 @@ impl View {
             let visible = self.window.window().is_visible();
             self.named = !visible;
             self.window.set_completion_motion(visible);
+            if !visible
+                && self.window.get_adding_device()
+                && let Some(store) = self.operation.registration()
+            {
+                super::refresh_visible_main(store);
+            }
             if visible
                 && let PairingProgress::Completed { pairing_id } = progress
                 && let Ok(Some(name)) = self.operation.sender_label(&pairing_id)

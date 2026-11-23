@@ -133,15 +133,9 @@ impl<'a> Reconnect<'a> {
         let mut order = 0;
         let authenticate = start_processing(store, self.updates, self.receiver_id.to_owned());
         loop {
-            self.updates.delivery_status(connected_status(store));
+            self.updates.delivery_status(DeliveryStatus::Ready);
             let loss = connection
-                .run(
-                    store,
-                    self.updates,
-                    &mut self.state,
-                    &mut order,
-                    &authenticate,
-                )
+                .run(self.updates, &mut self.state, &mut order, &authenticate)
                 .await;
             self.updates.delivery_status(loss.status);
             if !loss.resume_failed {

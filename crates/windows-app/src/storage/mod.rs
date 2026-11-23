@@ -18,7 +18,7 @@ mod sender_names;
 pub(crate) use sender_names::SenderNameError;
 
 #[cfg(all(test, windows))]
-mod tests;
+pub(crate) mod tests;
 #[cfg(windows)]
 mod windows;
 
@@ -102,6 +102,7 @@ impl RegistrationStore {
         &self,
         reference: &PairingReference<'_>,
         key: &[u8; 32],
+        adding_sender: bool,
     ) -> io::Result<()> {
         let pairing = ProvisionalPairing {
             session_id: reference.session_id.into(),
@@ -114,8 +115,45 @@ impl RegistrationStore {
             if next.enrollment.is_some() {
                 return Err(io::ErrorKind::AlreadyExists.into());
             }
+            if adding_sender {
+                next.validate_new_sender(&pairing)?;
+            }
             next.provisional_pairing = Some(pairing);
             Ok(())
+        })
+    }
+
+    pub(crate) fn finish_add_sender(
+        &self,
+        session_id: &str,
+        receiver_id: &str,
+        completed: bool,
+    ) -> io::Result<Option<String>> {
+        self.update(|next| {
+            if next.enrollment.is_some() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            let pairing = next
+                .provisional_pairing
+                .take()
+                .filter(|pairing| {
+                    pairing.session_id == session_id && pairing.receiver_id == receiver_id
+                })
+                .ok_or(io::ErrorKind::NotFound)?;
+            if !completed {
+                return Ok(None);
+            }
+            next.validate_new_sender(&pairing)?;
+            let pairing_id = pairing.pairing_id;
+            next.active_pairings.insert(
+                pairing_id.clone(),
+                ProtectedPairing {
+                    sender_id: pairing.sender_id,
+                    protected_key: pairing.protected_key,
+                    name: Some(next.first_available_name()),
+                },
+            );
+            Ok(Some(pairing_id))
         })
     }
 
@@ -241,6 +279,25 @@ impl RegistrationStore {
         };
         stored.backfill_sender_names();
         Ok(stored)
+    }
+}
+
+impl Registration {
+    fn validate_new_sender(&self, pairing: &ProvisionalPairing) -> io::Result<()> {
+        if self.receiver_id.as_ref() != Some(&pairing.receiver_id)
+            || self.protected_receiver_token.is_none()
+        {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        if self.active_pairings.contains_key(&pairing.pairing_id)
+            || self
+                .active_pairings
+                .values()
+                .any(|active| active.sender_id == pairing.sender_id)
+        {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        Ok(())
     }
 }
 

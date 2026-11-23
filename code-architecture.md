@@ -55,6 +55,9 @@ within 500 lines.
   before first use. Resume a persisted R with a bounded delivery handshake
   independent of the redemption deadline. A terminal pairing state determines
   the outcome when followed by Close `1008`.
+  In `add_sender`, save the new key provisionally before confirmation and
+  promote it on `completed` on the existing Receiver. Keep the delivery
+  worker and its connection running during this operation.
 - The delivery adapter captures arrival time and order, then attempts the
   Receipt before decryption. It owns reconnect, heartbeat, and Close handling.
   The same worker owns first enrollment and subsequent reconnects, or starts

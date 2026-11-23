@@ -40,6 +40,7 @@ pub struct Service {
 }
 
 pub struct NewReceiverSession {
+    mode: pairing_session_view::Mode,
     pub session_id: String,
     pub receiver_id: String,
     pub pairing_id: Option<String>,
@@ -58,7 +59,7 @@ pub enum CreateError {
     InvalidOrigin,
     #[error("Service transport failed")]
     Transport(#[from] reqwest::Error),
-    #[error("invalid response to new Receiver creation")]
+    #[error("invalid response to pairing session creation")]
     InvalidResponse,
     #[error("Service returned HTTP {status}")]
     Http { status: StatusCode },
@@ -113,12 +114,37 @@ impl Service {
     }
 
     pub async fn new_receiver(&self) -> Result<NewReceiverSession, CreateError> {
-        let response = post_pairing_sessions(
+        self.create_session(
             &self.config,
             CreateRequest::new(create_request::Mode::NewReceiver),
+            pairing_session_view::Mode::NewReceiver,
         )
         .await
-        .map_err(create_error)?;
+    }
+
+    async fn add_sender(
+        &self,
+        receiver_id: String,
+        token: &str,
+    ) -> Result<NewReceiverSession, CreateError> {
+        let mut config = self.config.clone();
+        config.bearer_access_token = Some(token.to_owned());
+        let mut request = CreateRequest::new(create_request::Mode::AddSender);
+        request.receiver_id = Some(receiver_id);
+        self.create_session(&config, request, pairing_session_view::Mode::AddSender)
+            .await
+    }
+
+    async fn create_session(
+        &self,
+        config: &Configuration,
+        request: CreateRequest,
+        mode: pairing_session_view::Mode,
+    ) -> Result<NewReceiverSession, CreateError> {
+        let receiver_id = request.receiver_id.clone();
+        let response = post_pairing_sessions(config, request)
+            .await
+            .map_err(create_error)?;
         if response.status != StatusCode::CREATED {
             return Err(CreateError::Http {
                 status: response.status,
@@ -128,15 +154,17 @@ impl Service {
             return Err(CreateError::InvalidResponse);
         };
         let session = created.session;
-        if session.mode != pairing_session_view::Mode::NewReceiver
+        if session.mode != mode
             || session.session_id.is_empty()
             || session.receiver_id.is_empty()
+            || receiver_id.is_some_and(|id| id != session.receiver_id)
             || created.pairing_token.is_empty()
         {
             return Err(CreateError::InvalidResponse);
         }
 
         Ok(NewReceiverSession {
+            mode,
             session_id: session.session_id,
             receiver_id: session.receiver_id,
             pairing_id: session.pairing_id,
@@ -177,9 +205,7 @@ impl Service {
         let Some(PostPairingSessionCompleteSuccess::Status200(snapshot)) = result.entity else {
             return Err(CompletionError::InvalidResponse);
         };
-        if result.status != StatusCode::OK
-            || snapshot.mode != pairing_session_view::Mode::NewReceiver
-        {
+        if result.status != StatusCode::OK || snapshot.mode != session.mode {
             return Err(CompletionError::InvalidResponse);
         }
         pairing_snapshot::Snapshot {

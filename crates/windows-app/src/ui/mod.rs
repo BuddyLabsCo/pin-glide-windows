@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{CloseRequestResponse, ComponentHandle, PlatformError, VecModel, Window};
 
-use crate::service::{DeliveryStatus, PairingOperation};
+use crate::service::{DeliveryStatus, PairingOperation, PairingStart};
 use crate::{MainWindow, WelcomeWindow, platform, storage::RegistrationStore};
 
 mod pairing;
@@ -21,10 +21,11 @@ pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
     if let Ok(store) = RegistrationStore::for_current_user()
         && store.has_registration()
     {
-        let operation = PairingOperation::start_registered(
+        let operation = PairingOperation::spawn(
             pairing::connect_service,
             pairing::notify_progress,
-            store,
+            Some(store),
+            PairingStart::Registered,
             sms::receive,
         );
         REGISTERED.set(Some(operation));
@@ -98,7 +99,11 @@ pub fn update_motion() {
 }
 
 fn show() -> Result<(), PlatformError> {
-    if pairing::reopen()? {
+    let main_visible = MAIN.with_borrow(|main| {
+        main.as_ref()
+            .is_some_and(|window| window.window().is_visible())
+    });
+    if !main_visible && pairing::reopen()? {
         return hide_welcome();
     }
     if let Ok(store) = RegistrationStore::for_current_user()
@@ -129,15 +134,46 @@ fn show_registered(store: &RegistrationStore, chinese: bool) -> Result<bool, Pla
         window
             .window()
             .on_close_requested(|| CloseRequestResponse::HideWindow);
+        let weak = window.as_weak();
+        let store = store.clone();
+        window.on_open_pairing(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let result = if store.receiver_credential().is_ok() {
+                pairing::open_add_sender(window.get_chinese(), &store)
+            } else {
+                pairing::open(window.get_chinese())
+            };
+            match result {
+                Ok(()) => {
+                    let _ = window.hide();
+                }
+                Err(error) => eprintln!("Could not open pairing: {error}"),
+            }
+        });
         *main = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
-    let names = names.into_values().map(Into::into).collect::<Vec<_>>();
-    window.set_sender_names(VecModel::from_slice(&names));
+    set_sender_names(&window, names.into_values());
     window.show()?;
     platform::configure_main_chrome(window.window());
     focus(window.window());
     Ok(true)
+}
+
+fn refresh_visible_main(store: &RegistrationStore) {
+    MAIN.with_borrow(|main| {
+        if let Some(window) = main
+            && window.window().is_visible()
+            && let Ok(names) = store.sender_names()
+        {
+            set_sender_names(window, names.into_values());
+        }
+    });
+}
+
+fn set_sender_names(window: &MainWindow, names: impl Iterator<Item = String>) {
+    let names = names.map(Into::into).collect::<Vec<_>>();
+    window.set_sender_names(VecModel::from_slice(&names));
 }
 
 fn show_welcome() -> Result<(), PlatformError> {

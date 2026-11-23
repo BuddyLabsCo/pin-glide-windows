@@ -14,13 +14,12 @@ use tokio_tungstenite::tungstenite::{
 
 use super::{
     ConnectionLoss, DeliveryStatus, HEARTBEAT_LIMIT, IncomingDelivery, MAX_PENDING_DELIVERIES,
-    ProgressUpdates, RegistrationStore, WRITE_LIMIT, receipt,
+    ProgressUpdates, WRITE_LIMIT, receipt,
 };
-use crate::service::reconnect::{Connectivity, connected_status};
+use crate::service::reconnect::Connectivity;
 
 pub(super) struct Transport<'a, Socket> {
     socket: Socket,
-    store: &'a RegistrationStore,
     updates: &'a ProgressUpdates,
     outbound: VecDeque<(Message, Option<IncomingDelivery>)>,
     flushing: bool,
@@ -39,14 +38,9 @@ where
     Socket:
         Sink<Message, Error = SocketError> + Stream<Item = Result<Message, SocketError>> + Unpin,
 {
-    pub(super) fn new(
-        socket: Socket,
-        store: &'a RegistrationStore,
-        updates: &'a ProgressUpdates,
-    ) -> Self {
+    pub(super) fn new(socket: Socket, updates: &'a ProgressUpdates) -> Self {
         Self {
             socket,
-            store,
             updates,
             outbound: VecDeque::new(),
             flushing: false,
@@ -193,7 +187,7 @@ where
                     .is_some_and(|(expected, _)| payload.as_ref() == expected)
                 {
                     self.probe = None;
-                    self.updates.delivery_status(connected_status(self.store));
+                    self.updates.delivery_status(DeliveryStatus::Ready);
                 }
             }
             Some(Ok(Message::Close(_))) => {

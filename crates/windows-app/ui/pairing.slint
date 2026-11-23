@@ -1,4 +1,5 @@
 import { Button, Palette } from "std-widgets.slint";
+import { BackButton } from "back_button.slint";
 
 struct NamePaste {
     text: string,
@@ -280,6 +281,7 @@ export enum PairingStage {
 
 export component PairingWindow inherits Window {
     in property <bool> chinese;
+    in property <bool> adding-device;
     in property <bool> motion-enabled;
     in property <bool> completion-motion;
     in property <PairingStage> stage;
@@ -290,6 +292,7 @@ export component PairingWindow inherits Window {
     in-out property <bool> invalid-paste;
     out property <bool> name-focused: name-form.name-focused;
     callback refresh();
+    callback back();
     callback finish-naming();
     callback read-name-paste() -> NamePaste;
     callback insert-name-paste(string);
@@ -333,8 +336,14 @@ export component PairingWindow inherits Window {
         spacing: 16px;
         HorizontalLayout {
             height: 32px;
+            spacing: 10px;
+            if root.adding-device: BackButton {
+                label: root.chinese ? "返回主窗口" : "Back to main window";
+                clicked => { root.back(); }
+            }
+
             Text {
-                text: root.chinese ? "配对" : "Pairing";
+                text: root.adding-device ? (root.chinese ? "添加设备" : "Add a device") : (root.chinese ? "配对" : "Pairing");
                 font-size: 22px;
                 font-weight: 600;
                 color: #22312f;
