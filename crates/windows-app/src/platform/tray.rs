@@ -18,9 +18,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     KillTimer, MF_SEPARATOR, MF_STRING, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND, PostMessageW,
     PostQuitMessage, RegisterClassW, RegisterWindowMessageW, SetForegroundWindow, SetTimer,
     TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage,
-    UnregisterClassW, WM_APP, WM_LBUTTONDBLCLK, WM_NULL, WM_POWERBROADCAST, WM_RBUTTONUP,
-    WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_POPUP, WTS_SESSION_LOCK,
-    WTS_SESSION_UNLOCK,
+    UnregisterClassW, WM_APP, WM_DISPLAYCHANGE, WM_LBUTTONDBLCLK, WM_NULL, WM_POWERBROADCAST,
+    WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WNDCLASSW, WS_POPUP,
+    WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
 };
 
 use super::{
@@ -285,7 +285,7 @@ unsafe extern "system" fn window_proc(
             tray_event(window, lparam as u32);
             0
         }
-        WM_SETTINGCHANGE => {
+        WM_SETTINGCHANGE | WM_DISPLAYCHANGE => {
             if !WITHOUT_UI.get() {
                 let _ = slint::invoke_from_event_loop(crate::ui::update_motion);
             }

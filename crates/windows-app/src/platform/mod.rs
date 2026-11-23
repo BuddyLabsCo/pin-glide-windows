@@ -7,7 +7,10 @@ mod tray;
 pub(crate) use clipboard::write_unicode_clipboard;
 pub(crate) use clipboard::{ClipboardError, read_unicode_clipboard};
 pub use instance::{ActivationListener, Instance};
-pub(crate) use popup::{new_popup, place_popup, popup_attributes, prepare_popup};
+pub(crate) use popup::{
+    fade_popup, new_popup, order_popup, popup_attributes, popup_bounds, popup_work_area,
+    position_popup, prepare_popup, prepare_popup_exit,
+};
 pub(crate) use session::popup_epoch;
 pub use tray::Tray;
 pub(crate) use tray::{delivery_status, set_delivery_status};
