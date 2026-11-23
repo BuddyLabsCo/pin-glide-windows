@@ -12,5 +12,8 @@ mod platform;
 pub mod ui;
 #[cfg(windows)]
 pub use application::{launch, select_backend};
+#[cfg(windows)]
+#[doc(hidden)]
+pub use platform::set_animation_preference_override;
 #[cfg(all(test, windows))]
 mod startup_tests;

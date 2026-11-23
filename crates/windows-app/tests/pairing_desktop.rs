@@ -401,13 +401,7 @@ fn issue_sessions(
                     let claimed = claim(state);
                     send_state(&mut socket, &claimed);
                     sender_handshake(&mut socket, &qr);
-                    let mut complete = BufReader::new(accept(&acceptor, &listener));
-                    let (request, headers, _) = read_request_parts(&mut complete);
-                    assert_eq!(
-                        request,
-                        format!("POST /v1/pairing-sessions/{session_id}/complete HTTP/1.1\r\n")
-                    );
-                    assert_bearer(&headers);
+                    let mut complete = accept_completion(accept(&acceptor, &listener), &session_id);
                     credential_ready(&mut socket, complete.get_mut(), claimed);
                     issue_credential(
                         &acceptor,

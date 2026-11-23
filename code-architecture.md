@@ -67,8 +67,10 @@ within 500 lines.
   during Receipt writes and authentication. Reserve space in the ordered
   authentication queue before writing a Receipt. Keep that queue across
   socket replacements. Hold deliveries for the in-flight add-Sender
-  association in the same bounded queue until its key is promoted or the
-  attempt ends. Continue authenticating deliveries from active Pairings.
+  association with a separate capacity until its key is promoted or the
+  attempt ends. Leave excess deliveries for that association unacknowledged
+  and continue authenticating deliveries from active Pairings. Drain
+  released deliveries before authenticating later arrivals for the same Pairing.
   The tray tooltip shows Ready only while connected
   with at least one active Pairing.
   Core `delivery/` selects the key by Pairing ID and orders OTPs by `receivedAt`

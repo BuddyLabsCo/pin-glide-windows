@@ -13,14 +13,15 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use super::{
-    ConnectionLoss, DeliveryStatus, HEARTBEAT_LIMIT, IncomingDelivery, MAX_PENDING_DELIVERIES,
-    ProgressUpdates, QueuedDelivery, WRITE_LIMIT, receipt,
+    ConnectionLoss, DeliveryQueue, DeliveryStatus, EventHeader, HEARTBEAT_LIMIT, IncomingDelivery,
+    MAX_PENDING_DELIVERIES, ProgressUpdates, QueuedDelivery, WRITE_LIMIT, receipt,
 };
 use crate::service::reconnect::Connectivity;
 
 pub(super) struct Transport<'a, Socket> {
     socket: Socket,
     updates: &'a ProgressUpdates,
+    pending: Option<&'a DeliveryQueue>,
     outbound: VecDeque<(Message, Option<IncomingDelivery>)>,
     flushing: bool,
     write_deadline: Option<Instant>,
@@ -38,10 +39,15 @@ where
     Socket:
         Sink<Message, Error = SocketError> + Stream<Item = Result<Message, SocketError>> + Unpin,
 {
-    pub(super) fn new(socket: Socket, updates: &'a ProgressUpdates) -> Self {
+    pub(super) fn new(
+        socket: Socket,
+        updates: &'a ProgressUpdates,
+        pending: Option<&'a DeliveryQueue>,
+    ) -> Self {
         Self {
             socket,
             updates,
+            pending,
             outbound: VecDeque::new(),
             flushing: false,
             write_deadline: None,
@@ -103,14 +109,23 @@ where
             if Instant::now() >= deadline {
                 return DeliveryStatus::Heartbeat;
             }
+            let receipt_capacity = self
+                .outbound
+                .front()
+                .and_then(|(_, incoming)| incoming.as_ref())
+                .map(|incoming| incoming.hold_capacity.is_some());
             let event = tokio::select! {
                 biased;
                 _ = state.wait_for(|power| power.suspended || power.resumes != resumes) => continue,
                 permit = async {
                     let queue = authenticate.reserve().await.ok()?;
-                    let delivery = self.updates.delivery_capacity.clone().acquire_owned().await.ok()?;
+                    let delivery = if receipt_capacity == Some(false) {
+                        Some(self.updates.delivery_capacity.clone().acquire_owned().await.ok()?)
+                    } else {
+                        None
+                    };
                     Some((queue, delivery))
-                }, if capacity.is_none() && self.receipt_pending() => {
+                }, if capacity.is_none() && !self.flushing && receipt_capacity.is_some() => {
                     match permit {
                         Some(permit) => capacity = Some(permit),
                         None => return DeliveryStatus::Disconnected,
@@ -122,11 +137,14 @@ where
             let result = match event {
                 Ok(SocketEvent::Incoming(frame)) => self.handle_frame(frame, order).await,
                 Ok(SocketEvent::Outgoing(result, incoming)) => {
-                    if let Some(incoming) = incoming {
+                    if let Some(mut incoming) = incoming {
                         let (queue, capacity) = capacity.take().expect("Receipt requires capacity");
+                        let held_capacity = incoming.hold_capacity.is_some();
+                        let permit = incoming.hold_capacity.take().or(capacity);
                         queue.send(QueuedDelivery {
                             incoming,
-                            _capacity: capacity,
+                            held_capacity,
+                            _capacity: permit.expect("Receipt requires delivery capacity"),
                         });
                     }
                     result.map_err(|_| DeliveryStatus::Disconnected)
@@ -137,10 +155,6 @@ where
                 return status;
             }
         }
-    }
-
-    fn receipt_pending(&self) -> bool {
-        !self.flushing && matches!(self.outbound.front(), Some((_, Some(_))))
     }
 
     fn start_probe(&mut self, resumes: u64) {
@@ -167,13 +181,33 @@ where
                     order: *order,
                 };
                 *order += 1;
-                if let Some(reply) = receipt(&text).map_err(|_| DeliveryStatus::Protocol)? {
-                    if self.outbound.len() >= MAX_PENDING_DELIVERIES {
+                let header: EventHeader =
+                    serde_json::from_str(&text).map_err(|_| DeliveryStatus::Protocol)?;
+                if let Some(reply) = receipt(&header).map_err(|_| DeliveryStatus::Protocol)? {
+                    let hold_capacity =
+                        match self.pending.map(|queue| queue.reserve_hold(&text, &header)) {
+                            Some(Ok(hold_capacity)) => hold_capacity,
+                            Some(Err(_)) => return Ok(()),
+                            None => None,
+                        };
+                    if hold_capacity.is_none()
+                        && self
+                            .outbound
+                            .iter()
+                            .filter(|(_, incoming)| {
+                                incoming
+                                    .as_ref()
+                                    .is_none_or(|delivery| delivery.hold_capacity.is_none())
+                            })
+                            .count()
+                            >= MAX_PENDING_DELIVERIES
+                    {
                         return Err(DeliveryStatus::Disconnected);
                     }
                     let incoming = IncomingDelivery {
                         text,
                         arrival,
+                        hold_capacity,
                         #[cfg(windows)]
                         epoch: crate::platform::popup_epoch(),
                     };

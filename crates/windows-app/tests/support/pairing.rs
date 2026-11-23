@@ -88,6 +88,21 @@ pub fn assert_bearer(headers: &[String]) {
     }));
 }
 
+pub fn accept_completion(connection: Connection, session_id: &str) -> BufReader<Connection> {
+    let mut stream = BufReader::new(connection);
+    let (request, headers, body) = read_request_parts(&mut stream);
+    assert_eq!(
+        request,
+        format!("POST /v1/pairing-sessions/{session_id}/complete HTTP/1.1\r\n")
+    );
+    assert_bearer(&headers);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"keyConfirmation":"confirmed"})
+    );
+    stream
+}
+
 pub fn write_response(stream: &mut impl Write, status: &str, body: &Value) {
     let media = if status.starts_with('4') {
         "application/problem+json"

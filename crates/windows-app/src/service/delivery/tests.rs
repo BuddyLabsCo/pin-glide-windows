@@ -24,7 +24,7 @@ async fn attempts_the_receipt_before_handing_off_authentication() {
             fail,
             read: false,
         };
-        let mut transport = Transport::new(socket, &updates);
+        let mut transport = Transport::new(socket, &updates, None);
         let (_power, mut state) = watch::channel(Connectivity::default());
         let mut order = 0;
         let verify = async {
@@ -60,7 +60,9 @@ impl Stream for ReceiptSocket {
         if std::mem::replace(&mut self.read, true) {
             return Poll::Pending;
         }
-        Poll::Ready(Some(Ok(delivery_frame("message"))))
+        Poll::Ready(Some(Ok(Message::text(
+            r#"{"type":"delivery","version":1,"senderId":"sender","messageId":"message","receiverId":42,"pairingId":false}"#,
+        ))))
     }
 }
 
@@ -108,7 +110,7 @@ async fn echoes_the_ping_on_the_wire_during_a_delayed_receipt() {
     };
     let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
-    let mut transport = Transport::new(socket, &updates);
+    let mut transport = Transport::new(socket, &updates, None);
     let (_power, mut state) = watch::channel(Connectivity::default());
     let (send, _deliveries) = mpsc::channel(1);
     let mut order = 0;
@@ -135,7 +137,7 @@ async fn stalled_authentication_defers_receipts_without_blocking_pong() {
     let (client, peer) = tokio::io::duplex(16 * 1024);
     let socket = WebSocketStream::from_raw_socket(client, Role::Client, None).await;
     let mut peer = WebSocketStream::from_raw_socket(peer, Role::Server, None).await;
-    let mut transport = Transport::new(socket, &updates);
+    let mut transport = Transport::new(socket, &updates, None);
     let (_power, mut state) = watch::channel(Connectivity::default());
     let (send, mut deliveries) = mpsc::channel(MAX_PENDING_DELIVERIES);
     let mut order = 0;

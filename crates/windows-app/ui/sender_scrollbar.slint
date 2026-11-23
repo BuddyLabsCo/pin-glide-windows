@@ -15,7 +15,17 @@ export component SenderScrollbar inherits Rectangle {
     accessible-action-increment => { root.offset = max(-root.range, root.offset - 10px); }
     accessible-action-decrement => { root.offset = min(0px, root.offset + 10px); }
 
-    Rectangle {
+    TouchArea {
+        y: 12px;
+        height: root.track;
+        mouse-cursor: pointer;
+        clicked => {
+            root.offset = clamp(root.offset + (self.mouse-y + self.y < thumb.y ? root.height : -root.height),
+                -root.range, 0px);
+        }
+    }
+
+    thumb := Rectangle {
         x: 4px;
         y: 12px + (root.track - root.thumb-height) * (-root.offset / max(1px, root.range));
         width: 6px;

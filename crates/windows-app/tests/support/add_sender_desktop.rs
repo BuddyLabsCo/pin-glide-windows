@@ -11,14 +11,15 @@ use std::{
 use i_slint_core::animations::{current_tick, update_animations};
 use serde_json::{Value, json};
 use slint::{
-    ComponentHandle, LogicalPosition, Model, Rgba8Pixel, SharedPixelBuffer, Timer, Window,
+    ComponentHandle, LogicalPosition, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer,
+    VecModel, Window,
     platform::{PointerEventButton, WindowEvent},
 };
-use windows_app::{PairingStage, PairingWindow, service::DeliveryStatus, ui};
-
-use super::{
-    add_sender_service::accept_report, assert_redeem, capture, fixture::*, select_backend,
+use windows_app::{
+    PairingStage, PairingWindow, service::DeliveryStatus, set_animation_preference_override, ui,
 };
+
+use super::{assert_redeem, capture, fixture::*, select_backend};
 
 #[path = "dpapi.rs"]
 mod dpapi;
@@ -61,6 +62,7 @@ async fn add_sender(mode: &str) {
     let path = directory.path().join("registration.json");
     let hidden = mode == "hidden";
     let reduced = mode == "reduced";
+    set_animation_preference_override(Some(!reduced));
     let old_name = if hidden {
         "未命名设备"
     } else {
@@ -89,12 +91,13 @@ async fn add_sender(mode: &str) {
     assert!(window.get_adding_device());
     assert!(!main.window().is_visible());
     assert_eq!(window.get_stage(), PairingStage::Preparing);
-    window.set_motion_enabled(!reduced);
+    assert_eq!(window.get_motion_enabled(), !reduced);
     if reduced {
+        verify_static_loading(&window);
         evidence(window.window(), "add-preparing-reduced");
     }
     verify_refresh(&window, &advance, &path, &original).await;
-    let code = reopen_add_sender(&window, &main);
+    let code = reopen_add_sender(&window, &main, !reduced);
     advance.send(()).unwrap();
     stage(&window, PairingStage::Confirming).await;
     finish_add_sender(&window, &main, code, scan, advance, mode).await;
@@ -117,14 +120,22 @@ async fn add_sender(mode: &str) {
     server.join().unwrap();
 }
 
-fn reopen_add_sender(window: &PairingWindow, main: &windows_app::MainWindow) -> Vec<u8> {
+fn reopen_add_sender(
+    window: &PairingWindow,
+    main: &windows_app::MainWindow,
+    motion: bool,
+) -> Vec<u8> {
     let code = qr_pixels(window);
-    click(window.window(), 40.0, 40.0);
-    assert!(main.window().is_visible());
-    assert!(ui::visible_pairing().is_none());
-    click(main.window(), 200.0, 188.0);
-    let reopened = ui::visible_pairing().unwrap();
-    assert_eq!(qr_pixels(&reopened), code);
+    for preference in [!motion, motion] {
+        click(window.window(), 40.0, 40.0);
+        assert!(main.window().is_visible());
+        assert!(ui::visible_pairing().is_none());
+        set_animation_preference_override(Some(preference));
+        click(main.window(), 200.0, 188.0);
+        let reopened = ui::visible_pairing().unwrap();
+        assert_eq!(reopened.get_motion_enabled(), preference);
+        assert_eq!(qr_pixels(&reopened), code);
+    }
     code
 }
 
@@ -138,8 +149,9 @@ async fn finish_add_sender(
 ) {
     let reduced = mode == "reduced";
     let hidden = mode == "hidden";
-    window.set_motion_enabled(!reduced);
+    assert_eq!(window.get_motion_enabled(), !reduced);
     if reduced {
+        verify_static_loading(window);
         evidence(window.window(), "add-confirming-reduced");
     }
     if hidden {
@@ -225,7 +237,7 @@ async fn re_enroll() {
         let claimed = claim(initial);
         send_state(&mut events, &claimed);
         sender_handshake(&mut events, &qr);
-        let mut complete = accept_report(accept(&tls, &listener), session);
+        let mut complete = accept_completion(accept(&tls, &listener), session);
         credential_ready(&mut events, complete.get_mut(), claimed);
         let mut redemption = BufReader::new(accept(&tls, &listener));
         assert_redeem(&mut redemption, session, 0);
@@ -303,22 +315,32 @@ fn scroll() {
         delta_y: -300.0,
     });
     window.dispatch_event(WindowEvent::PointerExited);
-    let end = window.take_snapshot().unwrap();
-    assert_eq!(
-        region(&start, 20, 240, 356, 24),
-        region(&end, 20, 240, 356, 24)
-    );
-    assert_ne!(
-        region(&start, 70, 534, 90, 16),
-        region(&end, 70, 534, 90, 16)
-    );
-    assert!(
-        region(&end, 70, 526, 70, 28)
-            .iter()
-            .any(|pixel| pixel.r < 100),
-        "the final row's name is visible"
-    );
+    let wheel = window.take_snapshot().unwrap();
+    click(window, 395.0, 292.0);
+    let top = window.take_snapshot().unwrap();
+    click(window, 395.0, 535.0);
+    let track = window.take_snapshot().unwrap();
     evidence(window, "main-many-devices-list-scrolled");
+    click(window, 395.0, 292.0);
+    main.set_sender_names(ModelRc::new(VecModel::from(vec![names[6].0.into()])));
+    let reference = window.take_snapshot().unwrap();
+    let seventh_name = region(&reference, 70, 281, 70, 20);
+    assert!(seventh_name.iter().any(|pixel| pixel.r < 100));
+    assert!(
+        region(&top, 24, 268, 352, 292) == region(&start, 24, 268, 352, 292),
+        "clicking above the thumb returns to the first row"
+    );
+    assert!(region(&start, 70, 525, 70, 20) != seventh_name);
+    for (input, end) in [("wheel", wheel), ("track", track)] {
+        assert!(
+            region(&end, 70, 525, 70, 20) == seventh_name,
+            "seventh Sender's name after {input}"
+        );
+        assert!(
+            region(&end, 20, 240, 356, 24) == region(&start, 20, 240, 356, 24),
+            "the heading stays fixed"
+        );
+    }
 }
 
 fn registration(token: Option<Vec<u8>>, senders: &[(&str, &str)]) -> Value {
@@ -334,6 +356,17 @@ fn registration(token: Option<Vec<u8>>, senders: &[(&str, &str)]) -> Value {
         .collect();
     json!({"version":4,"receiver_id":"receiver-1","protected_receiver_token":token,
         "active_pairings":active,"provisional_pairing":null})
+}
+
+fn verify_static_loading(window: &PairingWindow) {
+    let frame = window.window().take_snapshot().unwrap();
+    update_animations(current_tick() + Duration::from_millis(300));
+    let later = window.window().take_snapshot().unwrap();
+    assert!(
+        region(&frame, 132, 88, 176, 176) == region(&later, 132, 88, 176, 176),
+        "the loading card stays static in {:?}",
+        window.get_stage()
+    );
 }
 
 async fn verify_fade(
@@ -385,10 +418,6 @@ async fn verify_fade(
             pixel(&halfway, 220, 160).r.abs_diff(241) <= 3,
             "initial={badge}, midpoint={:?}",
             pixel(&halfway, 220, 160)
-        );
-        assert_ne!(
-            region(&halfway, 132, 88, 176, 176),
-            region(&settled, 132, 88, 176, 176)
         );
     }
 }

@@ -36,7 +36,7 @@ pub(super) fn serve(listener: TcpListener, release: Receiver<()>, qr: Receiver<V
             &mut events,
             &qr.recv_timeout(Duration::from_secs(8)).unwrap(),
         );
-        let mut report = accept_report(accept(&tls, &listener), name);
+        let mut report = accept_completion(accept(&tls, &listener), name);
         claimed["receiverConfirmed"] = json!(true);
         write_response(report.get_mut(), "200 OK", &claimed);
         release.recv_timeout(Duration::from_secs(8)).unwrap();
@@ -47,15 +47,4 @@ pub(super) fn serve(listener: TcpListener, release: Receiver<()>, qr: Receiver<V
     delivery.send(Message::Ping(vec![8].into())).unwrap();
     assert!(delivery.read().unwrap().is_pong());
     assert_peer_left(&mut delivery);
-}
-
-pub(super) fn accept_report(connection: Connection, name: &str) -> BufReader<Connection> {
-    let mut report = BufReader::new(connection);
-    let (request, headers, _) = read_request_parts(&mut report);
-    assert_eq!(
-        request,
-        format!("POST /v1/pairing-sessions/{name}/complete HTTP/1.1\r\n")
-    );
-    assert_bearer(&headers);
-    report
 }

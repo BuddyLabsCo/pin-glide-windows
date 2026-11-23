@@ -7,7 +7,7 @@ use std::{
 
 use qrcode::QrCode;
 use receiver_core::{
-    delivery::Inbox,
+    delivery::{Inbox, Sms},
     pairing::{PairingMaterial, PairingOutcome},
 };
 use reqwest::StatusCode;
@@ -59,12 +59,18 @@ pub enum PairingStart {
     AddSender,
 }
 
+#[derive(Clone)]
+pub(super) enum SmsReceiver {
+    Popup(fn(ReceivedSms)),
+    Observe(Arc<dyn Fn(Sms) + Send + Sync>),
+}
+
 pub(super) struct ProgressUpdates {
     snapshot: watch::Sender<PairingProgress>,
     pub(super) delivery: watch::Sender<DeliveryStatus>,
     notify: fn(),
     pub(super) inbox: Arc<Mutex<Inbox>>,
-    pub(super) notify_sms: fn(ReceivedSms),
+    pub(super) notify_sms: SmsReceiver,
     pub(super) delivery_capacity: Arc<Semaphore>,
 }
 
@@ -141,12 +147,42 @@ impl PairingOperation {
         Self::spawn(connect, notify, Some(store), start, drop)
     }
 
+    pub fn start_receiving_with_registration(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        path: PathBuf,
+        receive: impl Fn(Sms) + Send + Sync + 'static,
+    ) -> Self {
+        Self::spawn_worker(
+            connect,
+            || {},
+            Some(RegistrationStore::new(path)),
+            PairingStart::Registered,
+            SmsReceiver::Observe(Arc::new(receive)),
+        )
+    }
+
     pub(crate) fn spawn(
         connect: impl FnOnce() -> Option<Service> + Send + 'static,
         notify: fn(),
         store: Option<RegistrationStore>,
         start: PairingStart,
         notify_sms: fn(ReceivedSms),
+    ) -> Self {
+        Self::spawn_worker(
+            connect,
+            notify,
+            store,
+            start,
+            SmsReceiver::Popup(notify_sms),
+        )
+    }
+
+    fn spawn_worker(
+        connect: impl FnOnce() -> Option<Service> + Send + 'static,
+        notify: fn(),
+        store: Option<RegistrationStore>,
+        start: PairingStart,
+        notify_sms: SmsReceiver,
     ) -> Self {
         let (snapshot, progress) = watch::channel(PairingProgress::Preparing);
         let (delivery_updates, delivery) = watch::channel(DeliveryStatus::Unregistered);

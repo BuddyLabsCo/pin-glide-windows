@@ -9,6 +9,9 @@ use windows_app::service::{DeliveryStatus, PairingOperation, PairingProgress, Pa
 
 use super::{dpapi, fixture::*, support::wait_for};
 
+const WAIT: Duration = Duration::from_secs(5);
+const HELD_CAPACITY: u8 = 32;
+
 #[test]
 fn adds_a_sender_on_the_existing_receiver_and_delivery_connection() {
     exercise_add_sender(true);
@@ -38,7 +41,9 @@ fn exercise_add_sender(existing: bool) {
     let (listener, service) = listen();
     let (qr_out, qr_in) = mpsc::channel();
     let (online, connected) = mpsc::channel();
-    let (old_seen, release_completion) = mpsc::channel();
+    let (advance, release) = mpsc::channel();
+    let (sms, received) = mpsc::channel();
+    let held = if existing { HELD_CAPACITY } else { 1 };
     let stored_path = path.clone();
     let expected = original.clone();
     let server = std::thread::spawn(move || {
@@ -59,7 +64,7 @@ fn exercise_add_sender(existing: bool) {
         claimed["senderId"] = json!("new-sender");
         send_state(&mut events, &claimed);
         let new_key = sender_handshake(&mut events, &qr);
-        let mut completed = accept_completion(accept(&tls, &listener));
+        let mut completed = accept_completion(accept(&tls, &listener), "add-1");
         let stored: Value = serde_json::from_slice(&fs::read(stored_path).unwrap()).unwrap();
         assert_eq!(stored["receiver_id"], expected["receiver_id"]);
         assert_eq!(
@@ -75,13 +80,16 @@ fn exercise_add_sender(existing: bool) {
         assert_eq!(dpapi::unprotect(&pending["protected_key"]), new_key);
         claimed["receiverConfirmed"] = json!(true);
         write_response(completed.get_mut(), "200 OK", &claimed);
-        deliver(&mut live, "new", "new", &new_key, "654321", 22);
+        for sequence in 1..=held {
+            deliver(&mut live, "new", "new", &new_key, &otp(sequence), sequence);
+        }
         if existing {
+            for sequence in held + 1..=held + 40 {
+                send_delivery(&mut live, "new", "new", &new_key, &otp(sequence), sequence);
+            }
             deliver(&mut live, "old", "old", &old_key, "123456", 21);
         }
-        release_completion
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap();
+        release.recv_timeout(WAIT).unwrap();
         claimed["senderConfirmed"] = json!(true);
         claimed["state"] = json!("completed");
         send_state(&mut events, claimed);
@@ -91,14 +99,15 @@ fn exercise_add_sender(existing: bool) {
                 reason: "pairing_session_closed".into(),
             }))
             .unwrap();
+        release.recv_timeout(WAIT).unwrap();
+        deliver(&mut live, "new", "new", &new_key, "987654", 90);
         (live, new_key)
     });
     let delivery_service = service.clone();
-    let delivery = PairingOperation::start_with_registration(
+    let delivery = PairingOperation::start_receiving_with_registration(
         move || Some(delivery_service),
-        || {},
         path.clone(),
-        PairingStart::Registered,
+        move |message| sms.send(message.otp).unwrap(),
     );
     connected
         .recv_timeout(std::time::Duration::from_secs(5))
@@ -131,22 +140,26 @@ fn exercise_add_sender(existing: bool) {
         "add Sender never offered a QR",
     );
     if existing {
-        wait_for(
-            || delivery.latest_otp().as_deref().map(String::as_str) == Some("123456"),
-            "existing Sender stopped delivering while completion was held",
+        assert_eq!(
+            received
+                .recv_timeout(WAIT)
+                .expect("active Sender's SMS while pending buffer is full"),
+            "123456"
         );
     }
-    old_seen.send(()).unwrap();
+    assert_eq!(received.try_recv(), Err(mpsc::TryRecvError::Empty));
+    advance.send(()).unwrap();
     wait_for(
         || matches!(add.current(), PairingProgress::Completed { pairing_id } if pairing_id == "new-pairing"),
         "add Sender did not complete",
     );
+    advance.send(()).unwrap();
+    for sequence in 1..=held {
+        assert_eq!(received.recv_timeout(WAIT).unwrap(), otp(sequence));
+    }
+    assert_eq!(received.recv_timeout(WAIT).unwrap(), "987654");
     let (_live, new_key) = server.join().unwrap();
     assert_eq!(delivery.delivery_status(), DeliveryStatus::Ready);
-    wait_for(
-        || delivery.latest_otp().as_deref().map(String::as_str) == Some("654321"),
-        "the SMS delivered before completion never reached the inbox",
-    );
     let stored: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(
         stored["protected_receiver_token"],
@@ -197,9 +210,6 @@ fn rejected_add_sender(duplicate: bool) {
         "provisional_pairing":null
     });
     fs::write(&path, original.to_string()).unwrap();
-    let settings = directory.path().join("settings.json");
-    let preferences = br#"{"language":"zh","popup_seconds":45}"#;
-    fs::write(&settings, preferences).unwrap();
     let (listener, service) = listen();
     let (qr_out, qr_in) = mpsc::channel();
     let server = std::thread::spawn(move || {
@@ -219,7 +229,7 @@ fn rejected_add_sender(duplicate: bool) {
         send_state(&mut events, &claimed);
         let pending_key = sender_handshake(&mut events, &qr);
         if !duplicate {
-            let mut report = accept_completion(accept(&tls, &listener));
+            let mut report = accept_completion(accept(&tls, &listener), "add-1");
             claimed["receiverConfirmed"] = json!(true);
             write_response(report.get_mut(), "200 OK", &claimed);
             deliver(
@@ -288,7 +298,6 @@ fn rejected_add_sender(duplicate: bool) {
         serde_json::from_slice::<Value>(&fs::read(path).unwrap()).unwrap(),
         original
     );
-    assert_eq!(fs::read(settings).unwrap(), preferences);
 }
 
 fn accept_add_creation(connection: Connection) -> Value {
@@ -319,24 +328,29 @@ fn accept_add_creation(connection: Connection) -> Value {
     initial
 }
 
-fn accept_completion(connection: Connection) -> BufReader<Connection> {
-    let mut stream = BufReader::new(connection);
-    let (request, headers, body) = read_request_parts(&mut stream);
-    assert_eq!(
-        request,
-        "POST /v1/pairing-sessions/add-1/complete HTTP/1.1\r\n"
-    );
-    assert_bearer(&headers);
-    assert_eq!(
-        serde_json::from_slice::<Value>(&body).unwrap(),
-        json!({"keyConfirmation":"confirmed"})
-    );
-    stream
+fn otp(sequence: u8) -> String {
+    format!("{sequence:06}")
 }
 
 fn deliver(socket: &mut Socket, pairing: &str, sender: &str, key: &[u8; 32], otp: &str, nonce: u8) {
+    send_delivery(socket, pairing, sender, key, otp, nonce);
+    let receipt: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+    assert_eq!(
+        receipt,
+        json!({"type":"receipt", "version":1, "senderId":format!("{sender}-sender"), "messageId":format!("{sender}-{nonce}")})
+    );
+}
+
+fn send_delivery(
+    socket: &mut Socket,
+    pairing: &str,
+    sender: &str,
+    key: &[u8; 32],
+    otp: &str,
+    sequence: u8,
+) {
     let cipher = Aes256Gcm::new(key.into());
-    let nonce = [nonce; 12];
+    let nonce = [sequence; 12];
     let received_at = if pairing == "new" {
         "2026-01-01T00:01:00Z"
     } else {
@@ -351,13 +365,8 @@ fn deliver(socket: &mut Socket, pairing: &str, sender: &str, key: &[u8; 32], otp
         json!({
             "type":"delivery", "version":1, "receiverId":"receiver-1",
             "senderId":format!("{sender}-sender"), "pairingId":format!("{pairing}-pairing"),
-            "messageId":sender, "cryptoVersion":1,
+            "messageId":format!("{sender}-{sequence}"), "cryptoVersion":1,
             "nonce":STANDARD.encode(nonce), "ciphertext":STANDARD.encode(ciphertext),
         }),
-    );
-    let receipt: Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
-    assert_eq!(
-        receipt,
-        json!({"type":"receipt", "version":1, "senderId":format!("{sender}-sender"), "messageId":sender})
     );
 }

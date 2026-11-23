@@ -4,7 +4,7 @@ use tokio::sync::watch;
 
 use super::{PairingReference, RegistrationStore};
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct PendingAdd {
     session_id: String,
     receiver_id: String,
@@ -26,18 +26,12 @@ impl RegistrationStore {
         PENDING.subscribe()
     }
 
-    pub(crate) fn is_pending_add(
-        &self,
-        pending: &PendingAdds,
-        receiver_id: &str,
-        sender_id: &str,
-        pairing_id: &str,
-    ) -> bool {
-        pending.get(&self.path).is_some_and(|entry| {
-            entry.receiver_id == receiver_id
-                && entry.sender_id == sender_id
-                && entry.pairing_id == pairing_id
-        })
+    pub(crate) fn pending_add<'a>(&self, pending: &'a PendingAdds) -> Option<&'a PendingAdd> {
+        pending.get(&self.path)
+    }
+
+    pub(crate) fn current_pending_add(&self) -> Option<PendingAdd> {
+        self.pending_add(&PENDING.borrow()).cloned()
     }
 
     pub(crate) fn track_pending_add(&self, reference: &PairingReference<'_>) {
@@ -59,6 +53,14 @@ impl RegistrationStore {
             store: self,
             session_id,
         }
+    }
+}
+
+impl PendingAdd {
+    pub(crate) fn matches(&self, receiver_id: &str, sender_id: &str, pairing_id: &str) -> bool {
+        self.receiver_id == receiver_id
+            && self.sender_id == sender_id
+            && self.pairing_id == pairing_id
     }
 }
 
