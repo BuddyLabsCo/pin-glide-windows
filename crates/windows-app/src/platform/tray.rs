@@ -306,10 +306,16 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_HOTKEY => {
-            if shortcut::triggered(wparam, lparam)
-                && let Some(code) = crate::ui::latest_otp()
-            {
-                super::write_unicode_clipboard(window, &code);
+            if shortcut::triggered(wparam, lparam) {
+                let _outcome = crate::ui::latest_otp()
+                    .map(|code| super::write_unicode_clipboard(window, &code));
+                #[cfg(debug_assertions)]
+                if let Some(directory) = crate::test_environment::directory() {
+                    let _ = std::fs::write(
+                        directory.join("shortcut-dispatch"),
+                        format!("{_outcome:?}"),
+                    );
+                }
             }
             0
         }

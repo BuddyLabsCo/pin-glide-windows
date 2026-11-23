@@ -14,29 +14,40 @@ use windows_sys::Win32::{
     },
 };
 
-pub(crate) fn write_unicode_clipboard(owner: HWND, text: &str) {
+#[derive(Debug)]
+pub(crate) enum ClipboardWrite {
+    Written,
+    Busy,
+    Failed,
+}
+
+pub(crate) fn write_unicode_clipboard(owner: HWND, text: &str) -> ClipboardWrite {
     let text = zeroize::Zeroizing::new(super::wide(text));
     // SAFETY: transfer the movable allocation to Windows only if SetClipboardData succeeds.
     unsafe {
         let handle = GlobalAlloc(GMEM_MOVEABLE, size_of_val(text.as_slice()));
         if handle.is_null() {
-            return;
+            return ClipboardWrite::Failed;
         }
         let data = GlobalLock(handle).cast::<u16>();
         if data.is_null() {
             GlobalFree(handle);
-            return;
+            return ClipboardWrite::Failed;
         }
         ptr::copy_nonoverlapping(text.as_ptr(), data, text.len());
         GlobalUnlock(handle);
-        let mut written = false;
-        if OpenClipboard(owner) != 0 {
-            written = EmptyClipboard() != 0
-                && !SetClipboardData(u32::from(CF_UNICODETEXT), handle).is_null();
-            CloseClipboard();
-        }
-        if !written {
+        if OpenClipboard(owner) == 0 {
             GlobalFree(handle);
+            return ClipboardWrite::Busy;
+        }
+        let written =
+            EmptyClipboard() != 0 && !SetClipboardData(u32::from(CF_UNICODETEXT), handle).is_null();
+        CloseClipboard();
+        if written {
+            ClipboardWrite::Written
+        } else {
+            GlobalFree(handle);
+            ClipboardWrite::Failed
         }
     }
 }

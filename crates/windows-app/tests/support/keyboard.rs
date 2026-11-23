@@ -96,15 +96,23 @@ fn click_window(window: HWND) {
 }
 
 pub(super) fn press(window: HWND, keys: &[u16]) {
+    send(window, chord(keys));
+}
+
+fn chord(keys: &[u16]) -> impl Iterator<Item = (u16, u32)> + '_ {
+    keys.iter()
+        .map(|&key| (key, 0))
+        .chain(keys.iter().rev().map(|&key| (key, KEYEVENTF_KEYUP)))
+}
+
+fn send(window: HWND, events: impl IntoIterator<Item = (u16, u32)>) {
     assert_eq!(
         foreground(),
         window,
         "send input only to the foreground fixture"
     );
-    let input: Vec<_> = keys
-        .iter()
-        .map(|&key| (key, 0))
-        .chain(keys.iter().rev().map(|&key| (key, KEYEVENTF_KEYUP)))
+    let input: Vec<_> = events
+        .into_iter()
         .map(|(key, flags)| {
             let mut input = INPUT {
                 r#type: INPUT_KEYBOARD,
@@ -140,6 +148,11 @@ pub(super) fn press(window: HWND, keys: &[u16]) {
 }
 
 pub(super) fn press_captured(window: HWND, keys: &[u16]) {
+    let events: Vec<_> = chord(keys).collect();
+    send_captured(window, &events);
+}
+
+pub(super) fn send_captured(window: HWND, events: &[(u16, u32)]) {
     use std::cell::Cell;
     thread_local! { static COUNT: Cell<usize> = const { Cell::new(0) }; }
 
@@ -170,13 +183,13 @@ pub(super) fn press_captured(window: HWND, keys: &[u16]) {
     let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(key), std::ptr::null_mut(), 0) };
     assert!(!hook.is_null());
     let _observer = InputObserver(hook);
-    press(window, keys);
+    send(window, events.iter().copied());
     super::support::wait_for(
         || {
             let mut message = MSG::default();
             // SAFETY: pump sent hook callbacks without dispatching unrelated posted messages.
             unsafe { PeekMessageW(&raw mut message, std::ptr::null_mut(), 0, 0, PM_NOREMOVE) };
-            COUNT.get() >= keys.len() * 2
+            COUNT.get() >= events.len()
         },
         "the keyboard hook must receive the injected key presses and releases",
     );

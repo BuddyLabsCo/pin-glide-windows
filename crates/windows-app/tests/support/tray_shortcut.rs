@@ -16,8 +16,8 @@ use windows_sys::Win32::{
         HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext},
         Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, VK_CONTROL, VK_MENU},
         WindowsAndMessaging::{
-            CreateWindowExW, DispatchMessageW, GetMessageW, GetWindowTextW, MSG, SendMessageW,
-            WM_HOTKEY, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+            CreateWindowExW, DispatchMessageW, GetMessageW, GetWindowTextW, MSG,
+            WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
     },
 };
@@ -82,7 +82,7 @@ fn tray_shortcut_copies_with_another_process_focused() {
         socket
     });
     let receiver = child("receiver", Some((fixture.path(), &origin)));
-    let tray = wait_for_window(receiver.0.id(), |window| {
+    wait_for_window(receiver.0.id(), |window| {
         class(window) == "BuddyLabsCo.PinGlide.Tray"
     });
     let other = child("foreground", None);
@@ -92,7 +92,7 @@ fn tray_shortcut_copies_with_another_process_focused() {
     // SAFETY: querying the sequence number does not open or modify the clipboard.
     let sequence = unsafe { GetClipboardSequenceNumber() };
     keyboard::press(foreground, &[VK_CONTROL, VK_MENU, KEY.into()]);
-    thread::sleep(Duration::from_millis(100));
+    wait_for_dispatch(&fixture, "None");
     // SAFETY: the empty-inbox hotkey must leave the sequence number unchanged.
     assert_eq!(unsafe { GetClipboardSequenceNumber() }, sequence);
     deliver.send(()).unwrap();
@@ -109,27 +109,32 @@ fn tray_shortcut_copies_with_another_process_focused() {
 
     keyboard::activate(foreground);
     let locked = Clipboard::open();
-    // SAFETY: send the known registered chord to the fixture tray while this other process holds the clipboard.
-    unsafe {
-        SendMessageW(
-            tray,
-            WM_HOTKEY,
-            1,
-            ((u32::from(KEY) << 16) | MODIFIERS) as isize,
-        )
-    };
+    keyboard::press(foreground, &[VK_CONTROL, VK_MENU, KEY.into()]);
+    wait_for_dispatch(&fixture, "Some(Busy)");
     drop(locked);
     // SAFETY: a failed clipboard write must leave the previous value in place.
     assert_eq!(unsafe { GetClipboardSequenceNumber() }, sequence);
     keyboard::press(foreground, &[VK_CONTROL, VK_MENU, KEY.into()]);
     wait_for(
-        || clipboard_text().as_deref() == Some(expected.as_str()),
+        // SAFETY: observe the sequence without competing with the receiver for the clipboard.
+        || unsafe { GetClipboardSequenceNumber() != sequence },
         "Windows did not deliver the global shortcut",
     );
+    wait_for_dispatch(&fixture, "Some(Written)");
+    assert_eq!(clipboard_text().as_deref(), Some(expected.as_str()));
     assert_eq!(keyboard::foreground(), foreground);
     assert!(!has_visible_window(receiver.0.id()));
     drop(receiver);
     drop(server.join().unwrap());
+}
+
+fn wait_for_dispatch(fixture: &Fixture, expected: &str) {
+    let path = fixture.path().join("shortcut-dispatch");
+    wait_for(
+        || fs::read_to_string(&path).is_ok_and(|outcome| outcome == expected),
+        expected,
+    );
+    fs::remove_file(path).unwrap();
 }
 
 fn seed(path: &std::path::Path) {

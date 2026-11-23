@@ -7,8 +7,9 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, GetKeyNameTextW, MAPVK_VK_TO_VSC_EX, MOD_ALT, MOD_CONTROL,
             MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, MapVirtualKeyW, RegisterHotKey, UnregisterHotKey,
-            VK_CONTROL, VK_ESCAPE, VK_F1, VK_F12, VK_F24, VK_LCONTROL, VK_LMENU, VK_LSHIFT,
-            VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+            VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_F1, VK_F12, VK_F24, VK_INSERT,
+            VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_PRIOR, VK_RCONTROL, VK_RETURN,
+            VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
         },
         WindowsAndMessaging::{
             CallNextHookEx, GetForegroundWindow, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, PostMessageW,
@@ -60,7 +61,10 @@ impl Shortcut {
             // SAFETY: the key is scalar and the name buffer has the stated capacity.
             let len = unsafe {
                 let scan = MapVirtualKeyW(self.key, MAPVK_VK_TO_VSC_EX);
-                let extended = u32::from(scan > 0xff);
+                let extended = u32::from(
+                    scan > 0xff
+                        || matches!(self.key as u16, VK_PRIOR..=VK_DOWN | VK_INSERT | VK_DELETE),
+                );
                 GetKeyNameTextW(
                     ((scan & 0xff) << 16 | extended << 24) as i32,
                     name.as_mut_ptr(),
@@ -122,6 +126,8 @@ struct Capture {
     tray: HWND,
     hook: HHOOK,
     draft: Option<Shortcut>,
+    enter_down: bool,
+    escape_down: bool,
     finished: bool,
 }
 
@@ -199,6 +205,8 @@ pub(super) fn start_capture(window: HWND, tray: HWND) -> Result<(), ShortcutErro
         tray,
         hook,
         draft: None,
+        enter_down: is_down(VK_RETURN),
+        escape_down: is_down(VK_ESCAPE),
         finished: false,
     }));
     Ok(())
@@ -221,13 +229,11 @@ unsafe extern "system" fn capture_key(code: i32, message: WPARAM, data: LPARAM) 
             if window.is_some_and(|window| GetForegroundWindow() == window) {
                 let key = (*(data as *const KBDLLHOOKSTRUCT)).vkCode as u16;
                 if modifier_for(key) == 0 {
-                    if !matches!(message as u32, WM_KEYUP | WM_SYSKEYUP) {
-                        let held = modifiers();
-                        let finish =
-                            CAPTURE.with_borrow_mut(|capture| capture.as_mut()?.key(key, held));
-                        if let Some((tray, apply)) = finish {
-                            PostMessageW(tray, CAPTURE_FINISHED, usize::from(apply), 0);
-                        }
+                    let down = !matches!(message as u32, WM_KEYUP | WM_SYSKEYUP);
+                    let finish =
+                        CAPTURE.with_borrow_mut(|capture| capture.as_mut()?.key(key, down));
+                    if let Some((tray, apply)) = finish {
+                        PostMessageW(tray, CAPTURE_FINISHED, usize::from(apply), 0);
                     }
                     return 1;
                 }
@@ -239,10 +245,16 @@ unsafe extern "system" fn capture_key(code: i32, message: WPARAM, data: LPARAM) 
 }
 
 impl Capture {
-    fn key(&mut self, key: u16, held: u32) -> Option<(HWND, bool)> {
-        if self.finished {
+    fn key(&mut self, key: u16, down: bool) -> Option<(HWND, bool)> {
+        let repeated = match key {
+            VK_RETURN => std::mem::replace(&mut self.enter_down, down),
+            VK_ESCAPE => std::mem::replace(&mut self.escape_down, down),
+            _ => false,
+        };
+        if self.finished || !down || repeated {
             return None;
         }
+        let held = modifiers();
         if held == 0 && matches!(key, VK_RETURN | VK_ESCAPE) {
             self.finished = true;
             return Some((self.tray, key == VK_RETURN));
@@ -266,14 +278,15 @@ fn modifier_for(key: u16) -> u32 {
 }
 
 fn modifiers() -> u32 {
-    let down = |key: u16| {
-        // SAFETY: the key state query has no side effects. Only modifier keys are queried.
-        unsafe { GetAsyncKeyState(i32::from(key)) < 0 }
-    };
-    (u32::from(down(VK_CONTROL)) * MOD_CONTROL)
-        | (u32::from(down(VK_MENU)) * MOD_ALT)
-        | (u32::from(down(VK_SHIFT)) * MOD_SHIFT)
-        | (u32::from(down(VK_LWIN) || down(VK_RWIN)) * MOD_WIN)
+    (u32::from(is_down(VK_CONTROL)) * MOD_CONTROL)
+        | (u32::from(is_down(VK_MENU)) * MOD_ALT)
+        | (u32::from(is_down(VK_SHIFT)) * MOD_SHIFT)
+        | (u32::from(is_down(VK_LWIN) || is_down(VK_RWIN)) * MOD_WIN)
+}
+
+fn is_down(key: u16) -> bool {
+    // SAFETY: the key state query takes a scalar and has no side effects.
+    unsafe { GetAsyncKeyState(i32::from(key)) < 0 }
 }
 
 #[cfg(test)]

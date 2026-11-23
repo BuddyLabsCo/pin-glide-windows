@@ -7,7 +7,7 @@ use crate::storage::settings::Language;
 #[ignore = "requires an interactive Windows desktop"]
 fn shortcut_tooltip_shows_the_full_value_and_dismisses_on_pointer_exit() {
     use i_slint_core::{
-        item_tree::ItemRc, items::StyledTextItem, styled_text::get_raw_text, window::WindowInner,
+        accessibility::AccessibleStringProperty, item_tree::ItemRc, window::WindowInner,
     };
     use slint::{
         ComponentHandle, LogicalPosition,
@@ -22,7 +22,21 @@ fn shortcut_tooltip_shows_the_full_value_and_dismisses_on_pointer_exit() {
     settings.set_shortcut(chord.into());
     settings.show().unwrap();
     let window = settings.window();
-    let inner = WindowInner::from_pub(window);
+    let root = ItemRc::new_root(WindowInner::from_pub(window).try_component().unwrap());
+    let tooltip = || {
+        root.visit_descendants(|item| {
+            if item
+                .accessible_string_property(AccessibleStringProperty::Label)
+                .as_deref()
+                == Some(chord)
+            {
+                ControlFlow::Break(item.clone())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+    };
+    assert!(tooltip().is_none());
     update_timers_and_animations();
     window.dispatch_event(WindowEvent::PointerMoved {
         position: LogicalPosition::new(228., 210.),
@@ -30,20 +44,9 @@ fn shortcut_tooltip_shows_the_full_value_and_dismisses_on_pointer_exit() {
     std::thread::sleep(Duration::from_millis(750));
     update_timers_and_animations();
 
-    {
-        let popups = inner.active_popups();
-        assert_eq!(popups.len(), 1);
-        let root = ItemRc::new_root(popups[0].component.clone());
-        let text = root
-            .visit_descendants(|item| match item.downcast::<StyledTextItem>() {
-                Some(text) => ControlFlow::Break(text),
-                None => ControlFlow::Continue(()),
-            })
-            .unwrap();
-        assert_eq!(get_raw_text(&text.as_pin_ref().text()), chord);
-    }
+    assert!(tooltip().is_some());
     window.dispatch_event(WindowEvent::PointerExited);
-    assert!(inner.active_popups().is_empty());
+    assert!(tooltip().is_none());
 }
 
 #[test]

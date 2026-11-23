@@ -1,12 +1,12 @@
 import {
     Button,
     ComboBox,
-    LineEdit,
     Palette,
     ScrollView,
     Switch,
 } from "std-widgets.slint";
 import { BackButton } from "back_button.slint";
+import { ShortcutField } from "shortcut_field.slint";
 import { SingleLineInput, SingleLineViewport } from "single_line_input.slint";
 
 export enum PopupDurationError { None, Invalid, Save }
@@ -193,17 +193,14 @@ export component SettingsWindow inherits Window {
                     hint: root.capturing-shortcut
                         ? (root.chinese ? "按下快捷键组合，Enter 应用，Esc 取消。" : "Press the shortcut, Enter to apply, Esc to cancel.")
                         : "";
-                    LineEdit {
-                        width: 106px;
-                        text: root.capturing-shortcut ? (root.chinese ? "等待输入…" : "Waiting for input…")
+                    ShortcutField {
+                        viewport-width: root.width;
+                        value: root.capturing-shortcut ? (root.chinese ? "等待输入…" : "Waiting for input…")
                             : root.shortcut != "" ? root.shortcut
                             : (root.chinese ? "未设置" : "Unassigned");
-                        read-only: true;
-                        accessible-label: parent.label;
-                        accessible-description: parent.error != "" ? parent.error : parent.hint;
-                        if !root.capturing-shortcut && root.shortcut != "": Tooltip {
-                            text: @markdown("\{root.shortcut}");
-                        }
+                        tooltip: root.capturing-shortcut ? "" : root.shortcut;
+                        label: parent.label;
+                        description: parent.error != "" ? parent.error : parent.hint;
                     }
 
                     Button {
