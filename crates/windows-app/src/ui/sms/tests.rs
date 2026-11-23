@@ -1,8 +1,9 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, process::Command};
 
 use serde::Deserialize;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetLayeredWindowAttributes, SPI_SETWORKAREA, SendMessageW, WM_SETTINGCHANGE,
+    GetLayeredWindowAttributes, SPI_SETWORKAREA, SendMessageW, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_SETTINGCHANGE,
 };
 
 use super::*;
@@ -26,6 +27,23 @@ struct Sample {
 #[test]
 #[ignore = "requires an unlocked interactive Windows desktop"]
 fn sms_stack_matches_the_reference_timeline() {
+    const CHILD: &str = "PIN_GLIDE_SMS_MOTION_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ui::sms::tests::sms_stack_matches_the_reference_timeline",
+                "--ignored",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(
+            child.success(),
+            "SMS motion test failed in its child process"
+        );
+        return;
+    }
     platform::enable_per_monitor_dpi().unwrap();
     crate::startup_tests::select_test_backend().unwrap();
     let tray = platform::Tray::new(&platform::wide("Pin Glide SMS motion fixture")).unwrap();
@@ -54,7 +72,9 @@ fn sms_stack_matches_the_reference_timeline() {
         check_overflow(&samples[2], "height-overflow", short_area, 4).await;
         check_overflow(&samples[1], "limit-overflow", tall_area, 6).await;
         check_arrival_layout_failure(&samples[2], short_area).await;
-        check_work_area_change(&samples[2], short_area, handle).await;
+        check_work_area_change(&samples, short_area, handle, true).await;
+        check_work_area_change(&samples, short_area, handle, false).await;
+        check_dpi_change(&samples, short_area, handle).await;
         slint::quit_event_loop().unwrap();
     })
     .unwrap();
@@ -195,31 +215,122 @@ async fn check_arrival_layout_failure(sample: &Sample, area: WorkArea) {
     assert!(show_sms(sms(sample), "Fixture".into(), true).await.is_err());
     FAIL_DRAW.set(None);
     assert!(STACK.with_borrow(|stack| stack.animation.running()));
-    advance(180);
-    assert!(!oldest.window().is_visible());
+    TIME.set(Some(now() + FADE_DURATION));
+    until(Duration::from_secs(2), || !oldest.window().is_visible()).await;
     assert!(retained.window().is_visible());
     close_all();
     WORK_AREA.set(None);
 }
 
-async fn check_work_area_change(sample: &Sample, original: WorkArea, tray: HWND) {
-    platform::set_animation_preference_override(Some(false));
+async fn check_work_area_change(samples: &[Sample], original: WorkArea, tray: HWND, animate: bool) {
+    platform::set_animation_preference_override(Some(animate));
     WORK_AREA.set(Some(original));
-    let oldest = show(sample).await;
-    let middle = show(sample).await;
-    let newest = show(sample).await;
-    let mut area = fixture_area(550.0, original.scale);
+    let leaving = show(&samples[1]).await;
+    let oldest = show(&samples[0]).await;
+    let middle = show(&samples[2]).await;
+    let newest = show(&samples[3]).await;
+    advance(220);
+    leaving.invoke_dismiss();
+    advance(SAMPLE_TIME);
+    let was_leaving = bounds(&leaving);
+    let oldest_before = bounds(&oldest);
+    let mut area = original;
     area.edges[2] -= 63;
     area.edges[3] -= 45;
+    area.edges[1] = area.edges[3] - (500.0 * area.scale).round() as i32;
     WORK_AREA.set(Some(area));
     // SAFETY: the fixture owns the live tray HWND on the current thread.
     unsafe { SendMessageW(tray, WM_SETTINGCHANGE, SPI_SETWORKAREA as usize, 0) };
-    until(Duration::from_secs(2), || !oldest.window().is_visible()).await;
-    assert_eq!(bounds(&middle).right, area.edges[2] - area.margin());
-    assert_eq!(bounds(&middle).bottom, area.edges[3] - area.margin());
-    assert!(newest.window().is_visible());
+    until(Duration::from_secs(2), || popup_count() == 2).await;
+    assert_anchored(&middle, &newest, area);
+    assert_eq!(oldest.window().is_visible(), animate);
+    if animate {
+        assert!(leaving.window().is_visible());
+        assert_eq!(alpha(&leaving), 122);
+        let still_leaving = bounds(&leaving);
+        assert_eq!(
+            (still_leaving.left, still_leaving.top),
+            (was_leaving.left, was_leaving.top)
+        );
+        assert_eq!(alpha(&oldest), 255);
+        advance(SAMPLE_TIME);
+        assert_exit(&oldest, oldest_before, area.margin());
+        advance(115);
+        assert!(!oldest.window().is_visible() && !leaving.window().is_visible());
+        capture("work-area-change", 180);
+    } else {
+        assert!(!leaving.window().is_visible());
+    }
     close_all();
     WORK_AREA.set(None);
+}
+
+async fn check_dpi_change(samples: &[Sample], original: WorkArea, tray: HWND) {
+    WORK_AREA.set(Some(original));
+    let lower = show(&samples[0]).await;
+    let upper = show(&samples[2]).await;
+    let mut area = original;
+    area.edges[2] -= 63;
+    WORK_AREA.set(Some(area));
+    // SAFETY: the fixture owns the live tray HWND on the current thread.
+    unsafe { SendMessageW(tray, WM_DISPLAYCHANGE, 0, 0) };
+    until(Duration::from_secs(2), || {
+        bounds(&lower).right == area.edges[2] - area.margin()
+    })
+    .await;
+    assert_anchored(&lower, &upper, area);
+
+    let old_scale = lower.window().scale_factor();
+    area.scale = if old_scale < 1.75 { 2.0 } else { 1.25 };
+    WORK_AREA.set(Some(area));
+    for popup in [&lower, &upper] {
+        let mut suggested = bounds(popup);
+        suggested.right = suggested.left
+            + ((suggested.right - suggested.left) as f32 * area.scale / old_scale).round() as i32;
+        suggested.bottom = suggested.top
+            + ((suggested.bottom - suggested.top) as f32 * area.scale / old_scale).round() as i32;
+        let dpi = (96.0 * area.scale) as usize;
+        // SAFETY: both HWNDs are owned by this fixture and the suggested rectangle lives through dispatch.
+        unsafe {
+            SendMessageW(
+                handle(popup),
+                WM_DPICHANGED,
+                dpi | (dpi << 16),
+                (&raw const suggested) as isize,
+            )
+        };
+    }
+    until(Duration::from_secs(2), || {
+        lower.window().scale_factor() == area.scale
+            && upper.window().scale_factor() == area.scale
+            && is_anchored(&lower, &upper, area)
+    })
+    .await;
+    for popup in [&lower, &upper] {
+        assert!(((extent(bounds(popup))[0] as f32 / area.scale) - 380.0).abs() <= 1.0);
+    }
+    close_all();
+    WORK_AREA.set(None);
+}
+
+fn assert_anchored(lower: &SmsWindow, upper: &SmsWindow, area: WorkArea) {
+    assert!(
+        is_anchored(lower, upper, area),
+        "the stack did not reanchor"
+    );
+}
+
+fn is_anchored(lower: &SmsWindow, upper: &SmsWindow, area: WorkArea) -> bool {
+    let lower_bounds = bounds(lower);
+    let upper_bounds = bounds(upper);
+    let gap = (8.0 * area.scale).round() as i32;
+    let right = area.edges[2] - area.margin();
+    lower.window().is_visible()
+        && upper.window().is_visible()
+        && lower_bounds.right == right
+        && upper_bounds.right == right
+        && lower_bounds.bottom == area.edges[3] - area.margin()
+        && upper_bounds.bottom == lower_bounds.top - gap
 }
 
 fn fixture_area(height: f32, scale: f32) -> WorkArea {

@@ -27,6 +27,23 @@ thread_local! {
 const FADE_DURATION: Duration = Duration::from_millis(180);
 const SLIDE_DURATION: Duration = Duration::from_millis(220);
 
+#[derive(Clone, Copy)]
+enum LayoutMotion {
+    None,
+    Exit,
+    Stack,
+}
+
+impl LayoutMotion {
+    fn for_stack(animate: bool) -> Self {
+        if animate { Self::Stack } else { Self::None }
+    }
+
+    fn exits(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 #[derive(Default)]
 struct Stack {
     visible: BTreeMap<u64, Popup>,
@@ -69,6 +86,11 @@ struct Popup {
     hwnd: HWND,
     expiry: Timer,
     motion: Option<Motion>,
+    size: [i32; 2],
+}
+
+fn extent(rect: RECT) -> [i32; 2] {
+    [rect.right - rect.left, rect.bottom - rect.top]
 }
 
 #[derive(Clone, Copy)]
@@ -128,13 +150,18 @@ impl Popup {
 }
 
 impl Stack {
-    fn layout(&mut self, incoming: Option<u64>, animate: bool, started: Instant) -> io::Result<()> {
+    fn layout(
+        &mut self,
+        incoming: Option<u64>,
+        motion: LayoutMotion,
+        started: Instant,
+    ) -> io::Result<()> {
         let Some(anchor) = self.visible.first_key_value().map(|(_, popup)| popup) else {
             self.area = None;
             return Ok(());
         };
         let area = WorkArea::read(anchor)?;
-        self.layout_in(area, incoming, animate, started)?;
+        self.layout_in(area, incoming, motion, started)?;
         self.area = Some(area);
         Ok(())
     }
@@ -143,7 +170,7 @@ impl Stack {
         &mut self,
         area: WorkArea,
         incoming: Option<u64>,
-        animate: bool,
+        motion: LayoutMotion,
         started: Instant,
     ) -> io::Result<()> {
         let [_, top, right, work_bottom] = area.edges;
@@ -166,23 +193,22 @@ impl Stack {
             .count();
         let (evicted, retained) = bounds.split_at(bounds.len() - fitting);
         for &(id, _) in evicted {
-            self.remove(id, animate && Some(id) != incoming, started);
+            self.remove(id, motion.exits() && Some(id) != incoming, started);
         }
 
         let mut bottom = work_bottom - margin;
         for &(id, bounds) in retained {
             let popup = self.visible.get_mut(&id).unwrap();
-            bottom -= bounds.bottom - bounds.top;
+            let [width, height] = extent(bounds);
+            popup.size = [width, height];
+            bottom -= height;
             let to = Frame {
-                position: PhysicalPosition::new(
-                    right - margin - (bounds.right - bounds.left),
-                    bottom,
-                ),
+                position: PhysicalPosition::new(right - margin - width, bottom),
                 alpha: 255,
             };
             bottom -= gap;
             popup.motion = None;
-            if animate && Some(id) == incoming {
+            if matches!(motion, LayoutMotion::Stack) && Some(id) == incoming {
                 popup.start_motion(Motion {
                     from: Frame {
                         position: PhysicalPosition::new(to.position.x + margin, to.position.y),
@@ -192,7 +218,7 @@ impl Stack {
                     started,
                     duration: FADE_DURATION,
                 })?;
-            } else if animate && bounds.top != to.position.y {
+            } else if matches!(motion, LayoutMotion::Stack) && bounds.top != to.position.y {
                 popup.start_motion(Motion {
                     from: Frame {
                         position: PhysicalPosition::new(to.position.x, bounds.top),
@@ -386,13 +412,15 @@ async fn show_sms_for_session(
                 hwnd: owner,
                 expiry: timer,
                 motion: None,
+                size: [0; 2],
             },
         );
         let started = now();
-        let result = stack.layout(Some(id), animate, started);
+        let motion = LayoutMotion::for_stack(animate);
+        let result = stack.layout(Some(id), motion, started);
         if result.is_err() {
             stack.remove(id, false, started);
-            let _ = stack.layout(None, false, started);
+            let _ = stack.layout(None, LayoutMotion::None, started);
         }
         stack.schedule_frame(animate);
         result.map_err(native_error)?;
@@ -409,28 +437,37 @@ fn dismiss(id: u64) {
     STACK.with_borrow_mut(|stack| {
         let started = now();
         if stack.remove(id, animate, started) {
-            let _ = stack.layout(None, animate, started);
+            let motion = LayoutMotion::for_stack(animate);
+            let _ = stack.layout(None, motion, started);
             stack.schedule_frame(animate);
         }
     });
 }
 
-pub(super) fn update_motion() {
+pub(super) fn refresh_layout(resized: bool) {
+    let animate = platform::animations_enabled();
     STACK.with_borrow_mut(|stack| {
         let area = stack
             .visible
             .first_key_value()
             .and_then(|(_, anchor)| WorkArea::read(anchor).ok());
+        let size_changed = resized
+            && stack.visible.values().any(|popup| {
+                platform::popup_bounds(popup.hwnd).is_ok_and(|bounds| extent(bounds) != popup.size)
+            });
         if let Some(area) = area
-            && stack.area != Some(area)
+            && (size_changed || stack.area != Some(area))
         {
-            if stack.layout_in(area, None, false, now()).is_ok() {
+            let motion = if animate {
+                LayoutMotion::Exit
+            } else {
+                LayoutMotion::None
+            };
+            if stack.layout_in(area, None, motion, now()).is_ok() {
                 stack.area = Some(area);
             }
-            stack.tick(false);
-        } else if !platform::animations_enabled() {
-            stack.tick(false);
         }
+        stack.schedule_frame(animate);
     });
 }
 

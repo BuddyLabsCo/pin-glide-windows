@@ -154,6 +154,7 @@ interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
 | `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop with Pin Glide stopped |
 | `cargo test --locked -p windows-app --test pairing_desktop -- --ignored` | Check key-check motion, QR removal and terminal states on an interactive Windows desktop |
 | `cargo test --locked -p windows-app --test sms_desktop -- --ignored` | Check SMS popup rendering, scrolling and dismissal on an unlocked Windows desktop. Writes a synthetic OTP to the clipboard. |
+| `cargo test --locked -p windows-app --lib sms_stack_matches_the_reference_timeline -- --ignored` | Check SMS stack motion, overflow, and work-area and DPI changes in an isolated process on an unlocked Windows desktop. |
 
 The source gates cover handwritten files in `receiver-core` and `windows-app`.
 Generated code is checked through regeneration and compilation when added.

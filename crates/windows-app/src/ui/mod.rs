@@ -119,7 +119,7 @@ pub fn delivery_status() -> DeliveryStatus {
 
 pub fn update_motion() {
     pairing::update_motion();
-    sms::update_motion();
+    sms::refresh_layout(false);
     WELCOME.with_borrow(|welcome| {
         if let Some(window) = welcome {
             let enabled = platform::animations_enabled();
@@ -129,6 +129,10 @@ pub fn update_motion() {
             window.set_motion_enabled(enabled);
         }
     });
+}
+
+pub(crate) fn resize_sms_popups() {
+    sms::refresh_layout(true);
 }
 
 fn show() -> Result<(), PlatformError> {

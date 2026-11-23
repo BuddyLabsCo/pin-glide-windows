@@ -20,14 +20,15 @@ use windows_sys::Win32::{
         WindowsAndMessaging::{
             GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, LWA_ALPHA, STYLESTRUCT,
             SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetLayeredWindowAttributes,
-            SetWindowLongPtrW, SetWindowPos, WM_NCDESTROY, WM_STYLECHANGING, WS_EX_LAYERED,
-            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+            SetWindowLongPtrW, SetWindowPos, WM_DPICHANGED, WM_NCDESTROY, WM_SIZE,
+            WM_STYLECHANGING, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
         },
     },
 };
 
 thread_local! {
     static CREATING_POPUP: Cell<bool> = const { Cell::new(false) };
+    static RESIZE_QUEUED: Cell<bool> = const { Cell::new(false) };
 }
 
 const POPUP_STYLES: u32 = WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED;
@@ -117,7 +118,23 @@ unsafe extern "system" fn popup_window_proc(
         } else if message == WM_NCDESTROY {
             RemoveWindowSubclass(hwnd, Some(popup_window_proc), id);
         }
-        DefSubclassProc(hwnd, message, wparam, lparam)
+        let result = DefSubclassProc(hwnd, message, wparam, lparam);
+        if matches!(message, WM_SIZE | WM_DPICHANGED) {
+            queue_popup_resize();
+        }
+        result
+    }
+}
+
+fn queue_popup_resize() {
+    if !RESIZE_QUEUED.replace(true)
+        && slint::invoke_from_event_loop(|| {
+            RESIZE_QUEUED.set(false);
+            crate::ui::resize_sms_popups();
+        })
+        .is_err()
+    {
+        RESIZE_QUEUED.set(false);
     }
 }
 
