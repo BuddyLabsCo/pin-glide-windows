@@ -8,6 +8,8 @@ mod dpapi;
 #[allow(dead_code)]
 #[path = "support/main_capture.rs"]
 mod main_capture;
+#[path = "support/settings_duration.rs"]
+mod settings_duration;
 #[path = "support/settings_frames.rs"]
 mod settings_frames;
 mod support;

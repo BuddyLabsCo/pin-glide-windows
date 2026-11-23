@@ -1,5 +1,6 @@
 import { Button, Palette } from "std-widgets.slint";
 import { BackButton } from "back_button.slint";
+import { SingleLineInput, SingleLineViewport } from "single_line_input.slint";
 
 export struct NamePaste {
     text: string,
@@ -69,8 +70,7 @@ export component SenderNameForm inherits Rectangle {
             border-color: #903d34;
         }
 
-        Rectangle {
-            clip: true;
+        SingleLineViewport {
             x: root.compact ? 10px : 11px;
             width: parent.width - 2 * self.x;
             ContextMenuArea {
@@ -120,27 +120,15 @@ export component SenderNameForm inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                field := TextInput {
-                    property <length> offset;
-                    x: offset;
-                    width: max(parent.width - 1px, self.preferred-width);
-                    height: 100%;
+                field := SingleLineInput {
+                    viewport-width: parent.width;
                     color: root.compact ? black : #242424;
-                    vertical-alignment: center;
-                    single-line: true;
                     enabled: root.editable;
                     text <=> root.name;
                     accessible-role: text-input;
                     accessible-value: root.name;
                     accessible-label: root.chinese ? "设备名称" : "Device name";
                     accessible-description: root.error;
-                    cursor-position-changed(position) => {
-                        if position.x + self.offset > parent.width - 1px {
-                            self.offset = parent.width - 1px - position.x;
-                        } else if position.x + self.offset < 0px {
-                            self.offset = -position.x;
-                        }
-                    }
                     key-pressed(event) => {
                         if (event.modifiers.control && (event.text == "v" || event.text == "V"))
                             || (event.modifiers.shift && event.text == Key.Insert) {

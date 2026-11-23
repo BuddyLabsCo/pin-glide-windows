@@ -67,10 +67,10 @@ fn launch_at_login_keeps_the_working_registration_when_settings_cannot_be_saved(
         Language::System
     );
     drop(locked);
-    fs::write(&path, br#"{"version":2}"#).unwrap();
+    fs::write(&path, br#"{"version":3}"#).unwrap();
     assert!(preferences.save_startup(false).is_err());
     assert!(preferences.is_startup_enabled().unwrap());
-    assert_eq!(fs::read(&path).unwrap(), br#"{"version":2}"#);
+    assert_eq!(fs::read(&path).unwrap(), br#"{"version":3}"#);
     fs::write(&path, br#"{"version":1}"#).unwrap();
     preferences.save_startup(false).unwrap();
     assert!(!preferences.is_startup_enabled().unwrap());
@@ -91,7 +91,7 @@ fn launch_at_login_respects_the_windows_override_and_recovers_after_it_is_cleare
     let startup = RegistryCleanup(LaunchAtLogin::for_test(name));
     startup.0.set(true).unwrap();
     let store = SettingsStore::new(path.clone());
-    store.save(Default::default()).unwrap();
+    store.save(&Default::default()).unwrap();
     let committed = fs::read(&path).unwrap();
     let mut preferences = Preferences::load(store, Ok(LaunchAtLogin::for_test(name)));
     startup.0.set_test_approval(false);

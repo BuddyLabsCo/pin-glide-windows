@@ -95,6 +95,22 @@ pub(super) fn accessible_name(handle: usize, expected: &str) -> windows::core::R
 }
 
 #[allow(dead_code)]
+pub(super) fn live_region_is_polite(handle: usize, label: &str) -> bool {
+    use windows::{
+        Win32::UI::Accessibility::{IUIAutomationElement2, Polite},
+        core::Interface,
+    };
+
+    with_automation(|automation| {
+        let error = named_element(automation, handle, label, false)?.expect("visible error");
+        let error: IUIAutomationElement2 = error.cast()?;
+        // SAFETY: COM is initialized and the element belongs to the fixture.
+        Ok(unsafe { error.CurrentLiveSetting()? == Polite })
+    })
+    .unwrap()
+}
+
+#[allow(dead_code)]
 pub(super) fn toggle(window: usize, label: &str) {
     use windows::Win32::UI::Accessibility::{IUIAutomationTogglePattern, UIA_TogglePatternId};
     with_automation(|automation| {
@@ -108,6 +124,27 @@ pub(super) fn toggle(window: usize, label: &str) {
         }
     })
     .unwrap();
+}
+
+#[allow(dead_code)]
+pub(super) fn edit_value(window: usize, label: &str, value: Option<&str>) -> String {
+    use windows::{
+        Win32::UI::Accessibility::{IUIAutomationValuePattern, UIA_ValuePatternId},
+        core::BSTR,
+    };
+    with_automation(|automation| {
+        let element = named_element(automation, window, label, false)?.expect("visible input");
+        // SAFETY: the live fixture element and its value pattern are used on the COM thread.
+        unsafe {
+            let input =
+                element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)?;
+            if let Some(value) = value {
+                input.SetValue(&BSTR::from(value))?;
+            }
+            Ok(input.CurrentValue()?.to_string())
+        }
+    })
+    .unwrap()
 }
 
 fn named_element(

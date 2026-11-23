@@ -68,6 +68,8 @@ paired devices unusable.
   previous shortcut in place.
 - **Popup duration** defaults to 30 seconds. Leaving the field applies a
   positive whole number of seconds. Invalid input shows an inline error.
+  A save failure restores the last saved duration and shows an inline
+  error asking the user to retry.
 
 ## SMS and tray
 
