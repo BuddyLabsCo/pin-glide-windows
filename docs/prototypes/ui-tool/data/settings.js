@@ -83,6 +83,21 @@ window.UI_CASES = [
     "durationError": "\u8bf7\u8f93\u5165\u5927\u4e8e\u96f6\u7684\u6574\u6570\u79d2\u6570\u3002"
   },
   {
+    "key": "settings-duration-save-failed",
+    "group": "\u8bbe\u7f6e",
+    "title": "\u5f39\u7a97\u65f6\u957f\u4fdd\u5b58\u5931\u8d25",
+    "component": "SettingsWindow",
+    "image": "shots/settings-duration-save-failed.png",
+    "size": [
+      420,
+      392
+    ],
+    "back": true,
+    "durationTop": 244,
+    "durationDraft": "45",
+    "durationError": "\u65e0\u6cd5\u4fdd\u5b58\u5f39\u7a97\u663e\u793a\u65f6\u957f\uff0c\u8bf7\u91cd\u8bd5\u3002"
+  },
+  {
     "key": "settings-language-zh",
     "group": "\u8bbe\u7f6e",
     "title": "\u624b\u52a8\u9009\u62e9\u4e2d\u6587",

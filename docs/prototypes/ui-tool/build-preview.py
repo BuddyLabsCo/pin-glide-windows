@@ -116,6 +116,9 @@ case("settings-startup-failed", "设置", "开机启动设置失败", "SettingsW
 case("settings-duration-invalid", "设置", "弹窗时长无效", "SettingsWindow",
      "保留上次保存的值，输入范围的具体上限仍待确定。",
      **{"duration-draft": "0", "duration-error": "请输入大于零的整数秒数。"})
+case("settings-duration-save-failed", "设置", "弹窗时长保存失败", "SettingsWindow",
+     "保存失败时恢复上次保存的时长，并在字段旁提示重试。",
+     **{"duration": "45", "duration-draft": "45", "duration-error": "无法保存弹窗显示时长，请重试。"})
 case("settings-language-zh", "设置", "手动选择中文", "SettingsWindow",
      "正式应用手动使用中文，不再跟随系统语言；此演示始终只展示中文。",
      **{"language-index": 1})
