@@ -219,6 +219,7 @@ async fn verify_hidden_name(window: &PairingWindow, main: &windows_app::MainWind
 }
 
 async fn re_enroll() {
+    set_animation_preference_override(Some(false));
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("registration.json");
     fs::write(
@@ -229,10 +230,12 @@ async fn re_enroll() {
     let (listener, service) = listen();
     let (scan, qr) = mpsc::channel::<Value>();
     let (second_scan, second_qr) = mpsc::channel::<()>();
+    let (prepared, capture_done) = mpsc::channel();
     let server = thread::spawn(move || {
         let tls = acceptor();
         let session = "new-receiver";
         let initial = snapshot(session, "awaiting_authorization", 30);
+        capture_done.recv_timeout(Duration::from_secs(8)).unwrap();
         accept_creation(accept(&tls, &listener), &initial);
         let mut events = accept_events(accept(&tls, &listener), session);
         send_state(&mut events, &initial);
@@ -263,14 +266,18 @@ async fn re_enroll() {
         .unwrap()
         .unwrap();
     wait_for(
-        || ui::delivery_status() == DeliveryStatus::Credential,
+        || ui::delivery_status() == DeliveryStatus::MissingCredential,
         "unreadable R in tray",
     )
     .await;
+    evidence(main.window(), "main-local-r");
     click(main.window(), 200.0, 188.0);
     let window = ui::visible_pairing().unwrap();
     assert!(!window.get_adding_device());
     assert!(!main.window().is_visible());
+    assert_eq!(window.get_stage(), PairingStage::Preparing);
+    evidence(window.window(), "pair-preparing");
+    prepared.send(()).unwrap();
     stage(&window, PairingStage::Waiting).await;
     let pixels = qr_pixels(&window);
     let width = pixels.len().isqrt();
@@ -308,7 +315,8 @@ fn scroll() {
         ("家用设备", "6"),
         ("客厅设备", "7"),
     ];
-    fs::write(&path, registration(None, &names).to_string()).unwrap();
+    let token = dpapi::protect(RECEIVER_TOKEN.as_bytes());
+    fs::write(&path, registration(Some(token), &names).to_string()).unwrap();
     let main = ui::open_registered(true, path, || None).unwrap().unwrap();
     let window = main.window();
     let start = window.take_snapshot().unwrap();
@@ -468,7 +476,7 @@ async fn stage(window: &PairingWindow, stage: PairingStage) {
     .await;
 }
 
-async fn wait_for(mut condition: impl FnMut() -> bool, expectation: &str) {
+pub(super) async fn wait_for(mut condition: impl FnMut() -> bool, expectation: &str) {
     let limit = Instant::now() + Duration::from_secs(10);
     while !condition() {
         assert!(Instant::now() < limit, "{expectation}");
@@ -484,7 +492,7 @@ pub(super) async fn tick() {
     receive.await.unwrap();
 }
 
-fn evidence(window: &Window, name: &str) {
+pub(super) fn evidence(window: &Window, name: &str) {
     if let Some(directory) = std::env::var_os("PIN_GLIDE_ADD_EVIDENCE").map(PathBuf::from) {
         capture(window, &Path::new(&directory).join(format!("{name}.ppm")));
     }

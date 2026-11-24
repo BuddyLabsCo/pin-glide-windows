@@ -5,6 +5,8 @@ import { SenderScrollbar } from "sender_scrollbar.slint";
 
 export component MainWindow inherits Window {
     in property <bool> chinese;
+    in property <bool> receiver-revoked;
+    in property <bool> receiver-credential-missing;
     in property <[SenderRowData]> sender-devices;
     private property <int> editor: -1;
     private property <string> editor-error;
@@ -195,7 +197,7 @@ export component MainWindow inherits Window {
                 height: 40px;
                 border-radius: 6px;
                 property <string> label: root.chinese ? "配对新设备" : "Pair a new device";
-                background: #006b60;
+                background: press.pressed ? #00574f : press.has-hover ? #087b6e : #006b60;
                 accessible-role: button;
                 accessible-label: self.label;
                 accessible-action-default => { root.open-pairing(); }
@@ -206,19 +208,14 @@ export component MainWindow inherits Window {
                     font-weight: 600;
                 }
 
-                Rectangle {
-                    border-radius: 6px;
-                    background: press.has-hover ? #284e7912 : transparent;
-                }
-
                 if key-focus.has-focus: Rectangle {
-                    x: -4px;
-                    y: -4px;
-                    width: parent.width + 8px;
-                    height: parent.height + 8px;
-                    border-radius: 10px;
+                    x: -3px;
+                    y: -3px;
+                    width: parent.width + 6px;
+                    height: parent.height + 6px;
+                    border-radius: 8px;
                     border-width: 2px;
-                    border-color: #284e79;
+                    border-color: #19685b;
                 }
 
                 key-focus := FocusScope {
@@ -267,9 +264,14 @@ export component MainWindow inherits Window {
                         if root.sender-devices.length == 0: Text {
                             x: 16px;
                             width: parent.width - 32px;
-                            text: root.chinese ? "还没有已配对的设备。" : "No devices paired yet.";
+                            text: root.receiver-revoked
+                                ? (root.chinese ? "此接收端已被移除。" : "This Receiver has been removed.")
+                                : root.receiver-credential-missing
+                                ? (root.chinese ? "无法读取本地接收凭据。" : "Could not read the local Receiver credential.")
+                                : (root.chinese ? "还没有已配对的设备。" : "No devices paired yet.");
                             font-size: 13px;
                             color: #65716e;
+                            wrap: word-wrap;
                             vertical-alignment: center;
                         }
 

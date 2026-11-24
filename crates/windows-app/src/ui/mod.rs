@@ -21,13 +21,15 @@ pub(crate) use settings::{finish_shortcut_capture, restore_shortcut};
 pub use sms::show_sms;
 
 pub(crate) fn resume_pairing(connect: fn() -> Option<Service>) -> Result<(), PlatformError> {
-    if PairingOperation::has_pending_enrollment() {
-        return pairing::resume(platform::chinese());
-    }
-    if let Ok(store) = RegistrationStore::for_current_user()
-        && store.has_registration()
-    {
-        start_registered(store, connect);
+    if let Ok(store) = RegistrationStore::for_current_user() {
+        if recovery_status(&store).is_none()
+            && store.enrollment().is_ok_and(|entry| entry.is_some())
+        {
+            return pairing::resume(platform::chinese());
+        }
+        if store.has_registration() {
+            start_registered(store, connect);
+        }
     }
     Ok(())
 }
@@ -94,6 +96,35 @@ fn update_delivery_status() {
         .or_else(pairing::delivery_status)
         .unwrap_or(DeliveryStatus::Unregistered);
     platform::set_delivery_status(status);
+}
+
+fn registered_revoked() -> bool {
+    REGISTERED.with_borrow(|operation| {
+        operation
+            .as_ref()
+            .is_some_and(|operation| operation.delivery_status() == DeliveryStatus::Revoked)
+    })
+}
+
+fn recovery_status(store: &RegistrationStore) -> Option<DeliveryStatus> {
+    if registered_revoked() || store.receiver_revoked() {
+        Some(DeliveryStatus::Revoked)
+    } else if store.has_registration() && store.receiver_credential().is_err() {
+        Some(DeliveryStatus::MissingCredential)
+    } else {
+        None
+    }
+}
+
+fn refresh_delivery_ui() {
+    sms::close_invalid();
+    let store = REGISTERED
+        .with_borrow(|operation| operation.as_ref()?.registration().cloned())
+        .or_else(pairing::registration);
+    if let Some(store) = store {
+        refresh_visible_main(&store);
+    }
+    update_delivery_status();
 }
 
 fn start_registered(
@@ -217,10 +248,7 @@ fn registered_window(
     chinese: bool,
     connect: impl Fn() -> Option<Service> + Clone + Send + 'static,
 ) -> Result<Option<MainWindow>, PlatformError> {
-    let Ok(devices) = store.sender_devices() else {
-        return Ok(None);
-    };
-    if devices.is_empty() && !store.has_registration() {
+    if !store.has_registration() && !registered_revoked() {
         return Ok(None);
     }
     let window = MAIN.with_borrow_mut(|main| {
@@ -236,7 +264,7 @@ fn registered_window(
         let pairing_store = store.clone();
         window.on_open_pairing(move || {
             let Some(window) = weak.upgrade() else { return };
-            let adding = pairing_store.receiver_credential().is_ok() && !pairing::enrolling();
+            let adding = recovery_status(&pairing_store).is_none() && !pairing::enrolling();
             let result = pairing::open_from_main(
                 window.get_chinese(),
                 &pairing_store,
@@ -263,7 +291,7 @@ fn registered_window(
         *main = Some(window.clone_strong());
         Ok::<_, PlatformError>(window)
     })?;
-    set_sender_devices(&window, devices);
+    refresh_main(&window, store);
     register_sender_actions(&window, store.clone());
     Ok(Some(window))
 }
@@ -279,11 +307,22 @@ fn refresh_visible_main(store: &RegistrationStore) {
     MAIN.with_borrow(|main| {
         if let Some(window) = main
             && window.window().is_visible()
-            && let Ok(devices) = store.sender_devices()
         {
-            set_sender_devices(window, devices);
+            refresh_main(window, store);
         }
     });
+}
+
+fn refresh_main(window: &MainWindow, store: &RegistrationStore) {
+    let recovery = recovery_status(store);
+    window.set_receiver_revoked(recovery == Some(DeliveryStatus::Revoked));
+    window.set_receiver_credential_missing(recovery == Some(DeliveryStatus::MissingCredential));
+    let devices = if recovery.is_some() {
+        Vec::new()
+    } else {
+        store.sender_devices().unwrap_or_default()
+    };
+    set_sender_devices(window, devices);
 }
 
 fn set_sender_devices(window: &MainWindow, devices: Vec<SenderDevice>) {

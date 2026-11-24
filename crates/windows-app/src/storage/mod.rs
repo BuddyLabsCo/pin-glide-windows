@@ -87,6 +87,8 @@ struct Registration {
     version: u32,
     receiver_id: Option<String>,
     protected_receiver_token: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    receiver_revoked: bool,
     active_pairings: BTreeMap<String, ProtectedPairing>,
     provisional_pairing: Option<ProvisionalPairing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,14 +239,67 @@ impl RegistrationStore {
         Ok((id, Zeroizing::new(token.to_owned())))
     }
 
+    pub(crate) fn remove_pairing(
+        &self,
+        receiver_id: &str,
+        pairing_id: &str,
+        sender_id: &str,
+    ) -> io::Result<()> {
+        self.update(|next| {
+            if next.receiver_id.as_deref() != Some(receiver_id) {
+                return Err(io::ErrorKind::NotFound.into());
+            }
+            if next
+                .active_pairings
+                .get(pairing_id)
+                .is_some_and(|pairing| pairing.sender_id != sender_id)
+            {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            next.active_pairings.remove(pairing_id);
+            if next.provisional_pairing.as_ref().is_some_and(|pairing| {
+                pairing.receiver_id == receiver_id
+                    && pairing.pairing_id == pairing_id
+                    && pairing.sender_id == sender_id
+            }) {
+                next.provisional_pairing = None;
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn revoke_receiver(&self, receiver_id: &str) -> io::Result<()> {
+        self.update(|next| {
+            if next.receiver_id.as_deref() != Some(receiver_id) {
+                return Err(io::ErrorKind::NotFound.into());
+            }
+            *next = Registration {
+                receiver_revoked: true,
+                ..Registration::default()
+            };
+            Ok(())
+        })
+    }
+
+    pub(crate) fn receiver_revoked(&self) -> bool {
+        self.read().is_ok_and(|stored| stored.receiver_revoked)
+    }
+
     pub(crate) fn has_pairings(&self) -> io::Result<bool> {
         self.read().map(|stored| !stored.active_pairings.is_empty())
     }
 
     #[cfg(windows)]
     pub(crate) fn has_registration(&self) -> bool {
-        self.read()
-            .is_ok_and(|stored| stored.receiver_id.is_some() || !stored.active_pairings.is_empty())
+        self.read().map_or_else(
+            |_| self.path.exists(),
+            |stored| {
+                stored.receiver_revoked
+                    || stored.receiver_id.is_some()
+                    || stored.protected_receiver_token.is_some()
+                    || !stored.active_pairings.is_empty()
+            },
+        )
     }
 
     fn update<Value, Error>(
@@ -268,14 +323,7 @@ impl RegistrationStore {
         let mut file = match File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Registration {
-                    version: CURRENT_VERSION,
-                    receiver_id: None,
-                    protected_receiver_token: None,
-                    active_pairings: BTreeMap::new(),
-                    provisional_pairing: None,
-                    enrollment: None,
-                });
+                return Ok(Registration::default());
             }
             Err(error) => return Err(error),
         };
@@ -297,8 +345,7 @@ impl RegistrationStore {
                     receiver_id: legacy.receiver_id,
                     protected_receiver_token: legacy.protected_receiver_token,
                     active_pairings: legacy.active_pairings,
-                    provisional_pairing: None,
-                    enrollment: None,
+                    ..Registration::default()
                 }
             }
             2..=CURRENT_VERSION => {
@@ -349,6 +396,20 @@ impl Registration {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
         Ok(())
+    }
+}
+
+impl Default for Registration {
+    fn default() -> Self {
+        Self {
+            version: CURRENT_VERSION,
+            receiver_id: None,
+            protected_receiver_token: None,
+            receiver_revoked: false,
+            active_pairings: BTreeMap::new(),
+            provisional_pairing: None,
+            enrollment: None,
+        }
     }
 }
 

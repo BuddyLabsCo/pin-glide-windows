@@ -111,6 +111,7 @@ impl RegistrationStore {
                 }
                 next.receiver_id = Some(enrollment.receiver_id);
                 next.protected_receiver_token = Some(token);
+                next.receiver_revoked = false;
                 let name = next
                     .active_pairings
                     .get(&pairing.pairing_id)

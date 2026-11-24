@@ -117,7 +117,8 @@ within 500 lines.
   versions 1 through 3 and migrate them on the next successful write.
 - Scope key loss and Pairing removal to the affected Pairing. Receiver
   revocation clears registration and Pairing state while keeping settings.
-  Missing R requires explicit new registration. Installation upgrades
+  The registration file retains only a revocation marker until successful
+  replacement. Missing R requires explicit new registration. Installation upgrades
   preserve data. Uninstall removes app-owned data and registrations.
 - Keep SMS bodies in their popups and the latest OTP in memory. Keep both
   out of persistent storage and logs. Leave the OS clipboard alone on cleanup.

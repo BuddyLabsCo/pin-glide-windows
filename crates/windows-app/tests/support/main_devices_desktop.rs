@@ -33,6 +33,9 @@ use super::{
     select_backend,
 };
 
+#[path = "recovery_desktop.rs"]
+mod recovery_desktop;
+
 const NAMES: [&str; 7] = [
     "我的设备",
     "备用设备",
@@ -262,10 +265,7 @@ fn send_rename_sms(socket: &mut Socket) {
 async fn check_delivered_popup() {
     let started = Instant::now();
     loop {
-        let mut popup: HWND = std::ptr::null_mut();
-        // SAFETY: the callback receives a writable pointer for synchronous enumeration.
-        unsafe { EnumWindows(Some(find_sms), (&raw mut popup) as LPARAM) };
-        if !popup.is_null() {
+        if let Some(popup) = visible_sms() {
             let handle = popup as usize;
             let (send, receive) = tokio::sync::oneshot::channel();
             thread::spawn(move || send.send(accessible_name(handle, RENAMED)).unwrap());
@@ -286,6 +286,18 @@ async fn check_delivered_popup() {
         );
         tick().await;
     }
+}
+
+pub(super) fn visible_sms() -> Option<HWND> {
+    let mut popup: HWND = std::ptr::null_mut();
+    #[expect(
+        clippy::undocumented_unsafe_blocks,
+        reason = "the callback only uses the pointer during enumeration"
+    )]
+    unsafe {
+        EnumWindows(Some(find_sms), (&raw mut popup) as LPARAM)
+    };
+    (!popup.is_null()).then_some(popup)
 }
 
 unsafe extern "system" fn find_sms(window: HWND, output: LPARAM) -> i32 {

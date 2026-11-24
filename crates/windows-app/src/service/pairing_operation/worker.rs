@@ -15,13 +15,27 @@ use crate::service::{
     pairing_session_view, reconnect::Reconnect,
 };
 
+pub(super) fn missing_receiver(
+    start: PairingStart,
+    store: &RegistrationStore,
+) -> Option<DeliveryStatus> {
+    if !matches!(start, PairingStart::Registered) || store.receiver_credential().is_ok() {
+        return None;
+    }
+    Some(if store.receiver_revoked() {
+        DeliveryStatus::Revoked
+    } else {
+        DeliveryStatus::MissingCredential
+    })
+}
+
 async fn receive_registered(
     service: &Service,
     store: &RegistrationStore,
     updates: &ProgressUpdates,
 ) {
     let Ok((receiver_id, token)) = store.receiver_credential() else {
-        updates.delivery_status(DeliveryStatus::Credential);
+        updates.delivery_status(DeliveryStatus::MissingCredential);
         return;
     };
     let mut receiver = Reconnect::new(service, &token, &receiver_id, updates);

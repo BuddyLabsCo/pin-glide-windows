@@ -241,10 +241,11 @@ fn set_tooltip(data: &mut NOTIFYICONDATAW, chinese: bool) {
         ),
         Heartbeat => ("Not Ready: Connection timed out", "未就绪：接收连接超时"),
         Suspended => ("Not Ready: Windows suspended", "未就绪：Windows 已暂停"),
-        Credential => (
+        Credential | MissingCredential => (
             "Not Ready: Receiver credential unavailable",
             "未就绪：本地接收凭据不可用",
         ),
+        Revoked => ("Not Ready: Receiver removed", "未就绪：此接收端已被移除"),
         Unconfigured => ("Not Ready: Service unavailable", "未就绪：暂时无法连接服务"),
     };
     let tip = if chinese {

@@ -30,6 +30,8 @@ pub enum DeliveryStatus {
     Heartbeat,
     Suspended,
     Credential,
+    MissingCredential,
+    Revoked,
     Unconfigured,
 }
 
@@ -138,6 +140,9 @@ impl<'a> Reconnect<'a> {
                 .run(self.updates, &mut self.state, &mut order, &authenticate)
                 .await;
             self.updates.delivery_status(loss.status);
+            if loss.status == DeliveryStatus::Revoked {
+                return;
+            }
             if !loss.resume_failed {
                 let power = *self.state.borrow_and_update();
                 self.delay(power).await;

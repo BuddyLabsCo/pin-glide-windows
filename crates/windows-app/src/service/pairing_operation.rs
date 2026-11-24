@@ -29,7 +29,7 @@ use crate::storage::{PairingReference, RegistrationStore};
 #[cfg(test)]
 pub(crate) mod tests;
 mod worker;
-use worker::drive;
+use worker::{drive, missing_receiver};
 
 #[derive(Clone)]
 pub enum PairingProgress {
@@ -75,6 +75,10 @@ pub(super) struct ProgressUpdates {
 }
 
 impl ProgressUpdates {
+    pub(super) fn refresh_delivery(&self) {
+        (self.notify)();
+    }
+
     pub(super) fn delivery_status(&self, status: DeliveryStatus) {
         if self.delivery.send_if_modified(|previous| {
             if *previous == status {
@@ -129,12 +133,6 @@ impl PairingOperation {
             start,
             notify_sms,
         )
-    }
-
-    pub(crate) fn has_pending_enrollment() -> bool {
-        RegistrationStore::for_current_user()
-            .and_then(|store| store.enrollment())
-            .is_ok_and(|pending| pending.is_some())
     }
 
     pub fn start_with_registration(
@@ -200,6 +198,13 @@ impl PairingOperation {
         let worker = thread::Builder::new()
             .name("pairing".into())
             .spawn(move || {
+                if let Some(reason) = store
+                    .as_ref()
+                    .and_then(|store| missing_receiver(start, store))
+                {
+                    updates.delivery_status(reason);
+                    return;
+                }
                 match (
                     connect(),
                     tokio::runtime::Builder::new_current_thread()
