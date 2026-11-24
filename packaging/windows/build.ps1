@@ -1,14 +1,20 @@
 param(
     [switch] $Unsigned,
+    [switch] $DevelopmentTransport,
     [string] $SignTool = 'signtool.exe'
 )
 
 $ErrorActionPreference = 'Stop'
+if ($DevelopmentTransport -and !$Unsigned) {
+    throw 'Development transport is only available for unsigned development packages.'
+}
 $origin = $null
-if (![Uri]::TryCreate($env:PINGLIDE_SERVICE_URL, [UriKind]::Absolute, [ref] $origin) -or
-    $origin.Scheme -ne 'https' -or !$origin.Host -or $origin.UserInfo -or
+if (!$env:PINGLIDE_SERVICE_URL -or
+    ![Uri]::TryCreate($env:PINGLIDE_SERVICE_URL, [UriKind]::Absolute, [ref] $origin) -or
+    ($origin.Scheme -ne 'https' -and !($DevelopmentTransport -and $origin.Scheme -eq 'http')) -or
+    !$origin.Host -or $origin.UserInfo -or
     $origin.AbsolutePath -ne '/' -or $origin.Query -or $origin.Fragment) {
-    throw 'Set PINGLIDE_SERVICE_URL to the HTTPS Service origin.'
+    throw 'Set PINGLIDE_SERVICE_URL to the HTTPS Service origin (HTTP is allowed only with -DevelopmentTransport).'
 }
 
 $makensis = (Get-Command makensis.exe -CommandType Application).Source
@@ -46,8 +52,19 @@ $architecture = 'x86_64-pc-windows-msvc'
 $previousRustFlags = $env:CARGO_ENCODED_RUSTFLAGS
 Push-Location -LiteralPath $root
 try {
+    $metadata = & cargo metadata --locked --no-deps --format-version 1
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
+    $version = ($metadata | ConvertFrom-Json).packages |
+        Where-Object { $_.name -eq 'windows-app' } | Select-Object -ExpandProperty version
+    if ($version -notmatch '^(\d+)\.(\d+)\.(\d+)(?:[-+].+)?$' -or
+        [uint64]$Matches[1] -gt 65535 -or [uint64]$Matches[2] -gt 65535 -or [uint64]$Matches[3] -gt 65535) {
+        throw 'The windows-app version must fit the Windows version resource.'
+    }
+    $fileVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+    $features = @()
+    if ($DevelopmentTransport) { $features = @('--features', 'development-transport') }
     $env:CARGO_ENCODED_RUSTFLAGS = @('-C', 'target-feature=+crt-static') -join [char]31
-    & cargo build --locked -p windows-app --release --target $architecture --target-dir $target
+    & cargo build --locked -p windows-app --release --target $architecture --target-dir $target --no-default-features @features
     if ($LASTEXITCODE -ne 0) { throw 'Cargo release build failed.' }
 } finally {
     $env:CARGO_ENCODED_RUSTFLAGS = $previousRustFlags
@@ -62,7 +79,7 @@ $installer = Join-Path $stage $name
 try {
     Copy-Item -LiteralPath (Join-Path $target "$architecture/release/windows-app.exe") -Destination $receiver
     if (!$Unsigned) { Sign-Executable $receiver }
-    & $makensis /V2 /WX "/DRECEIVER=$receiver" "/DOUTPUT=$installer" @signingDefines (Join-Path $PSScriptRoot 'installer.nsi')
+    & $makensis /V2 /WX "/DRECEIVER=$receiver" "/DOUTPUT=$installer" "/DPRODUCT_VERSION=$version" "/DFILE_VERSION=$fileVersion" @signingDefines (Join-Path $PSScriptRoot 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'MakeNSIS failed.' }
     if (!$Unsigned) { Sign-Executable $installer }
     $artifact = Join-Path $output $name

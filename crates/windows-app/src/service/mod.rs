@@ -55,7 +55,7 @@ pub struct PairingSession {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
-    #[error("expected an HTTPS Service origin")]
+    #[error("expected a valid Service origin (HTTPS, or HTTP in a development build)")]
     InvalidOrigin,
     #[error("Service transport failed")]
     Transport(#[from] reqwest::Error),
@@ -90,7 +90,8 @@ impl Service {
 
     fn with_builder(origin: &str, builder: ClientBuilder) -> Result<Self, CreateError> {
         let origin = Url::parse(origin).map_err(|_| CreateError::InvalidOrigin)?;
-        if origin.scheme() != "https"
+        if (origin.scheme() != "https"
+            && !(cfg!(feature = "development-transport") && origin.scheme() == "http"))
             || !origin.username().is_empty()
             || origin.password().is_some()
             || origin.path() != "/"
@@ -103,7 +104,7 @@ impl Service {
         Ok(Self {
             config: Configuration {
                 base_path: origin.origin().ascii_serialization(),
-                client: builder.build()?,
+                client: builder.https_only(origin.scheme() == "https").build()?,
                 user_agent: None,
                 basic_auth: None,
                 oauth_access_token: None,

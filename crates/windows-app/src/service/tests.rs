@@ -20,6 +20,77 @@ mod tls;
 pub(super) use tls::accept_loopback_with_timeout;
 pub(crate) use tls::{accept_loopback, acceptor, listen};
 
+#[test]
+fn accepts_http_only_in_development_builds() {
+    assert!(Service::new("https://localhost:8080").is_ok());
+    assert_eq!(
+        Service::new("http://localhost:8080").is_ok(),
+        cfg!(feature = "development-transport")
+    );
+    for origin in [
+        "",
+        "http://",
+        "https://",
+        "ftp://localhost",
+        "http://user:password@localhost",
+        "http://localhost/path",
+        "http://localhost?query",
+        "http://localhost#fragment",
+        "https://user:password@localhost",
+        "https://localhost/path",
+        "https://localhost?query",
+        "https://localhost#fragment",
+    ] {
+        assert!(matches!(
+            Service::new(origin),
+            Err(CreateError::InvalidOrigin)
+        ));
+    }
+}
+
+#[cfg(feature = "development-transport")]
+#[tokio::test]
+async fn development_origin_supports_http_and_both_websocket_routes() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let service = Service::new(&origin).unwrap();
+    let server = thread::spawn(move || {
+        let mut stream = BufReader::new(accept_loopback(&listener));
+        assert_creation_request(&mut stream);
+        stream
+            .get_mut()
+            .write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /unexpected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        for (route, token) in [
+            ("/v1/pairing-sessions/session-1/events", "fixture-pairing-b"),
+            ("/v1/receiver/events", "fixture-receiver-r"),
+        ] {
+            let mut socket = socket::accept_socket(accept_loopback(&listener), route, token);
+            socket.send(Message::Text("fixture".into())).unwrap();
+        }
+    });
+    assert!(matches!(
+        service.new_receiver().await,
+        Err(CreateError::Http {
+            status: StatusCode::TEMPORARY_REDIRECT
+        })
+    ));
+    for (route, token) in [
+        ("/v1/pairing-sessions/session-1/events", "fixture-pairing-b"),
+        ("/v1/receiver/events", "fixture-receiver-r"),
+    ] {
+        let mut socket = service.websocket(route, token).await.unwrap();
+        assert_eq!(
+            socket.next().await.unwrap().unwrap(),
+            Message::Text("fixture".into())
+        );
+    }
+    server.join().unwrap();
+}
+
 pub(crate) fn local_service(
     listener: &TcpListener,
     origin: &str,
@@ -46,28 +117,7 @@ fn respond(
     let server = thread::spawn(move || {
         let stream = accept_loopback(&listener);
         let mut stream = BufReader::new(acceptor().accept(stream).unwrap());
-        let mut request_line = String::new();
-        stream.read_line(&mut request_line).unwrap();
-        assert_eq!(request_line, "POST /v1/pairing-sessions HTTP/1.1\r\n");
-        let mut content_length = None;
-        loop {
-            let mut header = String::new();
-            assert_ne!(stream.read_line(&mut header).unwrap(), 0);
-            if header == "\r\n" {
-                break;
-            }
-            let (name, value) = header.split_once(':').unwrap();
-            assert!(!name.eq_ignore_ascii_case("authorization"));
-            if name.eq_ignore_ascii_case("content-length") {
-                content_length = Some(value.trim().parse::<usize>().unwrap());
-            }
-        }
-        let mut request = vec![0; content_length.unwrap()];
-        stream.read_exact(&mut request).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&request).unwrap(),
-            json!({"mode": "new_receiver"}),
-        );
+        assert_creation_request(&mut stream);
 
         let body = body.to_string();
         write!(
@@ -78,6 +128,19 @@ fn respond(
         .unwrap();
     });
     (service, server)
+}
+
+fn assert_creation_request(stream: &mut impl BufRead) {
+    let (request, headers, body) = socket::read_request_parts(stream);
+    assert_eq!(request, "POST /v1/pairing-sessions HTTP/1.1\r\n");
+    for header in headers {
+        let (name, _) = header.split_once(':').unwrap();
+        assert!(!name.eq_ignore_ascii_case("authorization"));
+    }
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({"mode": "new_receiver"}),
+    );
 }
 
 #[tokio::test]

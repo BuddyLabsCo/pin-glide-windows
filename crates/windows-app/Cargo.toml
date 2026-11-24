@@ -5,6 +5,9 @@ edition.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
+[features]
+development-transport = []
+
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 getrandom = "0.4"

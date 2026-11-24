@@ -88,30 +88,8 @@ fn accept_creation(connection: impl Read + Write) {
 }
 
 pub(crate) fn read_request(stream: &mut impl BufRead) -> String {
-    let (request, _, _) = read_request_parts(stream);
+    let (request, _, _) = socket::read_request_parts(stream);
     request
-}
-
-fn read_request_parts(stream: &mut impl BufRead) -> (String, Vec<String>, Vec<u8>) {
-    let mut request = String::new();
-    stream.read_line(&mut request).unwrap();
-    let mut size = 0;
-    let mut headers = Vec::new();
-    loop {
-        let mut header = String::new();
-        assert_ne!(stream.read_line(&mut header).unwrap(), 0);
-        if header == "\r\n" {
-            break;
-        }
-        let (name, value) = header.split_once(':').unwrap();
-        if name.eq_ignore_ascii_case("content-length") {
-            size = value.trim().parse().unwrap();
-        }
-        headers.push(header);
-    }
-    let mut body = vec![0; size];
-    stream.read_exact(&mut body).unwrap();
-    (request, headers, body)
 }
 
 pub(crate) fn write_response(stream: &mut impl Write, status: &str, body: &Value) {

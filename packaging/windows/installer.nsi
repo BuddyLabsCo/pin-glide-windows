@@ -41,10 +41,21 @@ Var RunChanged
 Var RollbackFailed
 Var ShortcutCreated
 Var UninstallEntryCreated
+Var PreviousVersion
+Var HadVersion
+Var VersionChanged
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT}"
 InstallDir "${INSTALL_DIR}"
+VIProductVersion "${FILE_VERSION}"
+VIFileVersion "${FILE_VERSION}"
+VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
+VIAddVersionKey "CompanyName" "BuddyLabsCo"
+VIAddVersionKey "FileDescription" "${PRODUCT_NAME} Setup"
+VIAddVersionKey "LegalCopyright" ""
+VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
+VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
 
 !ifdef SIGNTOOL
     !uninstfinalize '"${SIGNTOOL}" ${SIGN_ARGS} "%1"' = 0
@@ -120,6 +131,7 @@ FunctionEnd
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
 !macroend
@@ -175,6 +187,15 @@ Section
         StrCpy $UninstallEntryCreated 1
         !insertmacro RegisterUninstaller
         IfErrors failed
+    ${Else}
+        ReadRegStr $PreviousVersion HKCU "${UNINSTALL_KEY}" "DisplayVersion"
+        ${IfNot} ${Errors}
+            StrCpy $HadVersion 1
+        ${EndIf}
+        ClearErrors
+        WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
+        IfErrors failed
+        StrCpy $VersionChanged 1
     ${EndIf}
 
     !insertmacro Move "${UNINSTALL_STAGE}" "${UNINSTALL_EXE}"
@@ -187,6 +208,13 @@ Section
 
 failed:
     ClearErrors
+    ${If} $VersionChanged == 1
+        ${If} $HadVersion == 1
+            WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "$PreviousVersion"
+        ${Else}
+            DeleteRegValue HKCU "${UNINSTALL_KEY}" "DisplayVersion"
+        ${EndIf}
+    ${EndIf}
     ${If} $RunChanged == 1
         ${If} $HadRunValue == 1
             WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT_NAME}" "$PreviousRun"

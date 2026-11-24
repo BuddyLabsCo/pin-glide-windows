@@ -127,6 +127,7 @@ function main(mode) {
   }
   if (mode === "service") {
     run("cargo", ["test", "--locked", "-p", "windows-app", "--lib", "--test", "pairing_confirmation", "--target", windowsTarget]);
+    run("cargo", ["test", "--locked", "-p", "windows-app", "--lib", "--features", "development-transport", "--target", windowsTarget, "service::tests::"]);
   }
   if (mode === "core") {
     checkDependencies();

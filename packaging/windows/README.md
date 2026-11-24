@@ -28,6 +28,44 @@ Distribute `target/packaging/windows/Pin-Glide-Setup-x64.exe` as the release
 download. For local packaging only, `-Unsigned` emits a separately named
 `Pin-Glide-Setup-x64-unsigned.exe`.
 
+Both installers take the product and file version and the Apps & features
+displayed version from the `windows-app` Cargo package version. The numeric
+Windows version resource uses the major, minor and patch numbers followed by
+zero; the displayed version retains the full Cargo version.
+
+## Build a development package
+
+Create a GitHub Environment named `development` in the repository settings.
+Set its environment variable `PINGLIDE_SERVICE_URL` to the development Service
+origin (HTTP or HTTPS, with no credentials, non-root path, query or fragment).
+Define this variable at the Environment level only, not at the repository or
+organization level.
+In Actions, select **Development packaging**, choose **Run workflow**, and
+select the branch to package. Download the `Pin-Glide-Setup-x64-unsigned`
+artifact containing `Pin-Glide-Setup-x64-unsigned.exe`. This workflow does not
+use signing configuration or publish a Release.
+
+For a local equivalent, use:
+
+```powershell
+$env:PINGLIDE_SERVICE_URL = 'http://localhost:49354'
+.\packaging\windows\build.ps1 -Unsigned -DevelopmentTransport
+```
+
+`-DevelopmentTransport` explicitly enables the compile-time
+`development-transport` Cargo feature. Unsigned packaging alone does not
+enable it, and signed packaging always requires HTTPS. There is no runtime
+override. HTTPS development origins still use TLS with native certificate and
+hostname verification; redirects remain disabled.
+
+HTTP and WS send Service credentials and requests in cleartext. Anyone able
+to observe or modify that traffic may capture credentials or tamper with
+requests and events. Use only development credentials and data on an isolated
+network or in a VM. Development and production packages share the same
+application identity, installation and persistent state; use separate
+Windows profiles or VMs to avoid replacing a production installation or
+reusing its credentials.
+
 ## Maintenance and verification
 
 Choose **Exit** in the tray before upgrading or uninstalling. Run the new
@@ -49,9 +87,9 @@ Run the isolated installer lifecycle test after building:
 ```
 
 The test uses synthetic state and unique file paths and registry names. It
-exercises first install, a running Receiver's instance guard, rollback after
-a blocked binary replacement, startup migration, uninstall retry, and clean
-reinstall.
+exercises rejected packaging origins, version metadata, first install, a
+running Receiver's instance guard, rollback after a blocked binary replacement,
+startup migration, uninstall retry, and clean reinstall.
 
 ### Packaged first use
 
