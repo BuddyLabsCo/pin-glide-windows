@@ -2,14 +2,16 @@
 
 #[path = "support/app_process.rs"]
 mod app_process;
+#[path = "support/packaged_first_use.rs"]
+mod packaged_first_use;
 mod support;
 #[path = "support/window_size.rs"]
 mod window_size;
 
 use app_process::{AppProcess, Fixture};
-use std::io;
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{io, process::Command};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT};
 use windows_sys::Win32::UI::HiDpi::{
@@ -21,8 +23,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_MINIMIZEBOX, WS_THICKFRAME,
 };
 
-fn launch_duplicate(fixture: &Fixture, arguments: &[&str], expectation: &str) {
-    let mut child = AppProcess(fixture.command().args(arguments).spawn().unwrap());
+fn launch_duplicate(command: &mut Command, expectation: &str) {
+    let mut child = AppProcess(command.spawn().unwrap());
     wait_for(
         || {
             child.0.try_wait().unwrap().is_some_and(|status| {
@@ -130,8 +132,7 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
     assert!(fixture.path().join("settings.json").is_file());
     assert!(fixture.startup().is_some());
     launch_duplicate(
-        &fixture,
-        &["--startup"],
+        fixture.command().arg("--startup"),
         "duplicate startup must exit successfully",
     );
     assert!(
@@ -140,8 +141,7 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
     );
 
     launch_duplicate(
-        &fixture,
-        &[],
+        &mut fixture.command(),
         "explicit second launch must exit successfully",
     );
     wait_for(
@@ -162,8 +162,7 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         "Windows must minimize Welcome",
     );
     launch_duplicate(
-        &fixture,
-        &[],
+        &mut fixture.command(),
         "launch while minimized must exit successfully",
     );
     wait_for(
@@ -184,7 +183,7 @@ fn startup_stays_hidden_and_explicit_launch_reopens_the_same_process() -> io::Re
         "close must leave the tray process alive"
     );
 
-    launch_duplicate(&fixture, &[], "relaunch must exit successfully");
+    launch_duplicate(&mut fixture.command(), "relaunch must exit successfully");
     wait_for(
         || !visible_window(process).is_null(),
         "relaunch must reopen Welcome",
