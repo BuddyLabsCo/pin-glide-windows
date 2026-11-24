@@ -159,7 +159,10 @@ native certificate and hostname verification.
 Place Rust unit tests next to their modules. Put integration tests and
 synthetic fixtures in the owning crate's `tests/` directory. Cover pairing
 transitions, receipt ordering, empty OTP, and storage upgrades at their
-interfaces. Keep script tests in `scripts/quality/*.test.mjs`.
+interfaces. Keep quality gate script tests in `scripts/quality/*.test.mjs`.
+Keep the Windows installer lifecycle test with its NSIS source in
+`packaging/windows/`. See [Windows Receiver distribution](packaging/windows/README.md)
+for its invocation and the packaged Receiver's interactive first-use test.
 
 ## 7. Local development and CI
 

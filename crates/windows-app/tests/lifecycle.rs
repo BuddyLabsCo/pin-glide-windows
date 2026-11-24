@@ -2,6 +2,8 @@
 
 #[path = "support/app_process.rs"]
 mod app_process;
+#[path = "support/packaged_first_use.rs"]
+mod packaged_first_use;
 mod support;
 #[path = "support/window_size.rs"]
 mod window_size;

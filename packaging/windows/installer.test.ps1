@@ -60,8 +60,7 @@ try {
 
     New-Item -ItemType Directory $data | Out-Null
     $sentinels = @{}
-    foreach ($file in 'settings.json', 'registration.json', 'registration.pending.json',
-        'registration.cleanup.json', 'delivery-rejections.log', '.tmpAb3xYz') {
+    foreach ($file in 'settings.json', 'registration.json', 'future-receiver-state.bin') {
         $path = Join-Path $data $file
         [IO.File]::WriteAllText($path, "synthetic state for $file")
         $sentinels[$file] = (Get-FileHash -LiteralPath $path).Hash
@@ -88,6 +87,10 @@ try {
     Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $firstHash) 'Blocked maintenance replaced the Receiver'
     Assert-Data
 
+    $oldRun = '"C:\Previous Receiver\windows-app.exe" --startup'
+    New-ItemProperty -LiteralPath $runKey -Name $product -Value $oldRun | Out-Null
+    [IO.File]::AppendAllText($uninstaller, 'synthetic previous uninstaller marker')
+    $oldUninstallerHash = (Get-FileHash -LiteralPath $uninstaller).Hash
     $locked = [IO.File]::Open($binary, 'Open', 'Read', 'Read')
     try {
         Assert ((Invoke-Installer $second) -ne 0) 'Upgrade reported success with a locked Receiver file'
@@ -95,17 +98,43 @@ try {
         $locked.Dispose()
     }
     Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $firstHash) 'Failed replacement damaged the existing Receiver'
+    Assert ((Get-FileHash -LiteralPath $uninstaller).Hash -eq $oldUninstallerHash) 'Failed replacement changed the uninstaller'
+    Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq $oldRun) 'Failed replacement changed the previous startup command'
     Assert-Data
 
     Assert ((Invoke-Installer $second) -eq 0) 'Upgrade failed'
     Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $secondHash) 'Upgrade did not replace the Receiver'
+    Assert ((Get-FileHash -LiteralPath $uninstaller).Hash -ne $oldUninstallerHash) 'Upgrade did not replace the uninstaller'
+    Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq "`"$binary`" --startup") 'Upgrade did not migrate startup'
     Assert-Data
+    Remove-ItemProperty -LiteralPath $runKey -Name $product
+    Assert ((Invoke-Installer $second) -eq 0) 'Upgrade with disabled startup failed'
     Assert ($null -eq (Get-Item -LiteralPath $runKey).GetValue($product)) 'Upgrade re-enabled startup'
     Assert ([Convert]::ToBase64String((Get-ItemPropertyValue -LiteralPath $approvalKey -Name $product)) -eq
         [Convert]::ToBase64String($approval)) 'Upgrade changed Windows Startup Apps approval'
 
     New-ItemProperty -LiteralPath $runKey -Name $product -Value "`"$binary`" --startup" | Out-Null
-    Assert ((Invoke-Installer $uninstaller) -eq 0) 'Uninstall failed'
+    foreach ($name in 'receiver.new', 'uninstall.new', 'uninstall.previous') {
+        [IO.File]::WriteAllText((Join-Path $installation $name), 'interrupted upgrade')
+    }
+    Copy-Item -LiteralPath $uninstaller -Destination $uninstallerCopy -Force
+    $locked = [IO.File]::Open((Join-Path $data 'future-receiver-state.bin'), 'Open', 'Read', 'Read')
+    try {
+        Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -ne 0) 'Uninstall reported success with locked Receiver data'
+        Assert (Test-Path -LiteralPath $uninstallKey) 'Failed data cleanup unregistered the uninstaller'
+    } finally {
+        $locked.Dispose()
+    }
+    $registryBlocker = Join-Path $uninstallKey 'BlockDeletion'
+    New-Item -Path $registryBlocker | Out-Null
+    try {
+        Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -ne 0) 'Uninstall reported success with a blocked Apps & features entry'
+        Assert (Test-Path -LiteralPath $uninstaller) 'Registry cleanup failure removed the uninstaller'
+        Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name UninstallString) -eq "`"$uninstaller`"") 'Registry cleanup failure broke the retry command'
+    } finally {
+        Remove-Item -LiteralPath $registryBlocker -ErrorAction SilentlyContinue
+    }
+    Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -eq 0) 'Uninstall failed'
     foreach ($path in $installation, $data, $shortcut, $uninstallKey) {
         Assert (!(Test-Path -LiteralPath $path)) "Uninstall left $path"
     }
@@ -115,7 +144,8 @@ try {
 
     Assert ((Invoke-Installer $second) -eq 0) 'Reinstall failed'
     Assert (!(Test-Path -LiteralPath $data)) 'Reinstall restored old Receiver data'
-    Assert ((Invoke-Installer $uninstaller) -eq 0) 'Reinstall cleanup failed'
+    Remove-Item -LiteralPath $uninstallKey
+    Assert ((Invoke-Installer $uninstaller) -eq 0) 'Uninstall failed with an already absent Apps & features entry'
     Write-Output 'Passed: fresh install, blocked install and uninstall, failed replacement, upgrade, uninstall, and clean reinstall.'
 } finally {
     Remove-Item -LiteralPath $runKey, $approvalKey, "HKCU:\$testRegistry", $uninstallKey -ErrorAction SilentlyContinue

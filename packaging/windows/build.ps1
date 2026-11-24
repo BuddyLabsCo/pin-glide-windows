@@ -21,13 +21,19 @@ if (!$Unsigned) {
         throw 'Set PINGLIDE_SIGNING_THUMBPRINT and PINGLIDE_TIMESTAMP_URL for a signed release.'
     }
     $signer = (Get-Command $SignTool -CommandType Application).Source
-    $signingDefines = @("/DSIGNTOOL=$signer", "/DTHUMBPRINT=$thumbprint", "/DTIMESTAMP_URL=$timestamp")
+    $signArguments = @('sign', '/sha1', $thumbprint, '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256')
+    $verifyArguments = @('verify', '/pa', '/tw')
+    $signingDefines = @(
+        "/DSIGNTOOL=$signer"
+        "/DSIGN_ARGS=$($signArguments -join ' ')"
+        "/DVERIFY_ARGS=$($verifyArguments -join ' ')"
+    )
 }
 
 function Sign-Executable([string] $path) {
-    & $signer sign /sha1 $thumbprint /fd SHA256 /tr $timestamp /td SHA256 $path
+    & $signer @signArguments $path
     if ($LASTEXITCODE -ne 0) { throw "Signing failed for $path" }
-    & $signer verify /pa /tw $path
+    & $signer @verifyArguments $path
     if ($LASTEXITCODE -ne 0) { throw "Signature verification failed for $path" }
 }
 

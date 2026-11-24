@@ -14,20 +14,36 @@ CRCCheck force
 !define SHORTCUT "${MENU_DIR}\${PRODUCT_NAME}.lnk"
 !define RECEIVER_EXE "windows-app.exe"
 !define UNINSTALL_EXE "Uninstall.exe"
+!define RECEIVER_STAGE "receiver.new"
+!define UNINSTALL_STAGE "uninstall.new"
+!define UNINSTALL_BACKUP "uninstall.previous"
 !define /ifndef RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define /ifndef APPROVAL_KEY "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
+!define HKCU_HANDLE 0x80000001
+!define ERROR_FILE_NOT_FOUND 2
+!define ERROR_PATH_NOT_FOUND 3
 !define ERROR_ALREADY_EXISTS 183
 !define FILE_ATTRIBUTE_REPARSE_POINT 0x400
+!define RRF_RT_REG_SZ 2
+!define KEY_WOW64_64KEY 0x100
 !define MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH 9
+
+Var HasReceiver
+Var HasUninstaller
+Var UninstallerReplaced
+Var PreviousRun
+Var HadRunValue
+Var RunChanged
+Var RollbackFailed
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT}"
 InstallDir "${INSTALL_DIR}"
 
 !ifdef SIGNTOOL
-    !uninstfinalize '"${SIGNTOOL}" sign /sha1 ${THUMBPRINT} /fd SHA256 /tr "${TIMESTAMP_URL}" /td SHA256 "%1"' = 0
-    !uninstfinalize '"${SIGNTOOL}" verify /pa /tw "%1"' = 0
+    !uninstfinalize '"${SIGNTOOL}" ${SIGN_ARGS} "%1"' = 0
+    !uninstfinalize '"${SIGNTOOL}" ${VERIFY_ARGS} "%1"' = 0
 !endif
 
 Page instfiles
@@ -91,6 +107,19 @@ FunctionEnd
 !insertmacro RequireStopped ""
 !insertmacro RequireStopped "un."
 
+!macro Move source destination
+    System::Call 'kernel32::MoveFileExW(w "$INSTDIR\${source}", w "$INSTDIR\${destination}", i ${MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH}) i.r0'
+!macroend
+
+!macro DeleteStartupValue key
+    System::Call 'advapi32::RegDeleteKeyValueW(p ${HKCU_HANDLE}, w "${key}", w "${PRODUCT_NAME}") i.r0'
+    ${If} $0 != 0
+    ${AndIf} $0 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
+        SetErrors
+    ${EndIf}
+!macroend
+
 Section
     ${IfNot} ${IsNativeAMD64}
     ${OrIfNot} ${AtLeastWin10}
@@ -98,21 +127,28 @@ Section
         !insertmacro Fail "Pin Glide requires x64 Windows 10 22H2 or Windows 11."
     ${EndIf}
     Call RequireStopped
-    StrCpy $R0 0
-    StrCpy $R1 0
-    IfFileExists "$INSTDIR\${RECEIVER_EXE}" 0 +2
-        StrCpy $R0 1
+    ${If} ${FileExists} "$INSTDIR\${RECEIVER_EXE}"
+        StrCpy $HasReceiver 1
+    ${EndIf}
+    ${If} ${FileExists} "$INSTDIR\${UNINSTALL_EXE}"
+        StrCpy $HasUninstaller 1
+    ${EndIf}
 
     ClearErrors
     SetOutPath "$INSTDIR"
     IfErrors failed
     SetOverwrite try
-    File /oname=receiver.new "${RECEIVER}"
+    File /oname=${RECEIVER_STAGE} "${RECEIVER}"
     IfErrors failed
-    WriteUninstaller "$INSTDIR\uninstall.new"
+    WriteUninstaller "$INSTDIR\${UNINSTALL_STAGE}"
     IfErrors failed
+    ${If} $HasUninstaller == 1
+        System::Call 'kernel32::CopyFileW(w "$INSTDIR\${UNINSTALL_EXE}", w "$INSTDIR\${UNINSTALL_BACKUP}", i 0) i.r0'
+        StrCmp $0 0 failed
+    ${EndIf}
 
-    ${If} $R0 == 0
+    ${If} $HasReceiver != 1
+    ${AndIf} $HasUninstaller != 1
         CreateShortCut "${SHORTCUT}" "$INSTDIR\${RECEIVER_EXE}"
         WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
         WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
@@ -120,83 +156,119 @@ Section
         WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
         WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
         IfErrors failed
-        ${IfNot} ${FileExists} "${DATA_DIR}\settings.json"
-            ReadRegStr $0 HKCU "${RUN_KEY}" "${PRODUCT_NAME}"
-            ${If} ${Errors}
-                ClearErrors
-                WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT_NAME}" '"$INSTDIR\${RECEIVER_EXE}" --startup'
-                IfErrors failed
-                StrCpy $R1 1
-            ${EndIf}
-        ${EndIf}
     ${EndIf}
 
-    System::Call 'kernel32::MoveFileExW(w "$INSTDIR\uninstall.new", w "$INSTDIR\${UNINSTALL_EXE}", i ${MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH}) i.r0'
+    Call UpdateStartup
+    IfErrors failed
+    !insertmacro Move "${UNINSTALL_STAGE}" "${UNINSTALL_EXE}"
     StrCmp $0 0 failed
-    System::Call 'kernel32::MoveFileExW(w "$INSTDIR\receiver.new", w "$INSTDIR\${RECEIVER_EXE}", i ${MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH}) i.r0'
+    StrCpy $UninstallerReplaced 1
+    !insertmacro Move "${RECEIVER_STAGE}" "${RECEIVER_EXE}"
     StrCmp $0 0 failed
+    Delete "$INSTDIR\${UNINSTALL_BACKUP}"
     Goto done
 
 failed:
-    Delete "$INSTDIR\receiver.new"
-    Delete "$INSTDIR\uninstall.new"
-    ${If} $R0 == 0
-        ${If} $R1 != 0
-            DeleteRegValue HKCU "${RUN_KEY}" "${PRODUCT_NAME}"
+    ClearErrors
+    ${If} $RunChanged == 1
+        ${If} $HadRunValue == 1
+            WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT_NAME}" "$PreviousRun"
+        ${Else}
+            !insertmacro DeleteStartupValue "${RUN_KEY}"
         ${EndIf}
+    ${EndIf}
+    ${If} $UninstallerReplaced == 1
+        ${If} $HasUninstaller == 1
+            !insertmacro Move "${UNINSTALL_BACKUP}" "${UNINSTALL_EXE}"
+            ${If} $0 == 0
+                StrCpy $RollbackFailed 1
+            ${EndIf}
+        ${Else}
+            Delete "$INSTDIR\${UNINSTALL_EXE}"
+        ${EndIf}
+    ${EndIf}
+    ${If} ${Errors}
+        StrCpy $RollbackFailed 1
+    ${EndIf}
+    Delete "$INSTDIR\${RECEIVER_STAGE}"
+    Delete "$INSTDIR\${UNINSTALL_STAGE}"
+    ${If} $RollbackFailed != 1
+        Delete "$INSTDIR\${UNINSTALL_BACKUP}"
+    ${EndIf}
+    ${If} $HasReceiver != 1
+    ${AndIf} $HasUninstaller != 1
         DeleteRegKey HKCU "${UNINSTALL_KEY}"
         Delete "${SHORTCUT}"
-        Delete "$INSTDIR\${UNINSTALL_EXE}"
         SetOutPath "${USER_FILES}"
         RMDir "$INSTDIR"
+    ${EndIf}
+    ${If} $RollbackFailed == 1
+        !insertmacro Fail "Pin Glide could not be installed and setup could not restore the previous installation completely."
     ${EndIf}
     !insertmacro Fail "Pin Glide could not be installed. Close programs using the installation files and try again."
 done:
 SectionEnd
 
-!macro RemoveStartupValue key
-    System::Call 'advapi32::RegDeleteKeyValueW(p 0x80000001, w "${key}", w "${PRODUCT_NAME}") i.r0'
-    ${If} $0 != 0
-    ${AndIf} $0 != 2
+Function UpdateStartup
+    IntOp $1 ${NSIS_MAX_STRLEN} * 2
+    System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${RUN_KEY}", w "${PRODUCT_NAME}", i ${RRF_RT_REG_SZ}, p 0, w .r2, *i r1) i.r0'
+    ${If} $0 == 0
+        StrCpy $PreviousRun $2
+        StrCpy $HadRunValue 1
+    ${ElseIf} $0 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
         SetErrors
+        Return
+    ${ElseIf} $HasReceiver == 1
+    ${OrIf} $HasUninstaller == 1
+    ${OrIf} ${FileExists} "${DATA_DIR}\settings.json"
+        Return
     ${EndIf}
-!macroend
+    StrCpy $0 '"$INSTDIR\${RECEIVER_EXE}" --startup'
+    StrCmpS $0 $PreviousRun done
+    WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT_NAME}" "$0"
+    IfErrors done
+    StrCpy $RunChanged 1
+done:
+FunctionEnd
 
 Section "Uninstall"
     Call un.RequireStopped
     System::Call 'kernel32::GetFileAttributesW(w "${DATA_DIR}") i.r0 ?e'
     Pop $1
     ${If} $0 == -1
-    ${AndIf} $1 != 2
-    ${AndIf} $1 != 3
+    ${AndIf} $1 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $1 != ${ERROR_PATH_NOT_FOUND}
         Goto failed
     ${EndIf}
+    ClearErrors
     ${If} $0 != -1
         IntOp $0 $0 & ${FILE_ATTRIBUTE_REPARSE_POINT}
         ${If} $0 != 0
             Goto failed
         ${EndIf}
+        ; The Receiver owns this fixed, flat data directory.
+        Delete "${DATA_DIR}\*.*"
+        RMDir "${DATA_DIR}"
+        IfErrors failed
     ${EndIf}
 
-    ClearErrors
     Delete "$INSTDIR\${RECEIVER_EXE}"
-    IfErrors failed
-    Delete "${DATA_DIR}\settings.json"
-    Delete "${DATA_DIR}\registration.json"
-    Delete "${DATA_DIR}\registration.pending.json"
-    Delete "${DATA_DIR}\registration.cleanup.json"
-    Delete "${DATA_DIR}\delivery-rejections.log"
-    Delete "${DATA_DIR}\.tmp??????"
+    Delete "$INSTDIR\${RECEIVER_STAGE}"
+    Delete "$INSTDIR\${UNINSTALL_STAGE}"
+    Delete "$INSTDIR\${UNINSTALL_BACKUP}"
     Delete "${SHORTCUT}"
-    !insertmacro RemoveStartupValue "${RUN_KEY}"
-    !insertmacro RemoveStartupValue "${APPROVAL_KEY}"
+    !insertmacro DeleteStartupValue "${RUN_KEY}"
+    !insertmacro DeleteStartupValue "${APPROVAL_KEY}"
     IfErrors failed
 
-    RMDir "${DATA_DIR}"
-    ClearErrors
+    System::Call 'advapi32::RegDeleteKeyExW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", i ${KEY_WOW64_64KEY}, i 0) i.r0'
+    ${If} $0 != 0
+    ${AndIf} $0 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
+        Goto failed
+    ${EndIf}
     Delete "$INSTDIR\${UNINSTALL_EXE}"
-    IfErrors failed
-    DeleteRegKey HKCU "${UNINSTALL_KEY}"
     IfErrors failed
     RMDir "$INSTDIR"
     Goto done
