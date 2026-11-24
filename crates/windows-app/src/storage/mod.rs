@@ -11,6 +11,8 @@ use zeroize::Zeroizing;
 
 mod diagnostics;
 pub(crate) use diagnostics::DeliveryRejection;
+mod cleanup;
+pub(crate) use cleanup::Cleanup;
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
 mod pending_add;
@@ -129,13 +131,14 @@ impl RegistrationStore {
             sender_id: reference.sender_id.into(),
             protected_key: protect(key)?,
         };
+        if !adding_sender {
+            return self.stage_enrollment_key(pairing);
+        }
         self.update(|next| {
             if next.enrollment.is_some() {
                 return Err(io::ErrorKind::AlreadyExists.into());
             }
-            if adding_sender {
-                next.validate_new_sender(&pairing)?;
-            }
+            next.validate_new_sender(&pairing)?;
             next.provisional_pairing = Some(pairing);
             Ok(())
         })
@@ -239,48 +242,6 @@ impl RegistrationStore {
         Ok((id, Zeroizing::new(token.to_owned())))
     }
 
-    pub(crate) fn remove_pairing(
-        &self,
-        receiver_id: &str,
-        pairing_id: &str,
-        sender_id: &str,
-    ) -> io::Result<()> {
-        self.update(|next| {
-            if next.receiver_id.as_deref() != Some(receiver_id) {
-                return Err(io::ErrorKind::NotFound.into());
-            }
-            if next
-                .active_pairings
-                .get(pairing_id)
-                .is_some_and(|pairing| pairing.sender_id != sender_id)
-            {
-                return Err(io::ErrorKind::InvalidInput.into());
-            }
-            next.active_pairings.remove(pairing_id);
-            if next.provisional_pairing.as_ref().is_some_and(|pairing| {
-                pairing.receiver_id == receiver_id
-                    && pairing.pairing_id == pairing_id
-                    && pairing.sender_id == sender_id
-            }) {
-                next.provisional_pairing = None;
-            }
-            Ok(())
-        })
-    }
-
-    pub(crate) fn revoke_receiver(&self, receiver_id: &str) -> io::Result<()> {
-        self.update(|next| {
-            if next.receiver_id.as_deref() != Some(receiver_id) {
-                return Err(io::ErrorKind::NotFound.into());
-            }
-            *next = Registration {
-                receiver_revoked: true,
-                ..Registration::default()
-            };
-            Ok(())
-        })
-    }
-
     pub(crate) fn receiver_revoked(&self) -> bool {
         self.read().is_ok_and(|stored| stored.receiver_revoked)
     }
@@ -309,9 +270,7 @@ impl RegistrationStore {
     where
         Error: From<io::Error>,
     {
-        let _writer = WRITER
-            .lock()
-            .map_err(|_| io::Error::other("registration writer is unavailable"))?;
+        let _writer = registration_writer()?;
         let mut next = self.read()?;
         let value = change(&mut next)?;
         next.version = CURRENT_VERSION;
@@ -320,7 +279,16 @@ impl RegistrationStore {
     }
 
     fn read(&self) -> io::Result<Registration> {
-        let mut file = match File::open(&self.path) {
+        let cleanup = self.known_cleanup()?;
+        let mut registration = Self::read_file(&self.path)?;
+        for event in cleanup {
+            event.apply(&mut registration);
+        }
+        Ok(registration)
+    }
+
+    fn read_file(path: &Path) -> io::Result<Registration> {
+        let mut file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Ok(Registration::default());
@@ -355,10 +323,23 @@ impl RegistrationStore {
                 }
                 stored
             }
-            _ => return Err(io::ErrorKind::InvalidData.into()),
+            _ => return Err(io::ErrorKind::Unsupported.into()),
         };
         stored.backfill_sender_names();
         Ok(stored)
+    }
+}
+
+fn registration_writer() -> io::Result<std::sync::MutexGuard<'static, ()>> {
+    WRITER
+        .lock()
+        .map_err(|_| io::Error::other("registration writer is unavailable"))
+}
+
+fn remove_file_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
     }
 }
 

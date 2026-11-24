@@ -29,7 +29,7 @@ use crate::storage::{PairingReference, RegistrationStore};
 #[cfg(test)]
 pub(crate) mod tests;
 mod worker;
-use worker::{drive, missing_receiver};
+use worker::{drive, startup_status};
 
 #[derive(Clone)]
 pub enum PairingProgress {
@@ -200,7 +200,7 @@ impl PairingOperation {
             .spawn(move || {
                 if let Some(reason) = store
                     .as_ref()
-                    .and_then(|store| missing_receiver(start, store))
+                    .and_then(|store| startup_status(start, store))
                 {
                     updates.delivery_status(reason);
                     return;

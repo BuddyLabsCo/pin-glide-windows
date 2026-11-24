@@ -22,10 +22,8 @@ pub use sms::show_sms;
 
 pub(crate) fn resume_pairing(connect: fn() -> Option<Service>) -> Result<(), PlatformError> {
     if let Ok(store) = RegistrationStore::for_current_user() {
-        if recovery_status(&store).is_none()
-            && store.enrollment().is_ok_and(|entry| entry.is_some())
-        {
-            return pairing::resume(platform::chinese());
+        if store.enrollment().is_ok_and(|entry| entry.is_some()) {
+            return pairing::resume(platform::chinese(), store, connect);
         }
         if store.has_registration() {
             start_registered(store, connect);

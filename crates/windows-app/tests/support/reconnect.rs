@@ -1,4 +1,11 @@
-use std::{io::BufReader, sync::mpsc, thread, time::Duration};
+use std::{
+    fs,
+    io::{self, BufReader},
+    os::windows::fs::OpenOptionsExt,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use serde_json::json;
 use tokio_tungstenite::tungstenite::{Message, protocol::frame::coding::CloseCode};
@@ -23,12 +30,26 @@ fn authoritative_removal_keeps_the_socket_and_revocation_clears_registration() {
             "provisional_pairing": {
                 "session_id": "session-add", "receiver_id": "receiver-1",
                 "pairing_id": "pairing-add", "sender_id": "sender-add", "protected_key": key,
+            },
+            "enrollment": {
+                "origin": "https://fixture.invalid", "session_id": "session-add",
+                "receiver_id": "receiver-1", "operation_id": "fixture-revocation",
+                "expires_at": {"secs_since_epoch": 1, "nanos_since_epoch": 0},
+                "phase": {"Issued": dpapi::protect(RECEIVER_TOKEN.as_bytes())},
             }
         })
         .to_string(),
     )
     .unwrap();
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&path)
+        .unwrap();
+    let old_bytes = fs::read(&path).unwrap();
+    let journal = path.with_extension("cleanup.json");
     let (listener, service) = listen();
+    let (pong, ready) = mpsc::channel();
     let (revoke, revoking) = mpsc::channel();
     let server = thread::spawn(move || {
         let mut socket = accept_delivery(accept(&acceptor(), &listener));
@@ -38,12 +59,20 @@ fn authoritative_removal_keeps_the_socket_and_revocation_clears_registration() {
         );
         socket.send(Message::Ping(vec![23].into())).unwrap();
         assert_eq!(socket.read().unwrap(), Message::Pong(vec![23].into()));
+        pong.send(()).unwrap();
         revoking.recv_timeout(Duration::from_secs(8)).unwrap();
         send_event(
             &mut socket,
             json!({"type":"device_revoked","version":1,"receiverId":"receiver-1"}),
         );
-        assert!(socket.read().is_err());
+        assert_peer_left(&mut socket);
+        let retry_limit = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < retry_limit {
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
     });
     let operation = PairingOperation::start_with_registration(
         move || Some(service),
@@ -51,21 +80,31 @@ fn authoritative_removal_keeps_the_socket_and_revocation_clears_registration() {
         path.clone(),
         PairingStart::Registered,
     );
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
     let read =
         || serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap();
     support::wait_for(
-        || read()["active_pairings"]["pairing-1"].is_null(),
-        "The removed Pairing remained on disk",
+        || fs::read_to_string(&journal).is_ok_and(|text| text.contains("PairingRemoved")),
+        "The Pairing removal was not journaled while replacement was denied",
     );
     assert_eq!(operation.delivery_status(), DeliveryStatus::Ready);
-    assert_eq!(
-        read()["active_pairings"]["pairing-2"]["sender_id"],
-        "sender-2"
-    );
+    assert_eq!(fs::read(&path).unwrap(), old_bytes);
     revoke.send(()).unwrap();
     support::wait_for(
-        || read()["receiver_id"].is_null(),
-        "Revocation retained the Receiver identity",
+        || fs::read_to_string(&journal).is_ok_and(|text| text.contains("Revoked")),
+        "Revocation was not journaled while replacement was denied",
+    );
+    assert_eq!(fs::read(&path).unwrap(), old_bytes);
+    let restarted_directory = tempfile::tempdir().unwrap();
+    let restarted_path = restarted_directory.path().join("registration.json");
+    fs::copy(&path, &restarted_path).unwrap();
+    fs::copy(&journal, restarted_path.with_extension("cleanup.json")).unwrap();
+    assert_revoked_on_startup(restarted_path);
+    server.join().unwrap();
+    drop(locked);
+    support::wait_for(
+        || !journal.exists() && read()["receiver_id"].is_null(),
+        "Revocation did not retry the registration replacement",
     );
     let stored = read();
     assert!(stored["protected_receiver_token"].is_null());
@@ -78,7 +117,10 @@ fn authoritative_removal_keeps_the_socket_and_revocation_clears_registration() {
         "Revocation did not stop the Receiver",
     );
     operation.shutdown();
-    server.join().unwrap();
+    assert_revoked_on_startup(path);
+}
+
+fn assert_revoked_on_startup(path: std::path::PathBuf) {
     let restarted = PairingOperation::start_with_registration(
         || panic!("a revoked Receiver attempted to connect"),
         || {},

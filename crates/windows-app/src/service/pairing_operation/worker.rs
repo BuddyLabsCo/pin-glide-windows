@@ -15,10 +15,11 @@ use crate::service::{
     pairing_session_view, reconnect::Reconnect,
 };
 
-pub(super) fn missing_receiver(
+pub(super) fn startup_status(
     start: PairingStart,
     store: &RegistrationStore,
 ) -> Option<DeliveryStatus> {
+    store.resume_cleanup();
     if !matches!(start, PairingStart::Registered) || store.receiver_credential().is_ok() {
         return None;
     }
@@ -157,6 +158,8 @@ async fn drive_session(
             }
             outcome = PairingOutcome::Failed;
         }
+    } else if let Some(store) = store {
+        let _ = store.discard_enrollment_key(&session.session_id);
     }
     updates.publish(PairingProgress::Finished(outcome));
     if exiting

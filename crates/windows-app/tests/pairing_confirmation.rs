@@ -27,6 +27,7 @@ use fixture::*;
 #[derive(Clone, Copy)]
 enum Scenario {
     Ready,
+    MalformedRegistration,
     Occupied,
     WriteRejected,
     ClosedBeforeCancellation,
@@ -78,6 +79,14 @@ fn rejects_definitive_failures_during_enrollment() {
 }
 
 #[test]
+fn replaces_malformed_registration_after_the_delivery_upgrade() {
+    exercise(
+        Scenario::MalformedRegistration,
+        PairingOutcome::KeyConfirmed(SessionState::Completed),
+    );
+}
+
+#[test]
 fn post_claim_cancellation_overrides_an_earlier_http_410() {
     exercise(Scenario::ClosedBeforeCancellation, PairingOutcome::Canceled);
 }
@@ -119,10 +128,17 @@ fn exercise(scenario: Scenario, expected: PairingOutcome) {
         "protected_receiver_token": [66, 77],
         "active_pairings": {
             "previous-pairing": {"sender_id": "previous-sender", "protected_key": [55, 66], "name": "Previous"}
+        },
+        "provisional_pairing": {
+            "session_id": "old-session", "receiver_id": "previous-receiver",
+            "pairing_id": "old-provisional", "sender_id": "old-sender",
+            "protected_key": dpapi::protect(&[77; 32])
         }
     });
     if matches!(scenario, Scenario::WriteRejected) {
         fs::write(&path, br#"{"version":99}"#).unwrap();
+    } else if matches!(scenario, Scenario::MalformedRegistration) {
+        fs::write(&path, br#"{"version":"#).unwrap();
     } else if scenario.definitive_rejection() {
         fs::write(&path, serde_json::to_vec(&active).unwrap()).unwrap();
     }
@@ -204,8 +220,13 @@ fn completed_pairing(pairing_id: &str) -> PairingOutcome {
 fn assert_rejection_preserves_registration(path: &std::path::Path, active: &Value) {
     let stored = read_registration(path);
     assert!(stored["enrollment"].is_null());
-    assert!(stored["provisional_pairing"].is_null());
-    for field in ["receiver_id", "protected_receiver_token", "active_pairings"] {
+    assert!(!path.with_extension("pending.json").exists());
+    for field in [
+        "receiver_id",
+        "protected_receiver_token",
+        "active_pairings",
+        "provisional_pairing",
+    ] {
         assert_eq!(stored[field], active[field]);
     }
 }
@@ -244,6 +265,7 @@ fn confirmation_service(
         if matches!(
             scenario,
             Scenario::Ready
+                | Scenario::MalformedRegistration
                 | Scenario::Occupied
                 | Scenario::ResumeUncertain
                 | Scenario::RejectRedemption
@@ -278,7 +300,7 @@ fn assert_no_further_requests(listener: &std::net::TcpListener, terminal: mpsc::
 }
 
 fn assert_provisional_pairing(path: &std::path::Path, key: &[u8; 32]) {
-    let stored = read_registration(path);
+    let stored = read_registration(&path.with_extension("pending.json"));
     let pending = &stored["provisional_pairing"];
     assert_eq!(pending["session_id"], "session-1");
     assert_eq!(pending["pairing_id"], "pairing-1");
@@ -298,6 +320,7 @@ fn finish_scenario(
     claimed["receiverConfirmed"] = json!(true);
     match scenario {
         Scenario::Ready
+        | Scenario::MalformedRegistration
         | Scenario::Occupied
         | Scenario::ResumeUncertain
         | Scenario::RejectRedemption
@@ -366,7 +389,7 @@ fn accept_redemption(
     let body: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["attempt"], attempt);
     assert!(!body["operationId"].as_str().unwrap().is_empty());
-    let stored = read_registration(path);
+    let stored = read_registration(&path.with_extension("pending.json"));
     let enrollment = &stored["enrollment"];
     assert_eq!(enrollment["operation_id"], body["operationId"]);
     assert_eq!(
@@ -406,12 +429,14 @@ fn exercise_enrollment(
         }),
     );
     let connection = accept(acceptor, listener);
-    let stored = read_registration(path);
-    if matches!(scenario, Scenario::RejectUpgrade) {
-        assert_eq!(stored["receiver_id"], "previous-receiver");
-    } else {
-        assert!(stored["receiver_id"].is_null());
+    match scenario {
+        Scenario::RejectUpgrade => {
+            assert_eq!(read_registration(path)["receiver_id"], "previous-receiver")
+        }
+        Scenario::MalformedRegistration => assert_eq!(fs::read(path).unwrap(), br#"{"version":"#),
+        _ => assert!(!path.exists()),
     }
+    let stored = read_registration(&path.with_extension("pending.json"));
     assert_eq!(
         dpapi::unprotect(&stored["enrollment"]["phase"]["Issued"]),
         RECEIVER_TOKEN.as_bytes()

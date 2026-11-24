@@ -22,6 +22,8 @@ use super::{assert_redeem, capture, click, fixture::*, select_backend};
 
 #[path = "dpapi.rs"]
 pub(super) mod dpapi;
+#[path = "recovery_frames.rs"]
+mod recovery_frames;
 
 const CHILD: &str = "PIN_GLIDE_ADD_DESKTOP_CHILD";
 
@@ -234,8 +236,8 @@ async fn re_enroll() {
     let server = thread::spawn(move || {
         let tls = acceptor();
         let session = "new-receiver";
-        let initial = snapshot(session, "awaiting_authorization", 30);
         capture_done.recv_timeout(Duration::from_secs(8)).unwrap();
+        let initial = snapshot(session, "awaiting_authorization", 272);
         accept_creation(accept(&tls, &listener), &initial);
         let mut events = accept_events(accept(&tls, &listener), session);
         send_state(&mut events, &initial);
@@ -270,15 +272,15 @@ async fn re_enroll() {
         "unreadable R in tray",
     )
     .await;
-    evidence(main.window(), "main-local-r");
+    recovery_frames::verify_pair_button(main.window());
     click(main.window(), 200.0, 188.0);
     let window = ui::visible_pairing().unwrap();
     assert!(!window.get_adding_device());
     assert!(!main.window().is_visible());
     assert_eq!(window.get_stage(), PairingStage::Preparing);
-    evidence(window.window(), "pair-preparing");
+    recovery_frames::verify_preparation(&window);
     prepared.send(()).unwrap();
-    stage(&window, PairingStage::Waiting).await;
+    recovery_frames::capture_waiting(&window).await;
     let pixels = qr_pixels(&window);
     let width = pixels.len().isqrt();
     scan.send(decode_pixels(width, width, &pixels)).unwrap();
@@ -297,7 +299,6 @@ async fn re_enroll() {
     click(main.window(), 200.0, 188.0);
     let replacement = ui::visible_pairing().expect("Main opened first pairing for unreadable R");
     assert!(!replacement.get_adding_device());
-    assert!(!main.window().is_visible());
     stage(&replacement, PairingStage::Waiting).await;
     ui::close();
     server.join().unwrap();

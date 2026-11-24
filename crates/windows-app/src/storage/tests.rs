@@ -161,17 +161,17 @@ fn verify_migration(version: u32) {
         .share_mode(1)
         .open(&path)
         .unwrap();
-    assert!(
-        store
-            .commit_provisional(&reference("first"), &[42; 32], false)
-            .is_err()
-    );
+    store
+        .commit_provisional(&reference("first"), &[42; 32], false)
+        .unwrap();
     assert_eq!(fs::read(&path).unwrap(), legacy_bytes);
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     drop(locked);
 
     store
-        .commit_provisional(&reference("first"), &[42; 32], false)
+        .name_sender(
+            "active-pairing",
+            &"未命名设备".encode_utf16().collect::<Vec<_>>(),
+        )
         .unwrap();
     let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(current["version"], 4);
@@ -183,7 +183,13 @@ fn verify_migration(version: u32) {
         pairing["name"] = json!(name);
         assert_eq!(&current["active_pairings"][id], pairing);
     }
-    let pending = &current["provisional_pairing"];
+    assert_eq!(
+        current["provisional_pairing"],
+        legacy["provisional_pairing"]
+    );
+    let staged: Value =
+        serde_json::from_slice(&fs::read(store.enrollment_path()).unwrap()).unwrap();
+    let pending = &staged["provisional_pairing"];
     assert_eq!(pending["session_id"], "first");
     assert_eq!(pending["receiver_id"], "provisional-receiver");
     assert_eq!(pending["pairing_id"], "provisional-pairing");
@@ -202,11 +208,8 @@ fn refuses_unreadable_and_newer_registration_files_without_overwriting_them() {
         r#"{"version":2,"active_pairings":{"unknown":{"protected_key":"invalid"}}}"#,
     ] {
         fs::write(&path, content).unwrap();
-        assert!(
-            store
-                .commit_provisional(&reference("session"), &[42; 32], false)
-                .is_err()
-        );
+        let result = store.commit_provisional(&reference("session"), &[42; 32], false);
+        assert_eq!(result.is_err(), content.contains(r#""version":5"#));
         assert_eq!(fs::read_to_string(&path).unwrap(), content);
     }
 }

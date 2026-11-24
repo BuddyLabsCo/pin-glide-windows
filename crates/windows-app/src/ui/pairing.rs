@@ -33,8 +33,25 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
     open_pairing(chinese, start_operation).map(drop)
 }
 
-pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
-    create_view(chinese, start_operation, false, false)?;
+pub(super) fn resume(
+    chinese: bool,
+    store: RegistrationStore,
+    connect: fn() -> Option<Service>,
+) -> Result<(), PlatformError> {
+    create_view(
+        chinese,
+        move |notify, start| {
+            PairingOperation::spawn(
+                connect,
+                notify,
+                Some(store.clone()),
+                start,
+                super::sms::receive,
+            )
+        },
+        false,
+        false,
+    )?;
     Ok(())
 }
 

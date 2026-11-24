@@ -13,7 +13,7 @@ use super::{
     reconnect::Connectivity,
 };
 
-use crate::storage::{DeliveryRejection, RegistrationStore};
+use crate::storage::{Cleanup, DeliveryRejection, RegistrationStore};
 
 #[cfg(test)]
 mod tests;
@@ -93,22 +93,16 @@ impl DeliveryQueue {
                     serde_json::from_str(text).map_err(|_| DeliveryStatus::Protocol)?;
                 correlation(Some(&event.pairing_id)).map_err(|_| DeliveryStatus::Protocol)?;
                 correlation(Some(&event.sender_id)).map_err(|_| DeliveryStatus::Protocol)?;
-                let mut inbox = updates
+                updates
                     .inbox
                     .lock()
-                    .map_err(|_| DeliveryStatus::Disconnected)?;
-                if let Err(error) = self.store.remove_pairing(
-                    &self.receiver_id,
-                    &event.pairing_id,
-                    &event.sender_id,
-                ) {
-                    if error.kind() == std::io::ErrorKind::InvalidInput {
-                        return Err(DeliveryStatus::Protocol);
-                    }
-                    eprintln!("Could not save Pairing removal.");
-                }
-                inbox.remove_pairing(event.pairing_id);
-                drop(inbox);
+                    .map_err(|_| DeliveryStatus::Disconnected)?
+                    .remove_pairing(event.pairing_id.clone());
+                self.store.record_cleanup(Cleanup::PairingRemoved {
+                    receiver_id: self.receiver_id.clone(),
+                    pairing_id: event.pairing_id,
+                    sender_id: event.sender_id,
+                });
                 updates.refresh_delivery();
                 Ok(())
             }
@@ -123,9 +117,9 @@ impl DeliveryQueue {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .revoke();
-                if self.store.revoke_receiver(&self.receiver_id).is_err() {
-                    eprintln!("Could not save Receiver revocation.");
-                }
+                self.store.record_cleanup(Cleanup::Revoked {
+                    receiver_id: event.receiver_id,
+                });
                 Err(DeliveryStatus::Revoked)
             }
             _ => Ok(()),
@@ -349,7 +343,11 @@ fn authenticate(
     store: &RegistrationStore,
     inbox: &std::sync::Mutex<Inbox>,
 ) -> Result<(Sms, String), DeliveryRejection> {
-    let mut sender_name = String::new();
+    let target = store.delivery_target(receiver_id, &delivery.pairing_id, &delivery.sender_id);
+    let (key, sender_name) = target.map_or_else(
+        || (None, String::new()),
+        |target| (Some(target.key), target.name),
+    );
     let mut inbox = inbox
         .lock()
         .map_err(|_| DeliveryRejection::InboxUnavailable)?;
@@ -361,11 +359,7 @@ fn authenticate(
             nonce: &delivery.nonce,
             ciphertext: &delivery.ciphertext,
         },
-        |pairing_id| {
-            let target = store.delivery_target(receiver_id, pairing_id, &delivery.sender_id)?;
-            sender_name = target.name;
-            Some(target.key)
-        },
+        |_| key,
     );
     let sms = result.map_err(DeliveryRejection::Receive)?;
     Ok((sms, sender_name))

@@ -197,7 +197,7 @@ export component MainWindow inherits Window {
                 height: 40px;
                 border-radius: 6px;
                 property <string> label: root.chinese ? "配对新设备" : "Pair a new device";
-                background: press.pressed ? #00574f : press.has-hover ? #087b6e : #006b60;
+                background: #006b60;
                 accessible-role: button;
                 accessible-label: self.label;
                 accessible-action-default => { root.open-pairing(); }
@@ -208,14 +208,19 @@ export component MainWindow inherits Window {
                     font-weight: 600;
                 }
 
+                Rectangle {
+                    border-radius: 6px;
+                    background: press.has-hover ? #284e7912 : transparent;
+                }
+
                 if key-focus.has-focus: Rectangle {
-                    x: -3px;
-                    y: -3px;
-                    width: parent.width + 6px;
-                    height: parent.height + 6px;
-                    border-radius: 8px;
+                    x: -4px;
+                    y: -4px;
+                    width: parent.width + 8px;
+                    height: parent.height + 8px;
+                    border-radius: 10px;
                     border-width: 2px;
-                    border-color: #19685b;
+                    border-color: #284e79;
                 }
 
                 key-focus := FocusScope {

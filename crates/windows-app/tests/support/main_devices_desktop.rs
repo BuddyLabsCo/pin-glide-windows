@@ -289,15 +289,19 @@ async fn check_delivered_popup() {
 }
 
 pub(super) fn visible_sms() -> Option<HWND> {
-    let mut popup: HWND = std::ptr::null_mut();
+    sms_windows().into_iter().next()
+}
+
+fn sms_windows() -> Vec<HWND> {
+    let mut popups: Vec<HWND> = Vec::new();
     #[expect(
         clippy::undocumented_unsafe_blocks,
         reason = "the callback only uses the pointer during enumeration"
     )]
     unsafe {
-        EnumWindows(Some(find_sms), (&raw mut popup) as LPARAM)
+        EnumWindows(Some(find_sms), (&raw mut popups) as LPARAM)
     };
-    (!popup.is_null()).then_some(popup)
+    popups
 }
 
 unsafe extern "system" fn find_sms(window: HWND, output: LPARAM) -> i32 {
@@ -310,8 +314,7 @@ unsafe extern "system" fn find_sms(window: HWND, output: LPARAM) -> i32 {
             let size = GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32);
             let title = String::from_utf16_lossy(&title[..size as usize]);
             if matches!(title.as_str(), "鹊信 · 新短信" | "Pin Glide · New SMS") {
-                *(output as *mut HWND) = window;
-                return 0;
+                (*(output as *mut Vec<HWND>)).push(window);
             }
         }
     }
