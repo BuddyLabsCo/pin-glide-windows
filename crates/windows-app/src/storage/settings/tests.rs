@@ -19,9 +19,28 @@ fn settings_read_defaults_and_migrate_supported_partial_files_on_save() {
     store.save(&settings).unwrap();
 
     let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(saved["version"], 2);
+    assert_eq!(saved["version"], 3);
     let reopened = SettingsStore::new(path).read().unwrap().unwrap();
     assert_eq!(reopened, settings);
+}
+
+#[test]
+fn migrates_version_two_without_changing_existing_preferences() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let store = SettingsStore::new(path.clone());
+    let original = br#"{"version":2,"language":"english","launch_at_login":false,"popup_duration_seconds":75}"#;
+    fs::write(&path, original).unwrap();
+    let settings = store.read().unwrap().unwrap();
+    assert_eq!(settings.language, Language::English);
+    assert!(!settings.launch_at_login);
+    assert_eq!(settings.popup_duration_seconds.seconds(), Some(75));
+    assert!(settings.shortcut.is_none());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    store.save(&settings).unwrap();
+    let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["version"], 3);
+    assert_eq!(store.read().unwrap(), Some(settings));
 }
 
 #[test]
@@ -46,7 +65,7 @@ fn invalid_or_future_settings_survive_every_save_attempt() {
     let store = SettingsStore::new(path.clone());
     for bytes in [
         b"broken JSON".as_slice(),
-        br#"{"version":3,"language":"english"}"#,
+        br#"{"version":4,"language":"english"}"#,
         br#"{"version":1,"language":"unknown"}"#,
         br#"{"version":1,"popup_duration_seconds":45}"#,
         br#"{"version":1,"popup_duration_seconds":null}"#,
@@ -55,6 +74,8 @@ fn invalid_or_future_settings_survive_every_save_attempt() {
         br#"{"version":2,"popup_duration_seconds":"45"}"#,
         br#"{"version":2,"popup_duration_seconds":45.0}"#,
         br#"{"version":2,"popup_duration_seconds":45e0}"#,
+        br#"{"version":2,"shortcut":{"modifiers":3,"key":86}}"#,
+        br#"{"version":2,"shortcut":null}"#,
     ] {
         fs::write(&path, bytes).unwrap();
         assert_eq!(store.read().unwrap_err().kind(), io::ErrorKind::InvalidData);

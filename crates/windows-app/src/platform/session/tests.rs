@@ -51,17 +51,7 @@ fn lock_immediately_closes_every_sms_and_unlock_only_shows_new_sms() {
     let (listener, origin) = listen("localhost");
     let service = local_service(&listener, &origin, true);
     let fixture_dir = tempfile::tempdir().unwrap();
-    let path = fixture_dir.path().join("registration.json");
-    std::fs::write(&path, json!({
-        "version": 4,
-        "receiver_id": "receiver-1",
-        "protected_receiver_token": Enrollment::protect_token(TOKEN).unwrap(),
-        "active_pairings": {
-            "pairing-1": {
-                "sender_id": "sender-1", "protected_key": Enrollment::protect_token("abcdefghijklmnopqrstuvwxyz123456").unwrap(), "name": "我的设备",
-            },
-        },
-    }).to_string()).unwrap();
+    let path = registration(fixture_dir.path());
     let (deliver, messages) = mpsc::channel();
     let (ack, receipts) = mpsc::channel();
     let server = thread::spawn(move || {
@@ -140,6 +130,21 @@ fn lock_immediately_closes_every_sms_and_unlock_only_shows_new_sms() {
     slint::run_event_loop_until_quit().unwrap();
     server.join().unwrap();
     drop(tray);
+}
+
+fn registration(directory: &std::path::Path) -> std::path::PathBuf {
+    let path = directory.join("registration.json");
+    std::fs::write(&path, json!({
+        "version": 4,
+        "receiver_id": "receiver-1",
+        "protected_receiver_token": Enrollment::protect_token(TOKEN).unwrap(),
+        "active_pairings": {
+            "pairing-1": {
+                "sender_id": "sender-1", "protected_key": Enrollment::protect_token("abcdefghijklmnopqrstuvwxyz123456").unwrap(), "name": "我的设备",
+            },
+        },
+    }).to_string()).unwrap();
+    path
 }
 
 fn deliver_sms(

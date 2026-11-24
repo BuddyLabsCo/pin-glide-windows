@@ -5,6 +5,52 @@ use crate::storage::settings::Language;
 
 #[test]
 #[ignore = "requires an interactive Windows desktop"]
+fn shortcut_tooltip_shows_the_full_value_and_dismisses_on_pointer_exit() {
+    use i_slint_core::{
+        accessibility::AccessibleStringProperty, item_tree::ItemRc, window::WindowInner,
+    };
+    use slint::{
+        ComponentHandle, LogicalPosition,
+        platform::{WindowEvent, update_timers_and_animations},
+    };
+    use std::{ops::ControlFlow, time::Duration};
+
+    crate::startup_tests::select_test_backend().unwrap();
+    let settings = crate::SettingsWindow::new().unwrap();
+    settings.set_chinese(true);
+    let chord = "Ctrl + Alt + Shift + Page Down";
+    settings.set_shortcut(chord.into());
+    settings.show().unwrap();
+    let window = settings.window();
+    let root = ItemRc::new_root(WindowInner::from_pub(window).try_component().unwrap());
+    let tooltip = || {
+        root.visit_descendants(|item| {
+            if item
+                .accessible_string_property(AccessibleStringProperty::Label)
+                .as_deref()
+                == Some(chord)
+            {
+                ControlFlow::Break(item.clone())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+    };
+    assert!(tooltip().is_none());
+    update_timers_and_animations();
+    window.dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(228., 210.),
+    });
+    std::thread::sleep(Duration::from_millis(750));
+    update_timers_and_animations();
+
+    assert!(tooltip().is_some());
+    window.dispatch_event(WindowEvent::PointerExited);
+    assert!(tooltip().is_none());
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop"]
 fn settings_keyboard_navigation_skips_the_page_focus_target() {
     use i_slint_core::{
         accessibility::AccessibleStringProperty, item_tree::ParentItemTraversalMode,
@@ -24,6 +70,10 @@ fn settings_keyboard_navigation_skips_the_page_focus_target() {
         (Key::Tab, "Back to Main"),
         (Key::Tab, "Interface language"),
         (Key::Tab, "Launch at login"),
+        (Key::Tab, "Copy code shortcut"),
+        (Key::Tab, "Change copy code shortcut"),
+        (Key::Backtab, "Copy code shortcut"),
+        (Key::Backtab, "Launch at login"),
         (Key::Backtab, "Interface language"),
         (Key::Backtab, "Back to Main"),
         (Key::Backtab, "Popup duration (seconds)"),
@@ -67,10 +117,10 @@ fn launch_at_login_keeps_the_working_registration_when_settings_cannot_be_saved(
         Language::System
     );
     drop(locked);
-    fs::write(&path, br#"{"version":3}"#).unwrap();
+    fs::write(&path, br#"{"version":4}"#).unwrap();
     assert!(preferences.save_startup(false).is_err());
     assert!(preferences.is_startup_enabled().unwrap());
-    assert_eq!(fs::read(&path).unwrap(), br#"{"version":3}"#);
+    assert_eq!(fs::read(&path).unwrap(), br#"{"version":4}"#);
     fs::write(&path, br#"{"version":1}"#).unwrap();
     preferences.save_startup(false).unwrap();
     assert!(!preferences.is_startup_enabled().unwrap());

@@ -1,0 +1,57 @@
+import { LineEdit, Palette } from "std-widgets.slint";
+
+export component ShortcutField inherits TouchArea {
+    in property <string> value;
+    in property <string> tooltip;
+    in property <string> label;
+    in property <string> description;
+    in property <length> viewport-width;
+    private property <bool> show-tooltip;
+    width: 106px;
+    height: 32px;
+
+    changed has-hover => {
+        root.show-tooltip = false;
+        if self.has-hover && root.tooltip != "" {
+            hover-delay.start();
+        } else {
+            hover-delay.stop();
+        }
+    }
+
+    hover-delay := Timer {
+        interval: 500ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.show-tooltip = root.has-hover;
+        }
+    }
+
+    LineEdit {
+        width: parent.width;
+        text: root.value;
+        read-only: true;
+        accessible-label: root.label;
+        accessible-description: root.description;
+    }
+
+    if root.tooltip != "" && root.show-tooltip: Rectangle {
+        x: min(0px, root.viewport-width - 20px - root.absolute-position.x - self.width);
+        y: -self.height - 4px;
+        width: min(root.viewport-width - 40px, tooltip-text.preferred-width + 18px);
+        height: tooltip-text.preferred-height + 12px;
+        background: Palette.alternate-background;
+        border-color: Palette.border;
+        border-radius: 4px;
+        border-width: 1px;
+        tooltip-text := Text {
+            width: parent.width - 18px;
+            text: root.tooltip;
+            color: Palette.foreground;
+            wrap: word-wrap;
+            accessible-role: text;
+            accessible-label: self.text;
+        }
+    }
+}

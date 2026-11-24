@@ -3,6 +3,7 @@ mod instance;
 pub(crate) mod launch_at_login;
 mod popup;
 mod session;
+pub(crate) mod shortcut;
 mod tray;
 
 pub(crate) use clipboard::write_unicode_clipboard;
@@ -14,6 +15,7 @@ pub(crate) use popup::{
 };
 pub(crate) use session::popup_epoch;
 pub use tray::Tray;
+pub(crate) use tray::{capture_shortcut, replace_shortcut};
 pub(crate) use tray::{delivery_status, refresh_tooltip, set_delivery_status};
 
 use std::{cell::Cell, io};

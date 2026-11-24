@@ -12,8 +12,10 @@ use crate::{
     storage::settings::{Language, PopupDuration, Settings, SettingsStore},
 };
 
+mod shortcut;
 #[cfg(test)]
 mod tests;
+pub(crate) use shortcut::{finish_shortcut_capture, restore_shortcut};
 
 thread_local! {
     static PREFERENCES: RefCell<Option<Preferences>> = const { RefCell::new(None) };
@@ -165,12 +167,14 @@ fn new_window() -> Result<SettingsWindow, PlatformError> {
     let weak = window.as_weak();
     window.window().on_close_requested(move || {
         if let Some(window) = weak.upgrade() {
+            shortcut::cancel(&window);
             window.invoke_focus_page();
         }
         CloseRequestResponse::HideWindow
     });
     window.on_choose_language(choose_language);
     window.on_toggle_startup(toggle_startup);
+    shortcut::connect(&window);
     let weak = window.as_weak();
     window.on_apply_popup_duration(move |draft| {
         if let Some(window) = weak.upgrade() {
@@ -214,6 +218,7 @@ pub(super) fn show(
 pub(super) fn hide() -> Result<(), PlatformError> {
     WINDOW.with_borrow(|window| {
         if let Some(window) = window {
+            shortcut::cancel(window);
             window.invoke_focus_page();
             window.hide()?;
         }
@@ -231,7 +236,9 @@ pub fn settings_visible() -> bool {
 }
 
 pub(super) fn close() {
-    WINDOW.take();
+    if let Some(window) = WINDOW.take() {
+        shortcut::cancel(&window);
+    }
 }
 
 pub(super) fn update_motion() {
@@ -323,6 +330,7 @@ pub(super) fn refresh(chinese: bool) {
             STARTUP_ENABLED.set(enabled);
         }
         window.set_chinese(chinese);
+        shortcut::render(window);
         apply_motion(window);
         window.set_language_index(match language {
             Language::System => 0,

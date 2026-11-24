@@ -242,12 +242,16 @@ fn operation_service() -> impl FnOnce() -> Option<Service> + Send {
     }
 }
 
-pub(super) fn connect_service() -> Option<Service> {
+pub(crate) fn connect_service() -> Option<Service> {
     option_env!("PINGLIDE_SERVICE_URL").and_then(|origin| Service::new(origin).ok())
 }
 
 pub(super) fn delivery_status() -> Option<DeliveryStatus> {
     PAIRING.with_borrow(|view| view.as_ref().map(|view| view.operation.delivery_status()))
+}
+
+pub(super) fn latest_otp() -> Option<zeroize::Zeroizing<String>> {
+    PAIRING.with_borrow(|view| view.as_ref()?.operation.latest_otp())
 }
 
 pub(super) fn notify_progress() {

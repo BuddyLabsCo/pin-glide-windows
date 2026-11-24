@@ -13,19 +13,21 @@ mod sms;
 #[cfg(test)]
 pub(crate) use sms::{popup_count, receive as receive_sms};
 
+pub(crate) use pairing::connect_service;
 pub use pairing::{open_pairing, visible_pairing};
 pub(crate) use settings::initialize as initialize_preferences;
 pub use settings::settings_visible;
+pub(crate) use settings::{finish_shortcut_capture, restore_shortcut};
 pub use sms::show_sms;
 
-pub(crate) fn resume_pairing() -> Result<(), PlatformError> {
+pub(crate) fn resume_pairing(connect: fn() -> Option<Service>) -> Result<(), PlatformError> {
     if PairingOperation::has_pending_enrollment() {
         return pairing::resume(platform::chinese());
     }
     if let Ok(store) = RegistrationStore::for_current_user()
         && store.has_registration()
     {
-        start_registered(store, pairing::connect_service);
+        start_registered(store, connect);
     }
     Ok(())
 }
@@ -77,6 +79,13 @@ pub fn close() {
 
 pub(crate) fn close_sms() {
     sms::close_all();
+}
+
+pub(crate) fn latest_otp() -> Option<zeroize::Zeroizing<String>> {
+    REGISTERED.with_borrow(|operation| match operation {
+        Some(operation) => operation.latest_otp(),
+        None => pairing::latest_otp(),
+    })
 }
 
 fn update_delivery_status() {
