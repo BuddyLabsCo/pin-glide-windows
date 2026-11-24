@@ -177,7 +177,7 @@ for its invocation and the packaged Receiver's interactive first-use test.
 | `node scripts/quality/check.mjs service` | Windows Service adapter, WSS wire models, and local HTTPS certificate and hostname verification |
 | `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
 | `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
-| `cargo test --locked -p windows-app --test lifecycle -- --ignored` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop using isolated settings |
+| `cargo test --locked -p windows-app --test lifecycle startup_stays_hidden_and_explicit_launch_reopens_the_same_process -- --ignored --exact` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop using isolated settings |
 | `cargo test --locked -p windows-app --test settings_desktop -- --ignored --test-threads=1` | Check Settings navigation, language selection, startup rollback and reduced motion on an unlocked Windows desktop |
 | `cargo test --locked -p windows-app --test pairing_desktop -- --ignored` | Check key-check motion, QR removal and terminal states on an interactive Windows desktop |
 | `cargo test --locked -p windows-app --test sms_desktop -- --ignored` | Check SMS popup rendering, scrolling and dismissal on an unlocked Windows desktop. Writes a synthetic OTP to the clipboard. |

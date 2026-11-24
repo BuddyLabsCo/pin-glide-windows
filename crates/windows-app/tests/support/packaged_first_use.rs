@@ -23,7 +23,7 @@ use windows::Win32::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
 
-use super::{AppProcess, visible_window, wait_for};
+use super::{AppProcess, launch_duplicate, visible_window, wait_for};
 
 #[path = "pairing.rs"]
 #[allow(
@@ -84,7 +84,10 @@ fn packaged_reinstall_enrolls_only_after_explicit_start() {
         assert!(primary.0.try_wait().unwrap().is_none());
     });
 
-    assert!(Command::new(receiver).status().unwrap().success());
+    launch_duplicate(
+        &mut Command::new(receiver),
+        "explicit second launch must exit successfully",
+    );
     wait_for(
         || !visible_window(pid).is_null(),
         "explicit launch must open Welcome in the tray process",

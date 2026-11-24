@@ -25,6 +25,9 @@ CRCCheck force
 !define ERROR_PATH_NOT_FOUND 3
 !define ERROR_ALREADY_EXISTS 183
 !define FILE_ATTRIBUTE_REPARSE_POINT 0x400
+!define DELETE_ACCESS 0x10000
+!define OPEN_EXISTING 3
+!define FILE_DISPOSITION_INFO 4
 !define RRF_RT_REG_SZ 2
 !define KEY_WOW64_64KEY 0x100
 !define MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH 9
@@ -36,6 +39,8 @@ Var PreviousRun
 Var HadRunValue
 Var RunChanged
 Var RollbackFailed
+Var ShortcutCreated
+Var UninstallEntryCreated
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT}"
@@ -111,6 +116,14 @@ FunctionEnd
     System::Call 'kernel32::MoveFileExW(w "$INSTDIR\${source}", w "$INSTDIR\${destination}", i ${MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH}) i.r0'
 !macroend
 
+!macro RegisterUninstaller
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
+    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
+    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+!macroend
+
 !macro DeleteStartupValue key
     System::Call 'advapi32::RegDeleteKeyValueW(p ${HKCU_HANDLE}, w "${key}", w "${PRODUCT_NAME}") i.r0'
     ${If} $0 != 0
@@ -147,19 +160,23 @@ Section
         StrCmp $0 0 failed
     ${EndIf}
 
-    ${If} $HasReceiver != 1
-    ${AndIf} $HasUninstaller != 1
+    Call UpdateStartup
+    IfErrors failed
+
+    ${IfNot} ${FileExists} "${SHORTCUT}"
+        StrCpy $ShortcutCreated 1
         CreateShortCut "${SHORTCUT}" "$INSTDIR\${RECEIVER_EXE}"
-        WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
-        WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
-        WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
-        WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
-        WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+        IfErrors failed
+    ${EndIf}
+    ClearErrors
+    ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "UninstallString"
+    ClearErrors
+    ${If} $0 == ""
+        StrCpy $UninstallEntryCreated 1
+        !insertmacro RegisterUninstaller
         IfErrors failed
     ${EndIf}
 
-    Call UpdateStartup
-    IfErrors failed
     !insertmacro Move "${UNINSTALL_STAGE}" "${UNINSTALL_EXE}"
     StrCmp $0 0 failed
     StrCpy $UninstallerReplaced 1
@@ -195,10 +212,14 @@ failed:
     ${If} $RollbackFailed != 1
         Delete "$INSTDIR\${UNINSTALL_BACKUP}"
     ${EndIf}
+    ${If} $UninstallEntryCreated == 1
+        DeleteRegKey HKCU "${UNINSTALL_KEY}"
+    ${EndIf}
+    ${If} $ShortcutCreated == 1
+        Delete "${SHORTCUT}"
+    ${EndIf}
     ${If} $HasReceiver != 1
     ${AndIf} $HasUninstaller != 1
-        DeleteRegKey HKCU "${UNINSTALL_KEY}"
-        Delete "${SHORTCUT}"
         SetOutPath "${USER_FILES}"
         RMDir "$INSTDIR"
     ${EndIf}
@@ -227,7 +248,10 @@ Function UpdateStartup
     StrCpy $0 '"$INSTDIR\${RECEIVER_EXE}" --startup'
     StrCmpS $0 $PreviousRun done
     WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT_NAME}" "$0"
-    IfErrors done
+    ${If} ${Errors}
+        SetErrors
+        Return
+    ${EndIf}
     StrCpy $RunChanged 1
 done:
 FunctionEnd
@@ -262,13 +286,7 @@ Section "Uninstall"
     !insertmacro DeleteStartupValue "${APPROVAL_KEY}"
     IfErrors failed
 
-    System::Call 'advapi32::RegDeleteKeyExW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", i ${KEY_WOW64_64KEY}, i 0) i.r0'
-    ${If} $0 != 0
-    ${AndIf} $0 != ${ERROR_FILE_NOT_FOUND}
-    ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
-        Goto failed
-    ${EndIf}
-    Delete "$INSTDIR\${UNINSTALL_EXE}"
+    Call un.RemoveEntryAndExecutable
     IfErrors failed
     RMDir "$INSTDIR"
     Goto done
@@ -277,3 +295,33 @@ failed:
     !insertmacro Fail "Pin Glide could not be completely removed. Close programs using its files and try again."
 done:
 SectionEnd
+
+Function un.RemoveEntryAndExecutable
+    ; Hold exclusive delete access while unregistering so a locked file leaves a retry command.
+    System::Call 'kernel32::CreateFileW(w "$INSTDIR\${UNINSTALL_EXE}", i ${DELETE_ACCESS}, i 0, p 0, i ${OPEN_EXISTING}, i 0, p 0) p.r1 ?e'
+    Pop $2
+    ${If} $1 == -1
+    ${AndIf} $2 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $2 != ${ERROR_PATH_NOT_FOUND}
+        SetErrors
+        Return
+    ${EndIf}
+
+    System::Call 'advapi32::RegDeleteKeyExW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", i ${KEY_WOW64_64KEY}, i 0) i.r2'
+    ${If} $2 != 0
+    ${AndIf} $2 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $2 != ${ERROR_PATH_NOT_FOUND}
+        SetErrors
+    ${ElseIf} $1 != -1
+        System::Call 'kernel32::SetFileInformationByHandle(p r1, i ${FILE_DISPOSITION_INFO}, *i 1, i 1) i.r0'
+        ${If} $0 == 0
+            ${If} $2 == 0
+                !insertmacro RegisterUninstaller
+            ${EndIf}
+            SetErrors
+        ${EndIf}
+    ${EndIf}
+    ${If} $1 != -1
+        System::Call 'kernel32::CloseHandle(p r1)'
+    ${EndIf}
+FunctionEnd

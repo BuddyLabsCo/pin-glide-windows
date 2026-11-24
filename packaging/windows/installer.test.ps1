@@ -17,6 +17,8 @@ $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$prod
 $testRegistry = "Software\$product"
 $runKey = "HKCU:\$testRegistry\Run"
 $approvalKey = "HKCU:\$testRegistry\StartupApproved"
+$uninstallerCopy = Join-Path $fixture 'uninstall-copy.exe'
+$uninstallCommand = "`"$uninstaller`""
 
 function Assert($condition, [string] $message) {
     if (!$condition) { throw $message }
@@ -31,6 +33,24 @@ function Build-Installer($payload, $output) {
 
 function Invoke-Installer($executable, $arguments = '/S') {
     (Start-Process -FilePath $executable -ArgumentList $arguments -Wait -PassThru).ExitCode
+}
+
+function Invoke-Uninstaller {
+    Copy-Item -LiteralPath $uninstaller -Destination $uninstallerCopy -Force
+    Invoke-Installer $uninstallerCopy "/S _?=$installation"
+}
+
+function Assert-Registered {
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name UninstallString) -eq $uninstallCommand) 'Apps & features entry is missing the uninstaller'
+}
+
+function Assert-Uninstalled {
+    foreach ($path in $installation, $data, $shortcut, $uninstallKey) {
+        Assert (!(Test-Path -LiteralPath $path)) "Uninstall left $path"
+    }
+    foreach ($key in $runKey, $approvalKey) {
+        Assert ($null -eq (Get-Item -LiteralPath $key).GetValue($product)) "Uninstall left the $product value in $key"
+    }
 }
 
 function Assert-Data {
@@ -54,7 +74,7 @@ try {
     Assert ((Invoke-Installer $first) -eq 0) 'Fresh install failed'
     Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $firstHash) 'Fresh install used the wrong Receiver'
     Assert (Test-Path -LiteralPath $shortcut) 'Start menu shortcut is missing'
-    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name UninstallString) -eq "`"$uninstaller`"") 'Apps & features entry is missing the uninstaller'
+    Assert-Registered
     Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq "`"$binary`" --startup") 'Default startup must be tray-only'
     Assert (!(Test-Path -LiteralPath $data)) 'Install created Receiver data before first use'
 
@@ -78,9 +98,7 @@ try {
     try {
         Assert $created 'Exit the running Pin Glide Receiver before running the packaging test'
         Assert ((Invoke-Installer $second) -ne 0) 'Upgrade ran while the Receiver owned its instance'
-        $uninstallerCopy = Join-Path $fixture 'uninstall-copy.exe'
-        Copy-Item -LiteralPath $uninstaller -Destination $uninstallerCopy
-        Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -ne 0) 'Uninstall ran while the Receiver owned its instance'
+        Assert ((Invoke-Uninstaller) -ne 0) 'Uninstall ran while the Receiver owned its instance'
     } finally {
         $mutex.Dispose()
     }
@@ -91,6 +109,35 @@ try {
     New-ItemProperty -LiteralPath $runKey -Name $product -Value $oldRun | Out-Null
     [IO.File]::AppendAllText($uninstaller, 'synthetic previous uninstaller marker')
     $oldUninstallerHash = (Get-FileHash -LiteralPath $uninstaller).Hash
+
+    $runAccess = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+        "$testRegistry\Run", 'ReadWriteSubTree', 'ReadPermissions, ChangePermissions')
+    try {
+        $denyWrites = $runAccess.GetAccessControl()
+        $rule = [Security.AccessControl.RegistryAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($sid), 'SetValue', 'Deny')
+        $denyWrites.AddAccessRule($rule)
+        $runAccess.SetAccessControl($denyWrites)
+        try {
+            $readOnlyRun = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("$testRegistry\Run")
+            try {
+                Assert ($readOnlyRun.GetValue($product) -eq $oldRun) 'The startup fixture must remain readable'
+                Assert ((Invoke-Installer $second) -ne 0) 'Upgrade reported success when startup migration could not write'
+            } finally {
+                $readOnlyRun.Dispose()
+            }
+        } finally {
+            $denyWrites.RemoveAccessRuleSpecific($rule)
+            $runAccess.SetAccessControl($denyWrites)
+        }
+    } finally {
+        $runAccess.Dispose()
+    }
+    Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $firstHash) 'Denied startup migration replaced the Receiver'
+    Assert ((Get-FileHash -LiteralPath $uninstaller).Hash -eq $oldUninstallerHash) 'Denied startup migration replaced the uninstaller'
+    Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq $oldRun) 'Denied startup migration changed the previous startup command'
+    Assert-Data
+
     $locked = [IO.File]::Open($binary, 'Open', 'Read', 'Read')
     try {
         Assert ((Invoke-Installer $second) -ne 0) 'Upgrade reported success with a locked Receiver file'
@@ -117,10 +164,9 @@ try {
     foreach ($name in 'receiver.new', 'uninstall.new', 'uninstall.previous') {
         [IO.File]::WriteAllText((Join-Path $installation $name), 'interrupted upgrade')
     }
-    Copy-Item -LiteralPath $uninstaller -Destination $uninstallerCopy -Force
     $locked = [IO.File]::Open((Join-Path $data 'future-receiver-state.bin'), 'Open', 'Read', 'Read')
     try {
-        Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -ne 0) 'Uninstall reported success with locked Receiver data'
+        Assert ((Invoke-Uninstaller) -ne 0) 'Uninstall reported success with locked Receiver data'
         Assert (Test-Path -LiteralPath $uninstallKey) 'Failed data cleanup unregistered the uninstaller'
     } finally {
         $locked.Dispose()
@@ -128,25 +174,50 @@ try {
     $registryBlocker = Join-Path $uninstallKey 'BlockDeletion'
     New-Item -Path $registryBlocker | Out-Null
     try {
-        Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -ne 0) 'Uninstall reported success with a blocked Apps & features entry'
+        Assert ((Invoke-Uninstaller) -ne 0) 'Uninstall reported success with a blocked Apps & features entry'
         Assert (Test-Path -LiteralPath $uninstaller) 'Registry cleanup failure removed the uninstaller'
-        Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name UninstallString) -eq "`"$uninstaller`"") 'Registry cleanup failure broke the retry command'
+        Assert-Registered
     } finally {
         Remove-Item -LiteralPath $registryBlocker -ErrorAction SilentlyContinue
     }
-    Assert ((Invoke-Installer $uninstallerCopy "/S _?=$installation") -eq 0) 'Uninstall failed'
-    foreach ($path in $installation, $data, $shortcut, $uninstallKey) {
-        Assert (!(Test-Path -LiteralPath $path)) "Uninstall left $path"
+    Assert (!(Test-Path -LiteralPath $shortcut)) 'Blocked uninstall did not exercise a missing shortcut'
+    Assert ((Invoke-Installer $second) -eq 0) 'Setup could not repair the partial uninstall'
+    Assert (Test-Path -LiteralPath $shortcut) 'Setup did not restore the Start menu shortcut'
+    Assert-Registered
+    Remove-Item -LiteralPath $uninstallKey
+    Assert ((Invoke-Installer $second) -eq 0) 'Setup could not repair a missing Apps & features entry'
+    Assert-Registered
+
+    $locked = [IO.File]::Open($uninstaller, 'Open', 'Read', 'Read')
+    try {
+        Assert ((Invoke-Uninstaller) -ne 0) 'Uninstall reported success with a locked uninstaller'
+        Assert-Registered
+    } finally {
+        $locked.Dispose()
     }
-    foreach ($key in $runKey, $approvalKey) {
-        Assert ($null -eq (Get-Item -LiteralPath $key).GetValue($product)) "Uninstall left the $product value in $key"
+    $uninstallerFile = Get-Item -LiteralPath $uninstaller
+    $uninstallerFile.IsReadOnly = $true
+    try {
+        Assert ((Invoke-Uninstaller) -ne 0) 'Uninstall reported success with a read-only uninstaller'
+        Assert-Registered
+    } finally {
+        $uninstallerFile.IsReadOnly = $false
     }
+    Assert ((Invoke-Uninstaller) -eq 0) 'Uninstall failed after the uninstaller became available'
+    Assert-Uninstalled
 
     Assert ((Invoke-Installer $second) -eq 0) 'Reinstall failed'
     Assert (!(Test-Path -LiteralPath $data)) 'Reinstall restored old Receiver data'
+    New-ItemProperty -LiteralPath $approvalKey -Name $product -PropertyType Binary -Value $approval | Out-Null
     Remove-Item -LiteralPath $uninstallKey
-    Assert ((Invoke-Installer $uninstaller) -eq 0) 'Uninstall failed with an already absent Apps & features entry'
-    Write-Output 'Passed: fresh install, blocked install and uninstall, failed replacement, upgrade, uninstall, and clean reinstall.'
+    Assert ((Invoke-Uninstaller) -eq 0) 'Uninstall failed with an already absent Apps & features entry'
+    Assert-Uninstalled
+
+    Assert ((Invoke-Installer $second) -eq 0) 'Install for the registered uninstall command failed'
+    $registered = (Get-ItemPropertyValue -LiteralPath $uninstallKey -Name UninstallString).Trim('"')
+    Assert ((Invoke-Installer $registered) -eq 0) 'The registered uninstall command failed to launch'
+    Assert-Uninstalled
+    Write-Output 'Passed: install, startup migration rollback, upgrade, partial repair, uninstall retry, and clean reinstall.'
 } finally {
     Remove-Item -LiteralPath $runKey, $approvalKey, "HKCU:\$testRegistry", $uninstallKey -ErrorAction SilentlyContinue
     $resolved = (Resolve-Path -LiteralPath $fixture).Path
