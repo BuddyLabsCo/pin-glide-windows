@@ -27,11 +27,40 @@ fn receive(
             ciphertext: &STANDARD.encode(ciphertext),
         },
         |id| match id {
-            "phone" => Some(zeroize::Zeroizing::new(key)),
+            "phone" | "spare" => Some(zeroize::Zeroizing::new(key)),
             "other" => Some(zeroize::Zeroizing::new([8; 32])),
             _ => None,
         },
     )
+}
+
+#[test]
+fn removal_clears_only_the_owning_code_and_keeps_its_order() {
+    let mut inbox = Inbox::default();
+    let sms = r#"{"type":"verification_message","smsText":"Synthetic SMS","otp":"123456"}"#;
+    receive(&mut inbox, "phone", sms, 10, 1).unwrap();
+    inbox.remove_pairing("spare".into());
+    assert_eq!(inbox.latest(), Some("123456"));
+    assert_eq!(
+        receive(&mut inbox, "spare", sms, 11, 2).err(),
+        Some(ReceiveError::PairingKeyUnavailable)
+    );
+
+    let mut inbox = Inbox::default();
+    receive(&mut inbox, "spare", sms, 9, 1).unwrap();
+    receive(&mut inbox, "phone", sms, 10, 2).unwrap();
+    inbox.remove_pairing("phone".into());
+    assert_eq!(inbox.latest(), None);
+    receive(&mut inbox, "spare", sms, 9, 3).unwrap();
+    assert_eq!(inbox.latest(), None);
+    receive(&mut inbox, "spare", sms, 11, 4).unwrap();
+    assert_eq!(inbox.latest(), Some("123456"));
+    inbox.revoke();
+    assert_eq!(inbox.latest(), None);
+    assert_eq!(
+        receive(&mut inbox, "spare", sms, 12, 5).err(),
+        Some(ReceiveError::PairingKeyUnavailable)
+    );
 }
 
 #[test]

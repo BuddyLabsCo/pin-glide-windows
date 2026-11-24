@@ -11,9 +11,13 @@ use zeroize::Zeroizing;
 
 mod diagnostics;
 pub(crate) use diagnostics::DeliveryRejection;
+mod cleanup;
+pub(crate) use cleanup::Cleanup;
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
+mod pairing_senders;
 mod pending_add;
+pub(crate) use pairing_senders::PairingSenders;
 mod sender_names;
 #[cfg(windows)]
 pub(crate) mod settings;
@@ -87,6 +91,8 @@ struct Registration {
     version: u32,
     receiver_id: Option<String>,
     protected_receiver_token: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    receiver_revoked: bool,
     active_pairings: BTreeMap<String, ProtectedPairing>,
     provisional_pairing: Option<ProvisionalPairing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,16 +133,19 @@ impl RegistrationStore {
             sender_id: reference.sender_id.into(),
             protected_key: protect(key)?,
         };
+        if !adding_sender {
+            return self.stage_enrollment_key(pairing);
+        }
         self.update(|next| {
             if next.enrollment.is_some() {
                 return Err(io::ErrorKind::AlreadyExists.into());
             }
-            if adding_sender {
-                next.validate_new_sender(&pairing)?;
-            }
+            next.validate_new_sender(&pairing)?;
             next.provisional_pairing = Some(pairing);
-            Ok(())
-        })
+            Ok::<(), io::Error>(())
+        })?;
+        self.remember_pairing_sender(reference);
+        Ok(())
     }
 
     pub(crate) fn finish_add_sender(
@@ -237,14 +246,25 @@ impl RegistrationStore {
         Ok((id, Zeroizing::new(token.to_owned())))
     }
 
+    pub(crate) fn receiver_revoked(&self) -> bool {
+        self.read().is_ok_and(|stored| stored.receiver_revoked)
+    }
+
     pub(crate) fn has_pairings(&self) -> io::Result<bool> {
         self.read().map(|stored| !stored.active_pairings.is_empty())
     }
 
     #[cfg(windows)]
     pub(crate) fn has_registration(&self) -> bool {
-        self.read()
-            .is_ok_and(|stored| stored.receiver_id.is_some() || !stored.active_pairings.is_empty())
+        self.read().map_or_else(
+            |_| self.path.exists(),
+            |stored| {
+                stored.receiver_revoked
+                    || stored.receiver_id.is_some()
+                    || stored.protected_receiver_token.is_some()
+                    || !stored.active_pairings.is_empty()
+            },
+        )
     }
 
     fn update<Value, Error>(
@@ -254,9 +274,7 @@ impl RegistrationStore {
     where
         Error: From<io::Error>,
     {
-        let _writer = WRITER
-            .lock()
-            .map_err(|_| io::Error::other("registration writer is unavailable"))?;
+        let _writer = registration_writer()?;
         let mut next = self.read()?;
         let value = change(&mut next)?;
         next.version = CURRENT_VERSION;
@@ -265,17 +283,19 @@ impl RegistrationStore {
     }
 
     fn read(&self) -> io::Result<Registration> {
-        let mut file = match File::open(&self.path) {
+        let cleanup = self.known_cleanup()?;
+        let mut registration = Self::read_file(&self.path)?;
+        for event in cleanup {
+            event.apply(&mut registration);
+        }
+        Ok(registration)
+    }
+
+    fn read_file(path: &Path) -> io::Result<Registration> {
+        let mut file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Registration {
-                    version: CURRENT_VERSION,
-                    receiver_id: None,
-                    protected_receiver_token: None,
-                    active_pairings: BTreeMap::new(),
-                    provisional_pairing: None,
-                    enrollment: None,
-                });
+                return Ok(Registration::default());
             }
             Err(error) => return Err(error),
         };
@@ -297,8 +317,7 @@ impl RegistrationStore {
                     receiver_id: legacy.receiver_id,
                     protected_receiver_token: legacy.protected_receiver_token,
                     active_pairings: legacy.active_pairings,
-                    provisional_pairing: None,
-                    enrollment: None,
+                    ..Registration::default()
                 }
             }
             2..=CURRENT_VERSION => {
@@ -308,10 +327,23 @@ impl RegistrationStore {
                 }
                 stored
             }
-            _ => return Err(io::ErrorKind::InvalidData.into()),
+            _ => return Err(io::ErrorKind::Unsupported.into()),
         };
         stored.backfill_sender_names();
         Ok(stored)
+    }
+}
+
+fn registration_writer() -> io::Result<std::sync::MutexGuard<'static, ()>> {
+    WRITER
+        .lock()
+        .map_err(|_| io::Error::other("registration writer is unavailable"))
+}
+
+fn remove_file_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
     }
 }
 
@@ -349,6 +381,20 @@ impl Registration {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
         Ok(())
+    }
+}
+
+impl Default for Registration {
+    fn default() -> Self {
+        Self {
+            version: CURRENT_VERSION,
+            receiver_id: None,
+            protected_receiver_token: None,
+            receiver_revoked: false,
+            active_pairings: BTreeMap::new(),
+            provisional_pairing: None,
+            enrollment: None,
+        }
     }
 }
 

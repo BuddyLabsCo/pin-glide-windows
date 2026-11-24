@@ -200,9 +200,7 @@ pub(super) fn show(
     let store = store.clone();
     window.on_back(move || {
         let Some(main) = weak.upgrade() else { return };
-        if let Ok(devices) = store.sender_devices() {
-            super::set_sender_devices(&main, devices);
-        }
+        super::refresh_main(&main, &store);
         if let Err(error) = super::show_main(&main).and_then(|()| hide()) {
             eprintln!("Could not return to Main: {error}");
         }

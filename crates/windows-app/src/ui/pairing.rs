@@ -33,8 +33,25 @@ pub(super) fn open(chinese: bool) -> Result<(), PlatformError> {
     open_pairing(chinese, start_operation).map(drop)
 }
 
-pub(super) fn resume(chinese: bool) -> Result<(), PlatformError> {
-    create_view(chinese, start_operation, false, false)?;
+pub(super) fn resume(
+    chinese: bool,
+    store: RegistrationStore,
+    connect: fn() -> Option<Service>,
+) -> Result<(), PlatformError> {
+    create_view(
+        chinese,
+        move |notify, start| {
+            PairingOperation::spawn(
+                connect,
+                notify,
+                Some(store.clone()),
+                start,
+                super::sms::receive,
+            )
+        },
+        false,
+        false,
+    )?;
     Ok(())
 }
 
@@ -256,6 +273,7 @@ pub(super) fn latest_otp() -> Option<zeroize::Zeroizing<String>> {
 
 pub(super) fn notify_progress() {
     let _ = slint::invoke_from_event_loop(|| {
+        retire_unavailable();
         PAIRING.with_borrow_mut(|pairing| {
             if let Some(view) = pairing {
                 view.render();
@@ -266,8 +284,37 @@ pub(super) fn notify_progress() {
                 }
             }
         });
-        super::update_delivery_status();
+        super::refresh_delivery_ui();
     });
+}
+
+fn retire_unavailable() {
+    let view = PAIRING.with_borrow_mut(|pairing| {
+        let view = pairing.as_ref()?;
+        let revoked = view.operation.delivery_status() == DeliveryStatus::Revoked;
+        let removed = !view.named
+            && matches!(
+                view.operation.current(),
+                PairingProgress::Completed { pairing_id }
+                    if view.operation.sender_label(&pairing_id).is_ok_and(|name| name.is_none())
+            );
+        (revoked || removed || (view.window.get_adding_device() && super::registered_revoked()))
+            .then(|| pairing.take())
+            .flatten()
+    });
+    if let Some(view) = view {
+        let visible = view.window.window().is_visible();
+        let store = view.operation.registration().cloned();
+        let _ = view.window.hide();
+        if !view.window.get_adding_device() {
+            super::replace_registered(Some(view.operation));
+        } else {
+            view.operation.shutdown();
+        }
+        if visible && let Some(store) = store {
+            let _ = super::show_registered(&store, view.window.get_chinese());
+        }
+    }
 }
 
 fn back() {
@@ -424,12 +471,6 @@ impl View {
             let visible = self.window.window().is_visible();
             self.named = !visible;
             self.window.set_completion_motion(visible);
-            if !visible
-                && self.window.get_adding_device()
-                && let Some(store) = self.operation.registration()
-            {
-                super::refresh_visible_main(store);
-            }
             if visible
                 && let PairingProgress::Completed { pairing_id } = progress
                 && let Ok(Some(name)) = self.operation.sender_label(&pairing_id)

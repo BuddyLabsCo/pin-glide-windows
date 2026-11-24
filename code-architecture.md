@@ -115,10 +115,19 @@ within 500 lines.
   each active Pairing. Commit the first available default name on promotion
   so reception and crash recovery do not depend on the naming window. Read
   versions 1 through 3 and migrate them on the next successful write.
-- Scope key loss and Pairing removal to the affected Pairing. Receiver
-  revocation clears registration and Pairing state while keeping settings.
-  Missing R requires explicit new registration. Installation upgrades
-  preserve data. Uninstall removes app-owned data and registrations.
+- Stage new-Receiver enrollment in `registration.pending.json`. A successful
+  authenticated delivery upgrade promotes that record atomically. An explicit
+  replacement can recover malformed registration data. A failed replacement
+  leaves the previous registration, including any provisional Pairing, intact.
+  Continue reading older in-file enrollment records on startup.
+- Scope key loss and Pairing removal to the affected Pairing. Check the Pairing
+  and Sender identities before applying a removal. Apply authoritative cleanup
+  immediately, persist the intent in `registration.cleanup.json`, and retry
+  registration replacement off the connection. On normal shutdown, stop
+  delivery and flush accepted intents to the journal before exit. After Receiver
+  revocation, the registration retains only a revocation marker. Keep settings.
+  Missing R requires explicit new registration. Installation upgrades preserve
+  data. Uninstall removes app-owned data and registrations.
 - Keep SMS bodies in their popups and the latest OTP in memory. Keep both
   out of persistent storage and logs. Leave the OS clipboard alone on cleanup.
 - Write fixed delivery rejection categories to `Pin Glide/delivery-rejections.log`

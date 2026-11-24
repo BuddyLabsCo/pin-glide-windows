@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    thread::JoinHandle,
+    time::{Duration, SystemTime},
+};
 
 use receiver_core::pairing::{PairingMaterial, PairingOutcome, pairing_lifetime};
 use tokio::{
@@ -15,13 +18,41 @@ use crate::service::{
     pairing_session_view, reconnect::Reconnect,
 };
 
+pub(super) fn shutdown(
+    worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
+    store: Option<&RegistrationStore>,
+) {
+    if let Some((stop, worker)) = worker {
+        let _ = stop.send(());
+        let _ = worker.join();
+    }
+    if let Some(store) = store {
+        store.flush_cleanup_on_shutdown();
+    }
+}
+
+pub(super) fn startup_status(
+    start: PairingStart,
+    store: &RegistrationStore,
+) -> Option<DeliveryStatus> {
+    store.resume_cleanup();
+    if !matches!(start, PairingStart::Registered) || store.receiver_credential().is_ok() {
+        return None;
+    }
+    Some(if store.receiver_revoked() {
+        DeliveryStatus::Revoked
+    } else {
+        DeliveryStatus::MissingCredential
+    })
+}
+
 async fn receive_registered(
     service: &Service,
     store: &RegistrationStore,
     updates: &ProgressUpdates,
 ) {
     let Ok((receiver_id, token)) = store.receiver_credential() else {
-        updates.delivery_status(DeliveryStatus::Credential);
+        updates.delivery_status(DeliveryStatus::MissingCredential);
         return;
     };
     let mut receiver = Reconnect::new(service, &token, &receiver_id, updates);
@@ -143,6 +174,8 @@ async fn drive_session(
             }
             outcome = PairingOutcome::Failed;
         }
+    } else if let Some(store) = store {
+        let _ = store.discard_enrollment_key(&session.session_id);
     }
     updates.publish(PairingProgress::Finished(outcome));
     if exiting

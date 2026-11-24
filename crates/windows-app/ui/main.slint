@@ -5,6 +5,8 @@ import { SenderScrollbar } from "sender_scrollbar.slint";
 
 export component MainWindow inherits Window {
     in property <bool> chinese;
+    in property <bool> receiver-revoked;
+    in property <bool> receiver-credential-missing;
     in property <[SenderRowData]> sender-devices;
     private property <int> editor: -1;
     private property <string> editor-error;
@@ -267,9 +269,14 @@ export component MainWindow inherits Window {
                         if root.sender-devices.length == 0: Text {
                             x: 16px;
                             width: parent.width - 32px;
-                            text: root.chinese ? "还没有已配对的设备。" : "No devices paired yet.";
+                            text: root.receiver-revoked
+                                ? (root.chinese ? "此接收端已被移除。" : "This Receiver has been removed.")
+                                : root.receiver-credential-missing
+                                ? (root.chinese ? "无法读取本地接收凭据。" : "Could not read the local Receiver credential.")
+                                : (root.chinese ? "还没有已配对的设备。" : "No devices paired yet.");
                             font-size: 13px;
                             color: #65716e;
+                            wrap: word-wrap;
                             vertical-alignment: center;
                         }
 

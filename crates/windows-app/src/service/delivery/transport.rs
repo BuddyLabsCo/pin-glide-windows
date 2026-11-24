@@ -213,6 +213,8 @@ where
                     };
                     self.outbound
                         .push_back((Message::text(reply), Some(incoming)));
+                } else if let Some(queue) = self.pending {
+                    queue.control(&header.kind, &text, self.updates)?;
                 }
             }
             Some(Ok(Message::Ping(_))) => {

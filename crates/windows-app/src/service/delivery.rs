@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
-use pin_glide_wss::{Delivery, Receipt};
-use receiver_core::delivery::{Arrival, Envelope, Sms};
+use pin_glide_wss::{Delivery, DeviceRevoked, PairingRemoved, Receipt};
+use receiver_core::delivery::{Arrival, Envelope, Inbox, Sms};
 use serde::Deserialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, mpsc, watch};
 use tokio_tungstenite::tungstenite::Utf8Bytes;
@@ -13,7 +13,7 @@ use super::{
     reconnect::Connectivity,
 };
 
-use crate::storage::{DeliveryRejection, RegistrationStore};
+use crate::storage::{Cleanup, DeliveryRejection, PairingSenders, RegistrationStore};
 
 #[cfg(test)]
 mod tests;
@@ -27,6 +27,25 @@ pub(crate) struct ReceivedSms {
     pub sender_name: String,
     #[cfg(windows)]
     pub epoch: u64,
+    #[cfg(windows)]
+    pub source: PopupSource,
+}
+
+#[cfg(windows)]
+pub(crate) struct PopupSource {
+    pairing_id: String,
+    inbox: std::sync::Weak<std::sync::Mutex<Inbox>>,
+}
+
+#[cfg(windows)]
+impl PopupSource {
+    pub(crate) fn is_active(&self) -> bool {
+        self.inbox.upgrade().is_some_and(|inbox| {
+            inbox
+                .lock()
+                .is_ok_and(|inbox| inbox.accepts(&self.pairing_id))
+        })
+    }
 }
 
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
@@ -58,10 +77,66 @@ pub(super) struct DeliveryQueue {
     send: mpsc::Sender<QueuedDelivery>,
     store: RegistrationStore,
     receiver_id: String,
+    pairing_senders: Option<Arc<PairingSenders>>,
     hold_capacity: Arc<Semaphore>,
 }
 
 impl DeliveryQueue {
+    fn control(
+        &self,
+        kind: &str,
+        text: &str,
+        updates: &ProgressUpdates,
+    ) -> Result<(), DeliveryStatus> {
+        match kind {
+            "pairing_removed" => {
+                let event: PairingRemoved =
+                    serde_json::from_str(text).map_err(|_| DeliveryStatus::Protocol)?;
+                correlation(Some(&event.pairing_id)).map_err(|_| DeliveryStatus::Protocol)?;
+                correlation(Some(&event.sender_id)).map_err(|_| DeliveryStatus::Protocol)?;
+                let senders = self
+                    .pairing_senders
+                    .as_ref()
+                    .ok_or(DeliveryStatus::Disconnected)?;
+                match senders.matches(&event.pairing_id, &event.sender_id) {
+                    Ok(Some(true)) => {}
+                    Ok(Some(false)) => return Err(DeliveryStatus::Protocol),
+                    Ok(None) => return Ok(()),
+                    Err(_) => return Err(DeliveryStatus::Disconnected),
+                }
+                updates
+                    .inbox
+                    .lock()
+                    .map_err(|_| DeliveryStatus::Disconnected)?
+                    .remove_pairing(event.pairing_id.clone());
+                self.store.record_cleanup(Cleanup::PairingRemoved {
+                    receiver_id: self.receiver_id.clone(),
+                    pairing_id: event.pairing_id,
+                    sender_id: event.sender_id,
+                });
+                updates.refresh_delivery();
+                Ok(())
+            }
+            "device_revoked" => {
+                let event: DeviceRevoked =
+                    serde_json::from_str(text).map_err(|_| DeliveryStatus::Protocol)?;
+                if event.receiver_id != self.receiver_id {
+                    return Err(DeliveryStatus::Protocol);
+                }
+                updates
+                    .inbox
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .revoke();
+                self.store.record_cleanup(Cleanup::Revoked {
+                    receiver_id: event.receiver_id,
+                });
+                Err(DeliveryStatus::Revoked)
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn reserve_hold(
         &self,
         text: &str,
@@ -164,6 +239,7 @@ pub(super) fn start_processing(
     let queue = DeliveryQueue {
         send,
         store: store.clone(),
+        pairing_senders: store.watch_pairing_senders(&receiver_id).ok(),
         receiver_id: receiver_id.clone(),
         hold_capacity: Arc::new(Semaphore::new(MAX_HELD_DELIVERIES)),
     };
@@ -176,6 +252,11 @@ pub(super) fn start_processing(
         let mut held = VecDeque::new();
         let process = |queued: QueuedDelivery, delivery: Result<Delivery, DeliveryRejection>| {
             let incoming = queued.incoming;
+            #[cfg(windows)]
+            let source = delivery.as_ref().ok().map(|delivery| PopupSource {
+                pairing_id: delivery.pairing_id.clone(),
+                inbox: Arc::downgrade(&inbox),
+            });
             let result = delivery.and_then(|delivery| {
                 authenticate(&receiver_id, delivery, incoming.arrival, &store, &inbox)
             });
@@ -192,6 +273,8 @@ pub(super) fn start_processing(
                             sender_name,
                             #[cfg(windows)]
                             epoch,
+                            #[cfg(windows)]
+                            source: source.expect("an authenticated Delivery has a Pairing"),
                         });
                     }
                 },
@@ -270,9 +353,13 @@ fn authenticate(
     delivery: Delivery,
     arrival: Arrival,
     store: &RegistrationStore,
-    inbox: &std::sync::Mutex<receiver_core::delivery::Inbox>,
+    inbox: &std::sync::Mutex<Inbox>,
 ) -> Result<(Sms, String), DeliveryRejection> {
-    let mut sender_name = String::new();
+    let target = store.delivery_target(receiver_id, &delivery.pairing_id, &delivery.sender_id);
+    let (key, sender_name) = target.map_or_else(
+        || (None, String::new()),
+        |target| (Some(target.key), target.name),
+    );
     let mut inbox = inbox
         .lock()
         .map_err(|_| DeliveryRejection::InboxUnavailable)?;
@@ -284,11 +371,7 @@ fn authenticate(
             nonce: &delivery.nonce,
             ciphertext: &delivery.ciphertext,
         },
-        |pairing_id| {
-            let target = store.delivery_target(receiver_id, pairing_id, &delivery.sender_id)?;
-            sender_name = target.name;
-            Some(target.key)
-        },
+        |_| key,
     );
     let sms = result.map_err(DeliveryRejection::Receive)?;
     Ok((sms, sender_name))

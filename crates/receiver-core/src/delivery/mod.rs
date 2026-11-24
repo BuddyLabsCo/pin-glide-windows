@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{collections::HashSet, time::SystemTime};
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -34,7 +34,10 @@ pub enum ReceiveError {
 
 #[derive(Default)]
 pub struct Inbox {
-    latest: Option<((SystemTime, u64), Zeroizing<String>)>,
+    latest: Option<(String, Zeroizing<String>)>,
+    latest_order: Option<(SystemTime, u64)>,
+    removed: HashSet<String>,
+    revoked: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,8 +64,11 @@ impl Inbox {
         if envelope.crypto_version != 1 {
             return Err(ReceiveError::UnsupportedCrypto);
         }
-        let key =
-            key_for_pairing(envelope.pairing_id).ok_or(ReceiveError::PairingKeyUnavailable)?;
+        let key = self
+            .accepts(envelope.pairing_id)
+            .then(|| key_for_pairing(envelope.pairing_id))
+            .flatten()
+            .ok_or(ReceiveError::PairingKeyUnavailable)?;
         let nonce = <[u8; 12]>::try_from(decode(envelope.nonce)?)
             .map_err(|_| ReceiveError::InvalidEncoding)?;
         let ciphertext = decode(envelope.ciphertext)?;
@@ -83,13 +89,9 @@ impl Inbox {
             .filter(|stamp| stamp.offset().is_utc())
             .map_or(arrival.time, SystemTime::from);
         let order = (effective_time, arrival.order);
-        if !otp.is_empty()
-            && self
-                .latest
-                .as_ref()
-                .is_none_or(|(latest, _)| order > *latest)
-        {
-            self.latest = Some((order, Zeroizing::new(otp.clone())));
+        if !otp.is_empty() && self.latest_order.is_none_or(|latest| order > latest) {
+            self.latest_order = Some(order);
+            self.latest = Some((envelope.pairing_id.into(), Zeroizing::new(otp.clone())));
         }
         Ok(Sms {
             body: sms_text,
@@ -99,6 +101,28 @@ impl Inbox {
 
     pub fn latest(&self) -> Option<&str> {
         self.latest.as_ref().map(|(_, otp)| otp.as_str())
+    }
+
+    pub fn accepts(&self, pairing_id: &str) -> bool {
+        !self.revoked && !self.removed.contains(pairing_id)
+    }
+
+    pub fn remove_pairing(&mut self, pairing_id: String) {
+        if self
+            .latest
+            .as_ref()
+            .is_some_and(|(id, _)| id == &pairing_id)
+        {
+            self.latest = None;
+        }
+        self.removed.insert(pairing_id);
+    }
+
+    pub fn revoke(&mut self) {
+        *self = Self {
+            revoked: true,
+            ..Self::default()
+        };
     }
 }
 

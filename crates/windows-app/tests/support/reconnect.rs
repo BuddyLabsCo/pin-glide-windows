@@ -1,10 +1,203 @@
-use std::{io::BufReader, sync::mpsc, thread, time::Duration};
+use std::{
+    fs,
+    io::{self, BufReader},
+    os::windows::fs::OpenOptionsExt,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use serde_json::json;
 use tokio_tungstenite::tungstenite::{Message, protocol::frame::coding::CloseCode};
 use windows_app::service::{DeliveryStatus, PairingOperation, PairingStart};
 
 use super::{dpapi, fixture::*, support};
+
+#[test]
+fn authoritative_removal_keeps_the_socket_and_revocation_clears_registration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("registration.json");
+    let key = dpapi::protect(&[11; 32]);
+    std::fs::write(
+        &path,
+        json!({
+            "version": 4, "receiver_id": "receiver-1",
+            "protected_receiver_token": dpapi::protect(RECEIVER_TOKEN.as_bytes()),
+            "active_pairings": {
+                "pairing-1": {"sender_id": "sender-1", "protected_key": key},
+                "pairing-2": {"sender_id": "sender-2", "protected_key": key},
+            },
+            "provisional_pairing": {
+                "session_id": "session-add", "receiver_id": "receiver-1",
+                "pairing_id": "pairing-add", "sender_id": "sender-add", "protected_key": key,
+            },
+            "enrollment": {
+                "origin": "https://fixture.invalid", "session_id": "session-add",
+                "receiver_id": "receiver-1", "operation_id": "fixture-revocation",
+                "expires_at": {"secs_since_epoch": 1, "nanos_since_epoch": 0},
+                "phase": {"Issued": dpapi::protect(RECEIVER_TOKEN.as_bytes())},
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(&path)
+        .unwrap();
+    let old_bytes = fs::read(&path).unwrap();
+    let journal = path.with_extension("cleanup.json");
+    let (listener, service) = listen();
+    let (pong, ready) = mpsc::channel();
+    let (revoke, revoking) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut socket = accept_delivery(accept(&acceptor(), &listener));
+        send_event(
+            &mut socket,
+            json!({"type":"pairing_removed","version":1,"pairingId":"pairing-1","senderId":"sender-1"}),
+        );
+        socket.send(Message::Ping(vec![23].into())).unwrap();
+        assert_eq!(socket.read().unwrap(), Message::Pong(vec![23].into()));
+        pong.send(()).unwrap();
+        revoking.recv_timeout(Duration::from_secs(8)).unwrap();
+        send_event(
+            &mut socket,
+            json!({"type":"device_revoked","version":1,"receiverId":"receiver-1"}),
+        );
+        assert_peer_left(&mut socket);
+        let retry_limit = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < retry_limit {
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let operation = PairingOperation::start_with_registration(
+        move || Some(service),
+        || {},
+        path.clone(),
+        PairingStart::Registered,
+    );
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    let read =
+        || serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap();
+    support::wait_for(
+        || fs::read_to_string(&journal).is_ok_and(|text| text.contains("PairingRemoved")),
+        "The Pairing removal was not journaled while replacement was denied",
+    );
+    assert_eq!(operation.delivery_status(), DeliveryStatus::Ready);
+    assert_eq!(fs::read(&path).unwrap(), old_bytes);
+    revoke.send(()).unwrap();
+    support::wait_for(
+        || fs::read_to_string(&journal).is_ok_and(|text| text.contains("Revoked")),
+        "Revocation was not journaled while replacement was denied",
+    );
+    assert_eq!(fs::read(&path).unwrap(), old_bytes);
+    let restarted_directory = tempfile::tempdir().unwrap();
+    let restarted_path = restarted_directory.path().join("registration.json");
+    fs::copy(&path, &restarted_path).unwrap();
+    fs::copy(&journal, restarted_path.with_extension("cleanup.json")).unwrap();
+    assert_revoked_on_startup(restarted_path);
+    server.join().unwrap();
+    drop(locked);
+    support::wait_for(
+        || !journal.exists() && read()["receiver_id"].is_null(),
+        "Revocation did not retry the registration replacement",
+    );
+    let stored = read();
+    assert!(stored["protected_receiver_token"].is_null());
+    assert_eq!(stored["receiver_revoked"], true);
+    assert!(stored["active_pairings"].as_object().unwrap().is_empty());
+    assert!(stored["provisional_pairing"].is_null());
+    assert!(stored["enrollment"].is_null());
+    support::wait_for(
+        || operation.delivery_status() == DeliveryStatus::Revoked,
+        "Revocation did not stop the Receiver",
+    );
+    operation.shutdown();
+    assert_revoked_on_startup(path);
+}
+
+fn assert_revoked_on_startup(path: std::path::PathBuf) {
+    let restarted = PairingOperation::start_with_registration(
+        || panic!("a revoked Receiver attempted to connect"),
+        || {},
+        path,
+        PairingStart::Registered,
+    );
+    support::wait_for(
+        || restarted.delivery_status() == DeliveryStatus::Revoked,
+        "Revocation reason was lost on restart",
+    );
+    restarted.shutdown();
+}
+
+#[test]
+fn unusable_local_credentials_require_explicit_replacement_and_keep_the_old_pairings() {
+    use windows_app::service::{PairingOutcome, PairingProgress};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("registration.json");
+    for credential in [json!(null), json!([1])] {
+        let saved = json!({
+            "version": 4, "receiver_id": "old-receiver",
+            "protected_receiver_token": credential,
+            "active_pairings": {
+                "old-pairing": {"sender_id": "old-sender", "protected_key": dpapi::protect(&[11; 32]), "name": "Old phone"}
+            }
+        })
+        .to_string();
+        std::fs::write(&path, &saved).unwrap();
+        let startup = PairingOperation::start_with_registration(
+            || panic!("startup tried automatic registration with unusable R"),
+            || {},
+            path.clone(),
+            PairingStart::Registered,
+        );
+        support::wait_for(
+            || startup.delivery_status() == DeliveryStatus::MissingCredential,
+            "The missing local credential reason was not reported",
+        );
+        startup.shutdown();
+
+        let (listener, service) = listen();
+        let server = thread::spawn(move || {
+            let mut connection = BufReader::new(accept(&acceptor(), &listener));
+            let (request, headers, body) = read_request_parts(&mut connection);
+            assert_eq!(request, "POST /v1/pairing-sessions HTTP/1.1\r\n");
+            assert!(
+                !headers
+                    .iter()
+                    .any(|header| header.to_lowercase().starts_with("authorization:"))
+            );
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap()["mode"],
+                "new_receiver"
+            );
+            write_response(connection.get_mut(), "503 Service Unavailable", &json!({}));
+        });
+        let replacement = PairingOperation::start_with_registration(
+            move || Some(service),
+            || {},
+            path.clone(),
+            PairingStart::ResumePending,
+        );
+        support::wait_for(
+            || {
+                matches!(
+                    replacement.current(),
+                    PairingProgress::Finished(PairingOutcome::CreateFailed)
+                )
+            },
+            "The replacement request did not report failure",
+        );
+        replacement.shutdown();
+        server.join().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+    }
+}
 
 #[test]
 fn startup_keeps_the_empty_receiver_connected_but_not_ready() {

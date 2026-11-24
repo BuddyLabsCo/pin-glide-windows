@@ -1,6 +1,5 @@
 use std::{
     fs,
-    io::BufReader,
     path::{Path, PathBuf},
     process::Command,
     sync::mpsc,
@@ -18,10 +17,12 @@ use windows_app::{
     PairingStage, PairingWindow, service::DeliveryStatus, set_animation_preference_override, ui,
 };
 
-use super::{assert_redeem, capture, click, fixture::*, select_backend};
+use super::{capture, click, fixture::*, select_backend};
 
 #[path = "dpapi.rs"]
 pub(super) mod dpapi;
+#[path = "recovery_frames.rs"]
+mod recovery_frames;
 
 const CHILD: &str = "PIN_GLIDE_ADD_DESKTOP_CHILD";
 
@@ -219,6 +220,7 @@ async fn verify_hidden_name(window: &PairingWindow, main: &windows_app::MainWind
 }
 
 async fn re_enroll() {
+    set_animation_preference_override(Some(false));
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("registration.json");
     fs::write(
@@ -228,50 +230,34 @@ async fn re_enroll() {
     .unwrap();
     let (listener, service) = listen();
     let (scan, qr) = mpsc::channel::<Value>();
-    let (second_scan, second_qr) = mpsc::channel::<()>();
+    let (second_scan, second_qr) = mpsc::channel::<Value>();
+    let (prepared, capture_done) = mpsc::channel();
     let server = thread::spawn(move || {
         let tls = acceptor();
-        let session = "new-receiver";
-        let initial = snapshot(session, "awaiting_authorization", 30);
-        accept_creation(accept(&tls, &listener), &initial);
-        let mut events = accept_events(accept(&tls, &listener), session);
-        send_state(&mut events, &initial);
-        let qr = qr.recv_timeout(Duration::from_secs(8)).unwrap();
-        let claimed = claim(initial);
-        send_state(&mut events, &claimed);
-        sender_handshake(&mut events, &qr);
-        let mut complete = accept_completion(accept(&tls, &listener), session);
-        credential_ready(&mut events, complete.get_mut(), claimed);
-        let mut redemption = BufReader::new(accept(&tls, &listener));
-        assert_redeem(&mut redemption, session, 0);
-        write_response(
-            redemption.get_mut(),
-            "200 OK",
-            &json!({"receiverId":"receiver-1","receiverToken":RECEIVER_TOKEN}),
-        );
+        capture_done.recv_timeout(Duration::from_secs(8)).unwrap();
+        recovery_frames::issue_replacement(&tls, &listener, "new-receiver", 272, &qr);
         let mut delivery = accept_delivery(accept(&tls, &listener));
-        second_qr.recv_timeout(Duration::from_secs(8)).unwrap();
-        let initial = snapshot("replacement", "awaiting_authorization", 30);
-        accept_creation(accept(&tls, &listener), &initial);
-        let mut events = accept_events(accept(&tls, &listener), "replacement");
-        send_state(&mut events, initial);
-        assert_peer_left(&mut events);
-        assert_delete(accept(&tls, &listener), "replacement");
+        recovery_frames::issue_replacement(&tls, &listener, "replacement", 30, &second_qr);
+        recovery_frames::reject_first_upgrade(accept(&tls, &listener));
         assert_peer_left(&mut delivery);
     });
     let main = ui::open_registered(true, path.clone(), move || Some(service.clone()))
         .unwrap()
         .unwrap();
     wait_for(
-        || ui::delivery_status() == DeliveryStatus::Credential,
+        || ui::delivery_status() == DeliveryStatus::MissingCredential,
         "unreadable R in tray",
     )
     .await;
+    recovery_frames::verify_pair_button(main.window());
     click(main.window(), 200.0, 188.0);
     let window = ui::visible_pairing().unwrap();
     assert!(!window.get_adding_device());
     assert!(!main.window().is_visible());
-    stage(&window, PairingStage::Waiting).await;
+    assert_eq!(window.get_stage(), PairingStage::Preparing);
+    recovery_frames::verify_preparation(&window);
+    prepared.send(()).unwrap();
+    recovery_frames::capture_waiting(&window).await;
     let pixels = qr_pixels(&window);
     let width = pixels.len().isqrt();
     scan.send(decode_pixels(width, width, &pixels)).unwrap();
@@ -286,12 +272,20 @@ async fn re_enroll() {
     let mut stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     stored["protected_receiver_token"] = json!([1]);
     fs::write(&path, stored.to_string()).unwrap();
-    second_scan.send(()).unwrap();
     click(main.window(), 200.0, 188.0);
     let replacement = ui::visible_pairing().expect("Main opened first pairing for unreadable R");
     assert!(!replacement.get_adding_device());
-    assert!(!main.window().is_visible());
     stage(&replacement, PairingStage::Waiting).await;
+    let pixels = qr_pixels(&replacement);
+    let width = pixels.len().isqrt();
+    second_scan
+        .send(decode_pixels(width, width, &pixels))
+        .unwrap();
+    stage(&replacement, PairingStage::Failed).await;
+    assert!(replacement.get_qr().to_rgb8().is_none());
+    assert_eq!(fs::read_to_string(&path).unwrap(), stored.to_string());
+    assert!(!path.with_extension("pending.json").exists());
+    evidence(replacement.window(), "replacement-upgrade-failed");
     ui::close();
     server.join().unwrap();
 }
@@ -308,7 +302,8 @@ fn scroll() {
         ("家用设备", "6"),
         ("客厅设备", "7"),
     ];
-    fs::write(&path, registration(None, &names).to_string()).unwrap();
+    let token = dpapi::protect(RECEIVER_TOKEN.as_bytes());
+    fs::write(&path, registration(Some(token), &names).to_string()).unwrap();
     let main = ui::open_registered(true, path, || None).unwrap().unwrap();
     let window = main.window();
     let start = window.take_snapshot().unwrap();
@@ -468,7 +463,7 @@ async fn stage(window: &PairingWindow, stage: PairingStage) {
     .await;
 }
 
-async fn wait_for(mut condition: impl FnMut() -> bool, expectation: &str) {
+pub(super) async fn wait_for(mut condition: impl FnMut() -> bool, expectation: &str) {
     let limit = Instant::now() + Duration::from_secs(10);
     while !condition() {
         assert!(Instant::now() < limit, "{expectation}");
@@ -484,7 +479,7 @@ pub(super) async fn tick() {
     receive.await.unwrap();
 }
 
-fn evidence(window: &Window, name: &str) {
+pub(super) fn evidence(window: &Window, name: &str) {
     if let Some(directory) = std::env::var_os("PIN_GLIDE_ADD_EVIDENCE").map(PathBuf::from) {
         capture(window, &Path::new(&directory).join(format!("{name}.ppm")));
     }

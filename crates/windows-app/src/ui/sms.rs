@@ -14,8 +14,11 @@ use windows_sys::Win32::Foundation::{HWND, RECT};
 
 use receiver_core::delivery::Sms;
 
-use crate::{SmsWindow, platform, service::ReceivedSms};
+use crate::{SmsWindow, platform, service::PopupSource};
 
+mod delivery;
+pub(super) use delivery::close_invalid;
+pub(crate) use delivery::receive;
 mod expiry;
 #[cfg(test)]
 mod tests;
@@ -84,6 +87,7 @@ impl WorkArea {
 
 struct Popup {
     window: SmsWindow,
+    source: Option<PopupSource>,
     hwnd: HWND,
     expiry: Timer,
     motion: Option<Motion>,
@@ -312,19 +316,6 @@ fn start_exit(popup: &mut Popup, started: Instant) -> io::Result<()> {
     })
 }
 
-pub(crate) fn receive(message: ReceivedSms) {
-    if platform::popup_epoch() == Some(message.epoch) {
-        let _ = slint::invoke_from_event_loop(move || {
-            let _ = slint::spawn_local(show_sms_for_session(
-                message.sms,
-                message.sender_name,
-                platform::chinese(),
-                message.epoch,
-            ));
-        });
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn popup_count() -> usize {
     STACK.with_borrow(|stack| stack.visible.len())
@@ -338,7 +329,7 @@ pub async fn show_sms(
     let Some(epoch) = platform::popup_epoch() else {
         return Ok(None);
     };
-    show_sms_for_session(sms, sender_name, chinese, epoch).await
+    show_sms_for_session(sms, sender_name, chinese, epoch, None).await
 }
 
 async fn show_sms_for_session(
@@ -346,14 +337,16 @@ async fn show_sms_for_session(
     sender_name: String,
     chinese: bool,
     epoch: u64,
+    source: Option<PopupSource>,
 ) -> Result<Option<SmsWindow>, PlatformError> {
-    if platform::popup_epoch() != Some(epoch) {
+    let eligible = || delivery::eligible(epoch, source.as_ref());
+    if !eligible() {
         return Ok(None);
     }
     let window = platform::new_popup()?;
     window.set_chinese(chinese);
     let native = window.window().winit_window().await?;
-    if platform::popup_epoch() != Some(epoch) {
+    if !eligible() {
         return Ok(None);
     }
     window.set_otp(sms.otp.into());
@@ -372,7 +365,7 @@ async fn show_sms_for_session(
         platform::position_popup(owner, position).map_err(native_error)?;
     }
     window.show()?;
-    if platform::popup_epoch() != Some(epoch) {
+    if !eligible() {
         clear(&window);
         return Ok(None);
     }
@@ -381,7 +374,7 @@ async fn show_sms_for_session(
     NEXT_ID.set(id + 1);
     let popup = window.as_weak();
     window.on_copy_code(move || {
-        if STACK.with_borrow(|stack| stack.visible.contains_key(&id))
+        if STACK.with_borrow(|stack| delivery::can_copy(stack, id))
             && let Some(window) = popup.upgrade()
         {
             let otp = window.get_otp();
@@ -412,6 +405,7 @@ async fn show_sms_for_session(
             id,
             Popup {
                 window: window.clone_strong(),
+                source,
                 hwnd: owner,
                 expiry: timer,
                 motion: None,

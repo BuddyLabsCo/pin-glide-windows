@@ -33,6 +33,9 @@ use super::{
     select_backend,
 };
 
+#[path = "recovery_desktop.rs"]
+mod recovery_desktop;
+
 const NAMES: [&str; 7] = [
     "我的设备",
     "备用设备",
@@ -262,10 +265,7 @@ fn send_rename_sms(socket: &mut Socket) {
 async fn check_delivered_popup() {
     let started = Instant::now();
     loop {
-        let mut popup: HWND = std::ptr::null_mut();
-        // SAFETY: the callback receives a writable pointer for synchronous enumeration.
-        unsafe { EnumWindows(Some(find_sms), (&raw mut popup) as LPARAM) };
-        if !popup.is_null() {
+        if let Some(popup) = visible_sms() {
             let handle = popup as usize;
             let (send, receive) = tokio::sync::oneshot::channel();
             thread::spawn(move || send.send(accessible_name(handle, RENAMED)).unwrap());
@@ -288,6 +288,22 @@ async fn check_delivered_popup() {
     }
 }
 
+pub(super) fn visible_sms() -> Option<HWND> {
+    sms_windows().into_iter().next()
+}
+
+fn sms_windows() -> Vec<HWND> {
+    let mut popups: Vec<HWND> = Vec::new();
+    #[expect(
+        clippy::undocumented_unsafe_blocks,
+        reason = "the callback only uses the pointer during enumeration"
+    )]
+    unsafe {
+        EnumWindows(Some(find_sms), (&raw mut popups) as LPARAM)
+    };
+    popups
+}
+
 unsafe extern "system" fn find_sms(window: HWND, output: LPARAM) -> i32 {
     let mut process = 0;
     let mut title = [0; 64];
@@ -298,8 +314,7 @@ unsafe extern "system" fn find_sms(window: HWND, output: LPARAM) -> i32 {
             let size = GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32);
             let title = String::from_utf16_lossy(&title[..size as usize]);
             if matches!(title.as_str(), "鹊信 · 新短信" | "Pin Glide · New SMS") {
-                *(output as *mut HWND) = window;
-                return 0;
+                (*(output as *mut Vec<HWND>)).push(window);
             }
         }
     }
