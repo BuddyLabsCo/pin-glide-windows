@@ -1,4 +1,7 @@
+use std::{io::BufReader, net::TcpListener, sync::mpsc, time::Duration};
+
 use i_slint_core::animations::{Instant as AnimationTime, current_tick, update_animations};
+use serde_json::{Value, json};
 use slint::{
     ComponentHandle, LogicalPosition, Window,
     platform::{Key, PointerEventButton, WindowEvent},
@@ -6,6 +9,7 @@ use slint::{
 use windows_app::{PairingStage, PairingWindow, set_animation_preference_override, ui};
 
 use super::{evidence, pixel, region, stage};
+use crate::{assert_redeem, fixture::*};
 
 pub(super) fn verify_pair_button(window: &Window) {
     let center = LogicalPosition::new(200.0, 188.0);
@@ -68,4 +72,46 @@ pub(super) async fn capture_waiting(window: &PairingWindow) {
     stage(window, PairingStage::Waiting).await;
     assert_eq!(window.get_remaining(), "04:32");
     evidence(window.window(), "pair-waiting-live");
+}
+
+pub(super) fn issue_replacement(
+    tls: &native_tls::TlsAcceptor,
+    listener: &TcpListener,
+    session: &str,
+    lifetime: u64,
+    scan: &mpsc::Receiver<Value>,
+) {
+    let initial = snapshot(session, "awaiting_authorization", lifetime);
+    accept_creation(accept(tls, listener), &initial);
+    let mut events = accept_events(accept(tls, listener), session);
+    send_state(&mut events, &initial);
+    let qr = scan.recv_timeout(Duration::from_secs(8)).unwrap();
+    let claimed = claim(initial);
+    send_state(&mut events, &claimed);
+    sender_handshake(&mut events, &qr);
+    let mut complete = accept_completion(accept(tls, listener), session);
+    credential_ready(&mut events, complete.get_mut(), claimed);
+    let mut redemption = BufReader::new(accept(tls, listener));
+    assert_redeem(&mut redemption, session, 0);
+    write_response(
+        redemption.get_mut(),
+        "200 OK",
+        &json!({"receiverId":"receiver-1","receiverToken":RECEIVER_TOKEN}),
+    );
+}
+
+pub(super) fn reject_first_upgrade(connection: Connection) {
+    let mut connection = BufReader::new(connection);
+    let (request, headers, _) = read_request_parts(&mut connection);
+    assert_eq!(request, "GET /v1/receiver/events HTTP/1.1\r\n");
+    assert!(headers.iter().any(|header| {
+        header
+            .trim()
+            .eq_ignore_ascii_case(&format!("Authorization: Bearer {RECEIVER_TOKEN}"))
+    }));
+    write_response(
+        connection.get_mut(),
+        "401 Unauthorized",
+        &json!({"code":"credential_invalid"}),
+    );
 }

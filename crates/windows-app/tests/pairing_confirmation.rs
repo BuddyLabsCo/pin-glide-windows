@@ -10,6 +10,8 @@ mod dpapi;
 mod fixture;
 #[path = "support/reconnect.rs"]
 mod reconnect;
+#[path = "support/recovery_cleanup.rs"]
+mod recovery_cleanup;
 #[path = "support/mod.rs"]
 mod support;
 

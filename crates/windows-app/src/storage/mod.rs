@@ -15,7 +15,9 @@ mod cleanup;
 pub(crate) use cleanup::Cleanup;
 mod enrollment;
 pub(crate) use enrollment::Enrollment;
+mod pairing_senders;
 mod pending_add;
+pub(crate) use pairing_senders::PairingSenders;
 mod sender_names;
 #[cfg(windows)]
 pub(crate) mod settings;
@@ -140,8 +142,10 @@ impl RegistrationStore {
             }
             next.validate_new_sender(&pairing)?;
             next.provisional_pairing = Some(pairing);
-            Ok(())
-        })
+            Ok::<(), io::Error>(())
+        })?;
+        self.remember_pairing_sender(reference);
+        Ok(())
     }
 
     pub(crate) fn finish_add_sender(

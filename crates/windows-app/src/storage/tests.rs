@@ -8,7 +8,7 @@ use tempfile::tempdir;
 #[path = "../../tests/support/dpapi.rs"]
 mod dpapi;
 
-use super::{PairingReference, RegistrationStore};
+use super::{PairingReference, RegistrationStore, SenderNameError};
 
 #[test]
 fn deletes_only_the_unreadable_pairing_and_keeps_delivery_credentials() {
@@ -164,14 +164,16 @@ fn verify_migration(version: u32) {
     store
         .commit_provisional(&reference("first"), &[42; 32], false)
         .unwrap();
+    let unchanged_name = "未命名设备".encode_utf16().collect::<Vec<_>>();
+    assert!(matches!(
+        store.name_sender("active-pairing", &unchanged_name),
+        Err(SenderNameError::Storage)
+    ));
     assert_eq!(fs::read(&path).unwrap(), legacy_bytes);
     drop(locked);
 
     store
-        .name_sender(
-            "active-pairing",
-            &"未命名设备".encode_utf16().collect::<Vec<_>>(),
-        )
+        .name_sender("active-pairing", &unchanged_name)
         .unwrap();
     let current: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(current["version"], 4);

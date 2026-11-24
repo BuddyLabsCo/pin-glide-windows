@@ -192,6 +192,7 @@ async fn exercise() {
         .unwrap()
         .unwrap();
     wait_for(|| sms_windows().len() == 1, "the first synthetic SMS popup").await;
+    let removed_window = sms_windows()[0];
     advance.send(()).unwrap();
     wait_for(|| sms_windows().len() == 2, "both synthetic SMS popups").await;
     let before = sms_windows();
@@ -210,7 +211,11 @@ async fn exercise() {
     assert_eq!(fs::read_to_string(&path).unwrap(), stored.to_string());
     drop(locked);
     let remaining = sms_windows();
-    assert!(before.contains(&remaining[0]));
+    let survivor = before
+        .into_iter()
+        .find(|&popup| popup != removed_window)
+        .unwrap();
+    assert_eq!(remaining, [survivor]);
     assert_eq!(window_bounds(remaining[0]).bottom, bottom);
     capture_popup_stack(&remaining, bottom, "scoped-popups-after").await;
     assert_eq!(

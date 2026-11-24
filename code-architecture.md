@@ -120,13 +120,14 @@ within 500 lines.
   replacement can recover malformed registration data. A failed replacement
   leaves the previous registration, including any provisional Pairing, intact.
   Continue reading older in-file enrollment records on startup.
-- Scope key loss and Pairing removal to the affected Pairing. Apply
-  authoritative cleanup immediately, persist the intent in
-  `registration.cleanup.json`, and retry registration replacement off the
-  connection. The registration retains only a revocation marker after Receiver
-  revocation, and settings are preserved. Missing R requires explicit new
-  registration. Installation upgrades
-  preserve data. Uninstall removes app-owned data and registrations.
+- Scope key loss and Pairing removal to the affected Pairing. Check the Pairing
+  and Sender identities before applying a removal. Apply authoritative cleanup
+  immediately, persist the intent in `registration.cleanup.json`, and retry
+  registration replacement off the connection. On normal shutdown, stop
+  delivery and flush accepted intents to the journal before exit. After Receiver
+  revocation, the registration retains only a revocation marker. Keep settings.
+  Missing R requires explicit new registration. Installation upgrades preserve
+  data. Uninstall removes app-owned data and registrations.
 - Keep SMS bodies in their popups and the latest OTP in memory. Keep both
   out of persistent storage and logs. Leave the OS clipboard alone on cleanup.
 - Write fixed delivery rejection categories to `Pin Glide/delivery-rejections.log`

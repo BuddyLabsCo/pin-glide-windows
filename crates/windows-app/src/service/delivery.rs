@@ -13,7 +13,7 @@ use super::{
     reconnect::Connectivity,
 };
 
-use crate::storage::{Cleanup, DeliveryRejection, RegistrationStore};
+use crate::storage::{Cleanup, DeliveryRejection, PairingSenders, RegistrationStore};
 
 #[cfg(test)]
 mod tests;
@@ -77,6 +77,7 @@ pub(super) struct DeliveryQueue {
     send: mpsc::Sender<QueuedDelivery>,
     store: RegistrationStore,
     receiver_id: String,
+    pairing_senders: Option<Arc<PairingSenders>>,
     hold_capacity: Arc<Semaphore>,
 }
 
@@ -93,6 +94,16 @@ impl DeliveryQueue {
                     serde_json::from_str(text).map_err(|_| DeliveryStatus::Protocol)?;
                 correlation(Some(&event.pairing_id)).map_err(|_| DeliveryStatus::Protocol)?;
                 correlation(Some(&event.sender_id)).map_err(|_| DeliveryStatus::Protocol)?;
+                let senders = self
+                    .pairing_senders
+                    .as_ref()
+                    .ok_or(DeliveryStatus::Disconnected)?;
+                match senders.matches(&event.pairing_id, &event.sender_id) {
+                    Ok(Some(true)) => {}
+                    Ok(Some(false)) => return Err(DeliveryStatus::Protocol),
+                    Ok(None) => return Ok(()),
+                    Err(_) => return Err(DeliveryStatus::Disconnected),
+                }
                 updates
                     .inbox
                     .lock()
@@ -228,6 +239,7 @@ pub(super) fn start_processing(
     let queue = DeliveryQueue {
         send,
         store: store.clone(),
+        pairing_senders: store.watch_pairing_senders(&receiver_id).ok(),
         receiver_id: receiver_id.clone(),
         hold_capacity: Arc::new(Semaphore::new(MAX_HELD_DELIVERIES)),
     };

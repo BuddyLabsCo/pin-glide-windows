@@ -1,6 +1,5 @@
 use std::{
     fs,
-    io::BufReader,
     path::{Path, PathBuf},
     process::Command,
     sync::mpsc,
@@ -18,7 +17,7 @@ use windows_app::{
     PairingStage, PairingWindow, service::DeliveryStatus, set_animation_preference_override, ui,
 };
 
-use super::{assert_redeem, capture, click, fixture::*, select_backend};
+use super::{capture, click, fixture::*, select_backend};
 
 #[path = "dpapi.rs"]
 pub(super) mod dpapi;
@@ -231,37 +230,15 @@ async fn re_enroll() {
     .unwrap();
     let (listener, service) = listen();
     let (scan, qr) = mpsc::channel::<Value>();
-    let (second_scan, second_qr) = mpsc::channel::<()>();
+    let (second_scan, second_qr) = mpsc::channel::<Value>();
     let (prepared, capture_done) = mpsc::channel();
     let server = thread::spawn(move || {
         let tls = acceptor();
-        let session = "new-receiver";
         capture_done.recv_timeout(Duration::from_secs(8)).unwrap();
-        let initial = snapshot(session, "awaiting_authorization", 272);
-        accept_creation(accept(&tls, &listener), &initial);
-        let mut events = accept_events(accept(&tls, &listener), session);
-        send_state(&mut events, &initial);
-        let qr = qr.recv_timeout(Duration::from_secs(8)).unwrap();
-        let claimed = claim(initial);
-        send_state(&mut events, &claimed);
-        sender_handshake(&mut events, &qr);
-        let mut complete = accept_completion(accept(&tls, &listener), session);
-        credential_ready(&mut events, complete.get_mut(), claimed);
-        let mut redemption = BufReader::new(accept(&tls, &listener));
-        assert_redeem(&mut redemption, session, 0);
-        write_response(
-            redemption.get_mut(),
-            "200 OK",
-            &json!({"receiverId":"receiver-1","receiverToken":RECEIVER_TOKEN}),
-        );
+        recovery_frames::issue_replacement(&tls, &listener, "new-receiver", 272, &qr);
         let mut delivery = accept_delivery(accept(&tls, &listener));
-        second_qr.recv_timeout(Duration::from_secs(8)).unwrap();
-        let initial = snapshot("replacement", "awaiting_authorization", 30);
-        accept_creation(accept(&tls, &listener), &initial);
-        let mut events = accept_events(accept(&tls, &listener), "replacement");
-        send_state(&mut events, initial);
-        assert_peer_left(&mut events);
-        assert_delete(accept(&tls, &listener), "replacement");
+        recovery_frames::issue_replacement(&tls, &listener, "replacement", 30, &second_qr);
+        recovery_frames::reject_first_upgrade(accept(&tls, &listener));
         assert_peer_left(&mut delivery);
     });
     let main = ui::open_registered(true, path.clone(), move || Some(service.clone()))
@@ -295,11 +272,20 @@ async fn re_enroll() {
     let mut stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     stored["protected_receiver_token"] = json!([1]);
     fs::write(&path, stored.to_string()).unwrap();
-    second_scan.send(()).unwrap();
     click(main.window(), 200.0, 188.0);
     let replacement = ui::visible_pairing().expect("Main opened first pairing for unreadable R");
     assert!(!replacement.get_adding_device());
     stage(&replacement, PairingStage::Waiting).await;
+    let pixels = qr_pixels(&replacement);
+    let width = pixels.len().isqrt();
+    second_scan
+        .send(decode_pixels(width, width, &pixels))
+        .unwrap();
+    stage(&replacement, PairingStage::Failed).await;
+    assert!(replacement.get_qr().to_rgb8().is_none());
+    assert_eq!(fs::read_to_string(&path).unwrap(), stored.to_string());
+    assert!(!path.with_extension("pending.json").exists());
+    evidence(replacement.window(), "replacement-upgrade-failed");
     ui::close();
     server.join().unwrap();
 }

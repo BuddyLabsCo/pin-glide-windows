@@ -273,10 +273,7 @@ impl PairingOperation {
     }
 
     pub fn shutdown(mut self) {
-        if let Some((stop, worker)) = self.worker.take() {
-            let _ = stop.send(());
-            let _ = worker.join();
-        }
+        worker::shutdown(self.worker.take(), self.store.as_ref());
     }
 }
 

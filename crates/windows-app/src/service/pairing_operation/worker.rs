@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    thread::JoinHandle,
+    time::{Duration, SystemTime},
+};
 
 use receiver_core::pairing::{PairingMaterial, PairingOutcome, pairing_lifetime};
 use tokio::{
@@ -14,6 +17,19 @@ use crate::service::{
     CreateError, DeliveryStatus, PairingSession, enrollment::finish_enrollment,
     pairing_session_view, reconnect::Reconnect,
 };
+
+pub(super) fn shutdown(
+    worker: Option<(oneshot::Sender<()>, JoinHandle<()>)>,
+    store: Option<&RegistrationStore>,
+) {
+    if let Some((stop, worker)) = worker {
+        let _ = stop.send(());
+        let _ = worker.join();
+    }
+    if let Some(store) = store {
+        store.flush_cleanup_on_shutdown();
+    }
+}
 
 pub(super) fn startup_status(
     start: PairingStart,

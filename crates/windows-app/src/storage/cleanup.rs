@@ -28,6 +28,7 @@ pub(crate) enum Cleanup {
 
 type Pending = BTreeMap<PathBuf, Vec<Cleanup>>;
 static PENDING: LazyLock<Mutex<Pending>> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
+static JOURNAL_WRITER: Mutex<()> = Mutex::new(());
 
 fn pending() -> MutexGuard<'static, Pending> {
     PENDING.lock().unwrap_or_else(PoisonError::into_inner)
@@ -94,6 +95,18 @@ impl RegistrationStore {
         }
     }
 
+    pub(crate) fn flush_cleanup_on_shutdown(&self) {
+        let accepted = pending().get(&self.path).cloned().unwrap_or_default();
+        if !accepted.is_empty()
+            && let Err(error) = self.persist_cleanup_intent(&accepted)
+        {
+            eprintln!(
+                "Could not save Receiver cleanup before exit: {}",
+                error.kind()
+            );
+        }
+    }
+
     fn queue_cleanup(&self, event: Option<Cleanup>) {
         let mut pending = pending();
         if let Some(entries) = pending.get_mut(&self.path) {
@@ -150,11 +163,7 @@ impl RegistrationStore {
 
     fn flush_cleanup(&self, events: &[Cleanup]) -> io::Result<()> {
         let _writer = registration_writer()?;
-        let journal = self.cleanup_path();
-        let mut durable = self.read_cleanup()?;
-        if merge(&mut durable, events) {
-            replace_json(&journal, &durable)?;
-        }
+        let durable = self.persist_cleanup_intent(events)?;
         let mut registration = Self::read_file(&self.path)?;
         let mut changed = false;
         for event in &durable {
@@ -172,7 +181,32 @@ impl RegistrationStore {
         }) {
             remove_file_if_present(&self.enrollment_path())?;
         }
-        remove_file_if_present(&journal)
+        self.retire_cleanup_intent(&durable)
+    }
+
+    fn persist_cleanup_intent(&self, accepted: &[Cleanup]) -> io::Result<Vec<Cleanup>> {
+        let _writer = JOURNAL_WRITER
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut durable = self.read_cleanup()?;
+        if merge(&mut durable, accepted) {
+            replace_json(&self.cleanup_path(), &durable)?;
+        }
+        Ok(durable)
+    }
+
+    fn retire_cleanup_intent(&self, applied: &[Cleanup]) -> io::Result<()> {
+        let _writer = JOURNAL_WRITER
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut durable = self.read_cleanup()?;
+        durable.retain(|event| !applied.contains(event));
+        let journal = self.cleanup_path();
+        if durable.is_empty() {
+            remove_file_if_present(&journal)
+        } else {
+            replace_json(&journal, &durable)
+        }
     }
 }
 
