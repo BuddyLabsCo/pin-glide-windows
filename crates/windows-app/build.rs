@@ -72,6 +72,8 @@ fn embed_windows_resources() {
         (4, 3, "鹊信"),
         (4, 4, "鹊信"),
         (4, 5, "鹊信"),
+        (4, 30, "鹊信"),
+        (4, 31, "鹊信"),
     ]) {
         let lang = primary | (sublanguage << 10);
         script.push_str(&format!(

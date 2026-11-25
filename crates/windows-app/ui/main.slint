@@ -58,9 +58,11 @@ export component MainWindow inherits Window {
         padding: 24px;
         padding-bottom: 16px;
         spacing: 16px;
+
         HorizontalLayout {
             height: 32px;
             spacing: 10px;
+
             Image {
                 source: @image-url("assets/app-icon.png");
                 width: 32px;
@@ -79,6 +81,7 @@ export component MainWindow inherits Window {
             Rectangle {
                 width: 32px;
                 height: 32px;
+
                 Button {
                     width: parent.width;
                     height: parent.height;
@@ -112,10 +115,12 @@ export component MainWindow inherits Window {
             border-width: 1px;
             border-color: #deebe5;
             background: white;
+
             Rectangle {
                 y: 16px;
                 width: 128px;
                 height: 68px;
+
                 Rectangle {
                     width: 112px;
                     height: 62px;
@@ -132,6 +137,7 @@ export component MainWindow inherits Window {
                     border-width: 2px;
                     border-color: #478e80;
                     background: #f9fffc;
+
                     Rectangle {
                         width: 21px;
                         height: 2px;
@@ -158,6 +164,7 @@ export component MainWindow inherits Window {
                     border-width: 2px;
                     border-color: #478e80;
                     background: #f9fffc;
+
                     Rectangle {
                         y: 29px;
                         width: 7px;
@@ -174,6 +181,7 @@ export component MainWindow inherits Window {
                     height: 26px;
                     border-radius: 13px;
                     background: #c7eade;
+
                     Rectangle {
                         width: 12px;
                         height: 2px;
@@ -202,6 +210,7 @@ export component MainWindow inherits Window {
                 accessible-label: self.label;
                 accessible-action-default => { root.open-pairing(); }
                 forward-focus: key-focus;
+
                 Text {
                     text: pair-button.label;
                     color: white;
@@ -243,6 +252,7 @@ export component MainWindow inherits Window {
         VerticalLayout {
             spacing: 8px;
             vertical-stretch: 1;
+
             Text {
                 height: 20px;
                 text: root.chinese ? "已配对设备" : "Paired devices";
@@ -254,9 +264,11 @@ export component MainWindow inherits Window {
 
             Rectangle {
                 vertical-stretch: 1;
+
                 sender-scroll := ScrollView {
                     vertical-scrollbar-policy: always-off;
                     content-height: list.height;
+
                     list := Rectangle {
                         y: 0px;
                         width: parent.width;

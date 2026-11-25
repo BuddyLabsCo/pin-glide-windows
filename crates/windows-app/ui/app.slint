@@ -30,6 +30,7 @@ export component WelcomeWindow inherits Window {
         width: 384px;
         height: 32px;
         spacing: 10px;
+
         Image {
             source: @image-url("assets/app-icon.png");
             width: 32px;
@@ -90,6 +91,7 @@ export component WelcomeWindow inherits Window {
         accessible-label: root.start-label;
         accessible-action-default => { root.start-pairing(); }
         forward-focus: start-focus;
+
         Text {
             text: root.start-label;
             font-weight: 600;
