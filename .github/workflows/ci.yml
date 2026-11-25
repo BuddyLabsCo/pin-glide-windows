@@ -25,6 +25,8 @@ jobs:
           node-version: "24.18.0"
       - name: Test quality scripts
         run: node --test scripts/quality/check.test.mjs
+      - name: Test release proposal automation
+        run: node --test scripts/release/auto-release-pr.test.mjs
       - name: Install pinned quality tools
         run: node scripts/quality/install-tools.mjs
       - name: Check formatting and file size

@@ -70,6 +70,49 @@ application identity, installation and persistent state; use separate
 Windows profiles or VMs to avoid replacing a production installation or
 reusing its credentials.
 
+## Release proposals
+
+Install the existing release automation GitHub App on this repository,
+granting repository Contents and Pull requests read/write permissions.
+Set repository Secrets `APP_ID` (the App ID) and `APP_PRIVATE_KEY`
+(the App's PEM private key). The **Auto-release proposal** workflow requests
+an installation token restricted to this repository, so its PR updates
+trigger the independent CI workflows. Allow that App to update the
+`auto-release` branch; it does not approve or merge pull requests.
+
+On pushes to `main`, the workflow opens or refreshes one Release PR from
+`auto-release` to `main`. With no stable `v<version>` tag, the initial
+proposal is `0.1.0`; otherwise the highest stable tag determines the next
+patch. Pre-release tags are ignored. Code, documentation, tests and
+dependency changes are eligible; changes confined to `.github/` and the
+release proposal's own version/changelog-only merge do not start a new
+proposal. An already merged version recorded in the changelog is not reused
+while its production publication is still pending. As in Herdr, an ignored
+push refreshes an open PR's description without rebuilding its branch.
+An eligible push rebuilds the proposal from `main`, retaining higher versions
+selected by a maintainer.
+
+To release:
+
+1. Review the open Release PR and the changelog since the last stable tag.
+2. To select a higher version, edit `crates/windows-app/Cargo.toml` on
+   `auto-release`. Update the `windows-app` entry in `Cargo.lock` and the
+   proposed section heading in `CHANGELOG.md` to match. Subsequent eligible
+   refreshes preserve the higher version and synchronize those files.
+   Other crate versions are not release versions.
+3. Wait for independent CI to pass, then merge the Release PR manually.
+   The merge authorizes production publication; no separate approval or
+   automated merge is performed.
+4. Check the Production release run and the published installer before
+   merging another release proposal. If publishing fails, recover the
+   original run as described below.
+
+Run the proposal tests without contacting GitHub:
+
+```powershell
+node --test scripts/release/auto-release-pr.test.mjs
+```
+
 ## Production release
 
 Create a GitHub Environment named `production`, restricted to `main` with
