@@ -1,3 +1,4 @@
+[CmdletBinding()]
 param(
     [switch] $Unsigned,
     [switch] $DevelopmentTransport,
@@ -5,6 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'package-info.ps1')
 if ($DevelopmentTransport -and !$Unsigned) {
     throw 'Development transport is only available for unsigned development packages.'
 }
@@ -17,16 +19,17 @@ if (!$env:PINGLIDE_SERVICE_URL -or
     throw 'Set PINGLIDE_SERVICE_URL to the HTTPS Service origin (HTTP is allowed only with -DevelopmentTransport).'
 }
 
-$makensis = (Get-Command makensis.exe -CommandType Application).Source
 $signingDefines = @()
 if (!$Unsigned) {
+    . (Join-Path $PSScriptRoot 'production-policy.ps1')
     $thumbprint = $env:PINGLIDE_SIGNING_THUMBPRINT
     $timestamp = $env:PINGLIDE_TIMESTAMP_URL
-    if ($thumbprint -notmatch '^[0-9a-f]{40}$' -or
-        $timestamp -notmatch '^https?://[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._/-]*)?$') {
+    if ((Get-ProductionSigningMode $thumbprint $timestamp) -ne 'signed') {
         throw 'Set PINGLIDE_SIGNING_THUMBPRINT and PINGLIDE_TIMESTAMP_URL for a signed release.'
     }
     $signer = (Get-Command $SignTool -CommandType Application).Source
+    $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint"
+    if (!$certificate.HasPrivateKey) { throw 'The signing certificate has no accessible private key.' }
     $signArguments = @('sign', '/sha1', $thumbprint, '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256')
     $verifyArguments = @('verify', '/pa', '/tw')
     $signingDefines = @(
@@ -35,6 +38,7 @@ if (!$Unsigned) {
         "/DVERIFY_ARGS=$($verifyArguments -join ' ')"
     )
 }
+$makensis = (Get-Command makensis.exe -CommandType Application).Source
 
 function Sign-Executable([string] $path) {
     & $signer @signArguments $path
@@ -45,17 +49,15 @@ function Sign-Executable([string] $path) {
 
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $target = Join-Path $root 'target'
-$output = Join-Path $target 'packaging/windows'
-$name = if ($Unsigned) { 'Pin-Glide-Setup-x64-unsigned.exe' } else { 'Pin-Glide-Setup-x64.exe' }
+$artifact = Get-WindowsInstallerPath $root -Unsigned:$Unsigned
+$output = Split-Path -Parent $artifact
+$name = Split-Path -Leaf $artifact
 $architecture = 'x86_64-pc-windows-msvc'
 
 $previousRustFlags = $env:CARGO_ENCODED_RUSTFLAGS
 Push-Location -LiteralPath $root
 try {
-    $metadata = & cargo metadata --locked --no-deps --format-version 1
-    if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
-    $version = ($metadata | ConvertFrom-Json).packages |
-        Where-Object { $_.name -eq 'windows-app' } | Select-Object -ExpandProperty version
+    $version = Get-WindowsProductVersion $root
     if ($version -notmatch '^(\d+)\.(\d+)\.(\d+)(?:[-+].+)?$' -or
         [uint64]$Matches[1] -gt 65535 -or [uint64]$Matches[2] -gt 65535 -or [uint64]$Matches[3] -gt 65535) {
         throw 'The windows-app version must fit the Windows version resource.'
@@ -83,7 +85,6 @@ try {
     & $makensis /V2 /WX "/DRECEIVER=$receiver" "/DOUTPUT=$installer" "/DPRODUCT_VERSION=$version" "/DFILE_VERSION=$fileVersion" @signingDefines (Join-Path $PSScriptRoot 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'MakeNSIS failed.' }
     if (!$Unsigned) { Sign-Executable $installer }
-    $artifact = Join-Path $output $name
     Move-Item -LiteralPath $installer -Destination $artifact -Force
     Write-Output $artifact
 } finally {

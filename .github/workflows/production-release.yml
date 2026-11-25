@@ -1,0 +1,67 @@
+name: Production release candidate
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  configuration:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'auto-release' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.release.outputs.eligible }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+      - name: Check exact release eligibility
+        id: release
+        shell: pwsh
+        run: ./packaging/windows/production-eligibility.ps1
+      - name: Reject repository or organization production variables
+        if: >-
+          steps.release.outputs.eligible == 'true' &&
+          (vars.PINGLIDE_SERVICE_URL != '' ||
+          vars.PINGLIDE_SIGNING_THUMBPRINT != '' ||
+          vars.PINGLIDE_TIMESTAMP_URL != '')
+        run: |
+          echo 'Define release configuration only in the production Environment.'
+          exit 1
+  package:
+    needs: configuration
+    if: ${{ needs.configuration.outputs.eligible == 'true' }}
+    runs-on: windows-2025
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.configuration.outputs.commit }}
+          persist-credentials: false
+      - name: Install NSIS
+        shell: pwsh
+        run: ./packaging/windows/install-nsis.ps1
+      - name: Build and verify the authorized candidate
+        id: candidate
+        shell: powershell
+        env:
+          PINGLIDE_SERVICE_URL: ${{ vars.PINGLIDE_SERVICE_URL }}
+          PINGLIDE_SIGNING_THUMBPRINT: ${{ vars.PINGLIDE_SIGNING_THUMBPRINT }}
+          PINGLIDE_TIMESTAMP_URL: ${{ vars.PINGLIDE_TIMESTAMP_URL }}
+        run: .\packaging\windows\production-candidate.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: production-release-candidate
+          path: |
+            target/packaging/windows/${{ steps.candidate.outputs.filename }}
+            target/packaging/windows/release-candidate.json
+          if-no-files-found: error

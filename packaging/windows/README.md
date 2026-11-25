@@ -70,6 +70,37 @@ application identity, installation and persistent state; use separate
 Windows profiles or VMs to avoid replacing a production installation or
 reusing its credentials.
 
+## Production release candidate
+
+Create a GitHub Environment named `production`, restricted to `main` with
+no additional required reviewer gate. Set its Environment Variable
+`PINGLIDE_SERVICE_URL` to the production HTTPS origin. Optionally configure
+both `PINGLIDE_SIGNING_THUMBPRINT` and `PINGLIDE_TIMESTAMP_URL` for signing.
+Define all three variables only at the Environment level. A partial or invalid
+signing configuration fails; only two absent signing variables select unsigned
+packaging. Signed builds also require SignTool on PATH and the matching
+certificate with private-key access in the runner user's Personal store.
+The workflow does not provision signing credentials or fall back to unsigned
+on signing failure.
+
+Merging a same-repository `auto-release` PR into `main` authorizes the
+**Production release candidate** workflow. It checks out the exact merge SHA,
+builds with development transport explicitly disabled, and verifies the
+distributable's version and signature status and the isolated installer
+lifecycle. The lifecycle test builds isolated installers from the Receiver;
+it does not install the actual distributable or contact the live Service.
+The signed build additionally verifies the signed Receiver, embedded
+uninstaller and outer installer during packaging.
+
+Download the `production-release-candidate` Actions artifact after success.
+It contains the installer and `release-candidate.json` with the authorized
+commit, Cargo product version, signing mode, filename and SHA-256 digest.
+The workflow does not create tags or GitHub Releases.
+Rerunning it uses the original merge commit, not the current `main` head.
+
+Run the production policy tests locally with
+`.\packaging\windows\production.test.ps1`.
+
 ## Maintenance and verification
 
 Choose **Exit** in the tray before upgrading or uninstalling. Run the new
