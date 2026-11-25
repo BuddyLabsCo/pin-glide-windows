@@ -75,11 +75,15 @@ function repository(t) {
     return "";
   }
 
-  function run(before, after) {
+  function run(before, after, { afterCheckout, beforePush } = {}) {
     const checkout = join(directory, `run-${++runNumber}`);
     git(directory, "clone", "--branch", "main", remote, checkout);
+    afterCheckout?.();
     updateProposal({
-      before, after, git: (...args) => git(checkout, ...args), gh,
+      before, after, git: (...args) => {
+        if (args[0] === "push") beforePush?.();
+        return git(checkout, ...args);
+      }, gh,
       read: file => {
         try {
           return readFileSync(join(checkout, file), "utf8");
@@ -169,6 +173,34 @@ test("pending and published releases use the same authorized baseline and do not
   assert.equal(repo.notes("0.1.0"), previousNotes);
   assert.match(repo.body, /Changelog base: v0\.1\.0/);
   assert.deepEqual(repo.changes, ["create", "create", "edit"]);
+});
+
+test("a merge after checkout cannot replace a retained release branch or recreate its PR", t => {
+  const repo = repository(t);
+  const first = repo.commit({ "README.md": "Shipped feature\n" }, "Shipped feature");
+  repo.run(repo.seed, first);
+  const proposed = repo.ref();
+  const next = repo.commit({ "README.md": "Another feature\n" }, "Another feature");
+  assert.throws(() => repo.run(first, next, {
+    afterCheckout: () => repo.authorize(),
+  }), /Release state changed/);
+  assert.equal(repo.ref(), proposed);
+  assert.deepEqual(repo.changes, ["create"]);
+
+  repo.run(first, next);
+  assert.equal(repo.ref(), proposed);
+  assert.deepEqual(repo.changes, ["create"]);
+});
+
+test("a merge in the branch-write window stops stale PR publication", t => {
+  const repo = repository(t);
+  const first = repo.commit({ "README.md": "Shipped feature\n" }, "Shipped feature");
+  repo.run(repo.seed, first);
+  const next = repo.commit({ "README.md": "Another feature\n" }, "Another feature");
+  assert.throws(() => repo.run(first, next, {
+    beforePush: () => repo.authorize(),
+  }), /Release state changed/);
+  assert.deepEqual(repo.changes, ["create"]);
 });
 
 test("workflow checks out current main but supplies both original event SHAs", () => {

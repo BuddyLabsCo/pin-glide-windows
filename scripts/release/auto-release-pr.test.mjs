@@ -15,12 +15,14 @@ const lock = version => `[[package]]\nname = "other"\nversion = "0.1.0"\n\n[[pac
 
 function fixture({
   paths = ["crates/windows-app/src/main.rs"], tags = [], version = "0.1.0",
-  proposed, existing = null, rejectedPush = false,
+  proposed, existing = null, rejectedPush = false, closeOnPush = false,
 } = {}) {
   const files = new Map([[manifest, cargo(version)], [lockfile, lock(version)], [changelog, existing]]);
   const calls = [];
   const prs = [];
   let body;
+  let remoteBranch = proposed ? branch : "";
+  let open = Boolean(proposed);
   function git(...args) {
     calls.push(args);
     switch (args[0]) {
@@ -31,19 +33,23 @@ function fixture({
       case "merge-base": return args.includes(before) ? before : head;
       case "log": return args.includes("--first-parent") ? head : "Improve Receiver\nEarlier change";
       case "tag": return tags.join("\n");
-      case "for-each-ref": return proposed ? branch : "";
+      case "for-each-ref": return remoteBranch;
+      case "ls-remote": return [`${head}\trefs/heads/main`,
+        remoteBranch && `${remoteBranch}\trefs/heads/auto-release`].filter(Boolean).join("\n");
       case "show": return cargo(proposed);
       case "add":
       case "-c": return "";
       case "push":
         if (rejectedPush) throw new Error("Remote branch changed");
+        remoteBranch = head;
+        open &&= !closeOnPush;
         return "";
       default: throw new Error(`Unexpected git call ${args.join(" ")}`);
     }
   }
   function gh(args, input) {
     if (args[1] === "list") {
-      return JSON.stringify(args.includes("open") && proposed
+      return JSON.stringify(args.includes("open") && open
         ? [{ number: 45, isCrossRepository: false }] : []);
     }
     prs.push(args);
@@ -123,6 +129,12 @@ test("version updates preserve real Cargo files except for the product version l
 test("a rejected branch update never creates or edits a Release PR", () => {
   const repo = fixture({ proposed: "1.0.0", rejectedPush: true });
   assert.throws(repo.run, /Remote branch changed/);
+  assert.deepEqual(repo.prs, []);
+});
+
+test("closing a PR without advancing main prevents a stale metadata update", () => {
+  const repo = fixture({ proposed: "1.0.0", closeOnPush: true });
+  assert.throws(repo.run, /Release state changed/);
   assert.deepEqual(repo.prs, []);
 });
 

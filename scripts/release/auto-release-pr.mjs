@@ -8,6 +8,7 @@ const changelog = "CHANGELOG.md";
 const releasePaths = new Set([manifest, lockfile, changelog]);
 const releaseBranch = "auto-release";
 const releaseRef = `refs/heads/${releaseBranch}`;
+const mainRef = "refs/heads/main";
 const trackingRef = `refs/remotes/origin/${releaseBranch}`;
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
@@ -57,6 +58,28 @@ function releasePulls(gh, state) {
   return JSON.parse(gh(["pr", "list", "--base", "main", "--head", releaseBranch,
     "--state", state, "--limit", "100", "--json", "number,mergeCommit,isCrossRepository"]))
     .filter(pr => !pr.isCrossRepository);
+}
+
+function releaseState(gh) {
+  const merged = new Set(releasePulls(gh, "merged").map(pr => pr.mergeCommit?.oid).filter(Boolean));
+  const open = releasePulls(gh, "open");
+  if (open.length > 1) throw new Error("Expected at most one open Release PR");
+  return { merged, open };
+}
+
+function verifyReleaseState(git, gh, head, branch, state) {
+  const current = releaseState(gh);
+  const refs = new Map(git("ls-remote", "origin", mainRef, releaseRef)
+    .split("\n").filter(Boolean).map(line => {
+      const [oid, ref] = line.split("\t");
+      return [ref, oid];
+    }));
+  if (refs.get(mainRef) !== head || (refs.get(releaseRef) ?? "") !== branch ||
+      current.open[0]?.number !== state.open[0]?.number ||
+      current.merged.size !== state.merged.size ||
+      [...current.merged].some(sha => !state.merged.has(sha))) {
+    throw new Error("Release state changed during preparation; rerun this workflow from current main");
+  }
 }
 
 function patchAfter(version) {
@@ -114,13 +137,12 @@ function pushEvent(git, before, after) {
 
 export function updateProposal({ before, after, git, gh, read, write }) {
   const { head, paths } = pushEvent(git, before, after);
-  const merged = new Set(releasePulls(gh, "merged").map(pr => pr.mergeCommit?.oid).filter(Boolean));
+  const state = releaseState(gh);
+  const { merged, open } = state;
   const baseline = releaseBaseline(git, merged, head);
   const alreadyAuthorized = baseline.commit && git("merge-base", after, baseline.commit) === after;
   const eligible = !alreadyAuthorized && paths.some(path => !path.startsWith(".github/")) &&
     !(paths.every(path => releasePaths.has(path)) && merged.has(after));
-  const open = releasePulls(gh, "open");
-  if (open.length > 1) throw new Error("Expected at most one open Release PR");
   if (!eligible && !open.length) {
     console.log("No release-eligible changes; skipping release preparation.");
     return;
@@ -150,6 +172,7 @@ export function updateProposal({ before, after, git, gh, read, write }) {
     "Review the version, changelog and independent CI checks before merging manually.",
   ].join("\n");
 
+  let proposalHead = previousHead;
   if (eligible) {
     const manifestText = updateVersion(read(manifest), manifest, version);
     const lockText = updateVersion(read(lockfile), lockfile, version);
@@ -160,9 +183,12 @@ export function updateProposal({ before, after, git, gh, read, write }) {
     if (!git("diff", "--cached", "--name-only")) throw new Error("No release proposal changes to commit");
     git("-c", "user.name=github-actions[bot]", "-c",
       "user.email=41898282+github-actions[bot]@users.noreply.github.com", "commit", "-m", title);
+    verifyReleaseState(git, gh, head, previousHead, state);
     git("push", `--force-with-lease=${releaseRef}:${previousHead}`, "origin", `HEAD:${releaseRef}`);
+    proposalHead = git("rev-parse", "HEAD");
   }
 
+  verifyReleaseState(git, gh, head, proposalHead, state);
   gh(open.length
     ? ["pr", "edit", String(open[0].number), "--title", title, "--body-file", "-"]
     : ["pr", "create", "--base", "main", "--head", releaseBranch, "--title", title, "--body-file", "-"],

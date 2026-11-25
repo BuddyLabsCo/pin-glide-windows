@@ -93,7 +93,13 @@ proposal. An already merged Release PR is the version and changelog
 baseline while its production tag is still pending, preventing repeated
 versions or notes. The workflow evaluates the original push's changes but
 prepares proposals from current `main`, so delayed runs cannot roll back
-newer proposals. As in Herdr, an ignored push refreshes an open PR's
+newer proposals. Before writing the branch and before changing the PR, the
+workflow rechecks remote `main`, the release branch and the open/merged
+Release PR state. If a concurrent change is detected, it fails safely;
+rerun the failed workflow to prepare against current state. If the change
+occurs during the branch write, the subsequent check prevents a stale PR
+update even if the branch write has already completed.
+As in Herdr, an ignored push refreshes an open PR's
 description without rebuilding its branch.
 An eligible push rebuilds the proposal from `main`, retaining higher versions
 selected by a maintainer.
