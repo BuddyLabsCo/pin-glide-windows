@@ -70,6 +70,62 @@ application identity, installation and persistent state; use separate
 Windows profiles or VMs to avoid replacing a production installation or
 reusing its credentials.
 
+## Release proposals
+
+Install the existing release automation GitHub App on this repository,
+granting repository Contents and Pull requests read/write permissions.
+Set repository Secrets `APP_ID` (the App ID) and `APP_PRIVATE_KEY`
+(the App's PEM private key). The **Auto-release proposal** workflow requests
+an installation token restricted to this repository, so its PR updates
+trigger the independent CI workflows. Allow that App to update the
+`auto-release` branch; it does not approve or merge pull requests.
+
+On pushes to `main`, the workflow opens or refreshes one Release PR from
+`auto-release` to `main`. With no stable `v<version>` tag, the initial
+proposal is `0.1.0`; otherwise the highest stable tag determines the next
+patch. Pre-release tags are ignored. Each version component must be at most
+65,535 to fit the Windows version resource; independent CI checks the
+manifest and lockfile, and patch overflow requires a valid higher version.
+Code, documentation, tests and dependency changes are eligible; changes
+confined to `.github/` and the
+release proposal's own version/changelog-only merge do not start a new
+proposal. An already merged Release PR is the version and changelog
+baseline while its production tag is still pending, preventing repeated
+versions or notes. The workflow evaluates the original push's changes but
+prepares proposals from current `main`, so delayed runs cannot roll back
+newer proposals. Before writing the branch and before changing the PR, the
+workflow rechecks remote `main`, the release branch and the open/merged
+Release PR state. If a concurrent change is detected, it fails safely;
+rerun the failed workflow to prepare against current state. If the change
+occurs during the branch write, the subsequent check prevents a stale PR
+update even if the branch write has already completed.
+As in Herdr, an ignored push refreshes an open PR's
+description without rebuilding its branch.
+An eligible push rebuilds the proposal from `main`, retaining higher versions
+selected by a maintainer.
+
+To release:
+
+1. Review the open Release PR and the changelog since the last stable tag.
+2. To select a higher version, edit `crates/windows-app/Cargo.toml` on
+   `auto-release`. Update the `windows-app` entry in `Cargo.lock` and the
+   proposed section heading in `CHANGELOG.md` to match. Subsequent eligible
+   refreshes preserve the higher version and synchronize those files.
+   Other crate versions are not release versions.
+3. Wait for independent CI to pass, then merge the Release PR manually.
+   The merge authorizes production publication; no separate approval or
+   automated merge is performed.
+4. Check the Production release run and the published installer before
+   merging another release proposal. If publishing fails, recover the
+   original run as described below.
+
+Run the proposal tests without contacting GitHub:
+
+```powershell
+node --test scripts/release/*.test.mjs
+node scripts/release/auto-release-pr.mjs check-version
+```
+
 ## Production release
 
 Create a GitHub Environment named `production`, restricted to `main` with
