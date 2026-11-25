@@ -226,7 +226,9 @@ to the release-proposal tests, so its changes select both test groups.
 Service contracts uses the same complete Git comparison on
 `scripts/contracts/**`, `generated/**`, `Cargo.lock`, and its workflow.
 CI calls the reusable contracts workflow only when selected, avoiding
-GitHub's native changed-file filter limit.
+GitHub's native changed-file filter limit. A selected contracts check
+still runs after unrelated Format failures, but not on cancellation or
+the weekly advisory schedule.
 
 Windows runs Clippy, Debug linking, default and development-transport tests
 on one runner and in a single Cargo target directory. Main also links
@@ -252,8 +254,9 @@ on equivalent cold and warm Actions runs. The baseline from PR #53 was
 Format and lint 4m52s (3m32s dependency direction/Clippy),
 Windows MSVC build 11m18s (7m49s check/Release link,
 2m42s Service tests), Portable core 36s, and Service contracts 16s.
-Hosted cold/warm measurements are pending; local build times are not
-comparable with the GitHub-hosted baseline.
+Hosted run/skip decisions, packaging verification and cold/warm measurements
+are pending acceptance checks deferred to the formal PR CI stage by the
+operator. Local build times are not comparable with the GitHub-hosted baseline.
 
 Local Windows verification for this change (November 25, 2026): Clippy
 38s, Debug link 2m35s, unsigned Release installer 12m53s, isolated installer

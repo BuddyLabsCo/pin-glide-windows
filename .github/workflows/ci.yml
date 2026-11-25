@@ -81,7 +81,7 @@ jobs:
   contracts:
     name: Service contracts
     needs: quality
-    if: github.event_name != 'schedule' && needs.quality.outputs.contracts == 'true'
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.quality.outputs.contracts == 'true' }}
     uses: ./.github/workflows/contracts.yml
 
   build:

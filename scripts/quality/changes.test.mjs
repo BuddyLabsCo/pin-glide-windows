@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -80,6 +80,13 @@ test("advisory policy and contract tooling need no Windows compilation", () => {
       windows: false, packaging: false, release: false, advisories: false, contracts: true,
     }, path);
   }
+});
+
+test("selected contract checks survive Format failures but not cancellation or scheduled runs", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = workflow.match(/^  contracts:\r?\n(?:    .*\r?\n)+/m)?.[0];
+  assert.ok(job, "Missing Service contracts job");
+  assert.match(job, /^    if: \$\{\{ !cancelled\(\) && github\.event_name != 'schedule' && needs\.quality\.outputs\.contracts == 'true' \}\}$/m);
 });
 
 test("range classification includes removed files and both ends of renames", () => {
