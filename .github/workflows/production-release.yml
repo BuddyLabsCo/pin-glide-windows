@@ -16,30 +16,40 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
-    steps:
-      - name: Reject repository or organization production variables
-        if: >-
-          vars.PINGLIDE_SERVICE_URL != '' ||
-          vars.PINGLIDE_SIGNING_THUMBPRINT != '' ||
-          vars.PINGLIDE_TIMESTAMP_URL != ''
-        run: |
-          echo 'Define release configuration only in the production Environment.'
-          exit 1
-  package:
-    needs: configuration
-    runs-on: windows-2025
-    environment: production
+    outputs:
+      eligible: ${{ steps.release.outputs.eligible }}
+      commit: ${{ steps.release.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           persist-credentials: false
+      - name: Check exact release eligibility
+        id: release
+        shell: pwsh
+        run: ./packaging/windows/production-eligibility.ps1
+      - name: Reject repository or organization production variables
+        if: >-
+          steps.release.outputs.eligible == 'true' &&
+          (vars.PINGLIDE_SERVICE_URL != '' ||
+          vars.PINGLIDE_SIGNING_THUMBPRINT != '' ||
+          vars.PINGLIDE_TIMESTAMP_URL != '')
+        run: |
+          echo 'Define release configuration only in the production Environment.'
+          exit 1
+  package:
+    needs: configuration
+    if: ${{ needs.configuration.outputs.eligible == 'true' }}
+    runs-on: windows-2025
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.configuration.outputs.commit }}
+          persist-credentials: false
       - name: Install NSIS
         shell: pwsh
-        run: |
-          choco install nsis --version=3.13 --yes --no-progress --allow-downgrade
-          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
-          "${env:ProgramFiles(x86)}\NSIS" >> $env:GITHUB_PATH
+        run: ./packaging/windows/install-nsis.ps1
       - name: Build and verify the authorized candidate
         id: candidate
         shell: powershell

@@ -1,14 +1,18 @@
+function Test-ReleaseEvent($event, [string] $eventName, [string] $repository) {
+    $pr = $event.pull_request
+    return ($eventName -ceq 'pull_request' -and $event.action -ceq 'closed' -and
+        $pr.merged -is [bool] -and $pr.merged -and
+        $pr.head.ref -ceq 'auto-release' -and $pr.base.ref -ceq 'main' -and
+        $repository -and $pr.head.repo.full_name -ceq $repository -and
+        $pr.base.repo.full_name -ceq $repository)
+}
+
 function Get-AuthorizedReleaseCommit($event, [string] $eventName, [string] $repository,
     [string] $githubSha, [string] $checkout) {
-    $pr = $event.pull_request
-    if ($eventName -cne 'pull_request' -or $event.action -cne 'closed' -or
-        $pr.merged -isnot [bool] -or !$pr.merged -or
-        $pr.head.ref -cne 'auto-release' -or $pr.base.ref -cne 'main' -or
-        !$repository -or $pr.head.repo.full_name -cne $repository -or
-        $pr.base.repo.full_name -cne $repository) {
+    if (!(Test-ReleaseEvent $event $eventName $repository)) {
         throw 'Unauthorized release event.'
     }
-    $commit = $pr.merge_commit_sha
+    $commit = $event.pull_request.merge_commit_sha
     if ($commit -cnotmatch '\A[0-9a-f]{40}\z' -or $commit -cne $githubSha -or $commit -cne $checkout) {
         throw 'Merge SHA mismatch: the event, workflow SHA and checkout must agree.'
     }

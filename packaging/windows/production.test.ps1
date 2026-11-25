@@ -58,6 +58,7 @@ Assert-Rejected { Get-ProductionSigningMode ('a' * 40) 'https://timestamp.exampl
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $target = (New-Item -ItemType Directory -Force (Join-Path $root 'target')).FullName
 $fixture = Join-Path $target "release-event-$([guid]::NewGuid()).json"
+$workflowOutput = "$fixture.output"
 $head = & git -C $root rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw 'Git checkout is unavailable.' }
 $event.pull_request.merge_commit_sha = $head
@@ -67,16 +68,33 @@ $environment = @{
     GITHUB_EVENT_NAME = 'pull_request'
     GITHUB_REPOSITORY = $repository
     GITHUB_SHA = $head
+    GITHUB_OUTPUT = $workflowOutput
     PINGLIDE_SERVICE_URL = 'http://localhost'
     PINGLIDE_SIGNING_THUMBPRINT = ''
     PINGLIDE_TIMESTAMP_URL = ''
 }
 try {
-    [IO.File]::WriteAllText($fixture, ($event | ConvertTo-Json -Depth 5))
     foreach ($name in $environment.Keys) {
         $previous[$name] = [Environment]::GetEnvironmentVariable($name)
         [Environment]::SetEnvironmentVariable($name, $environment[$name])
     }
+    $eligibility = Join-Path $PSScriptRoot 'production-eligibility.ps1'
+    $event.pull_request.head.ref = 'Auto-Release'
+    [IO.File]::WriteAllText($fixture, ($event | ConvertTo-Json -Depth 5))
+    [IO.File]::WriteAllText($workflowOutput, '')
+    & $eligibility
+    if ((Get-Content -LiteralPath $workflowOutput -Raw).Trim() -cne 'eligible=false') {
+        throw 'A case-variant release branch must skip the production job.'
+    }
+    $event.pull_request.head.ref = 'auto-release'
+    [IO.File]::WriteAllText($fixture, ($event | ConvertTo-Json -Depth 5))
+    [IO.File]::WriteAllText($workflowOutput, '')
+    & $eligibility
+    $outputs = Get-Content -LiteralPath $workflowOutput
+    if ($outputs -cnotcontains 'eligible=true' -or $outputs -cnotcontains "commit=$head") {
+        throw 'The exact release branch must authorize the merge commit.'
+    }
+    [IO.File]::WriteAllText($workflowOutput, '')
     $candidate = Join-Path $PSScriptRoot 'production-candidate.ps1'
     $PSDefaultParameterValues = @{ '*:DevelopmentTransport' = $true }
     Assert-Rejected { & $candidate } 'Set PINGLIDE_SERVICE_URL'
@@ -85,14 +103,28 @@ try {
     Assert-Rejected { & $candidate } 'Both production signing variables'
     $env:PINGLIDE_TIMESTAMP_URL = 'https://timestamp.example.com'
     $missingSignTool = "missing-sign-tool-$([guid]::NewGuid()).exe"
-    Assert-Rejected {
-        & (Join-Path $PSScriptRoot 'build.ps1') -Unsigned:$false -DevelopmentTransport:$false -SignTool $missingSignTool
-    } $missingSignTool
+    $PSDefaultParameterValues['*:SignTool'] = $missingSignTool
+    $artifacts = @('Pin-Glide-Setup-x64.exe', 'Pin-Glide-Setup-x64-unsigned.exe', 'release-candidate.json') |
+        ForEach-Object { Join-Path $target "packaging/windows/$_" }
+    $before = @{}
+    foreach ($artifact in $artifacts) {
+        $before[$artifact] = if (Test-Path -LiteralPath $artifact) {
+            (Get-FileHash -LiteralPath $artifact).Hash
+        }
+    }
+    Assert-Rejected { & $candidate } $missingSignTool
+    foreach ($artifact in $artifacts) {
+        $after = if (Test-Path -LiteralPath $artifact) { (Get-FileHash -LiteralPath $artifact).Hash }
+        if ($after -ne $before[$artifact]) { throw "Signing failure changed $artifact." }
+    }
+    if ((Get-Item -LiteralPath $workflowOutput).Length -ne 0) {
+        throw 'Signing failure emitted successful artifact output.'
+    }
 } finally {
     foreach ($name in $previous.Keys) {
         [Environment]::SetEnvironmentVariable($name, $previous[$name])
     }
-    Remove-Item -LiteralPath $fixture -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $fixture, $workflowOutput -ErrorAction SilentlyContinue
 }
 
 Write-Output 'Passed: production release authorization, exact checkout, signing policy, and fail-closed packaging.'
