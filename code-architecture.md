@@ -172,13 +172,17 @@ for its invocation and the packaged Receiver's interactive first-use test.
 
 | Command | Checks |
 | --- | --- |
-| `node scripts/quality/install-tools.mjs` | Download pinned tools. Add the printed paths to local `PATH`. |
+| `node scripts/quality/install-tools.mjs [slint-lsp\|cargo-deny]` | Download all pinned tools or the named tool. Add the printed paths to local `PATH`. |
 | `node scripts/quality/check.mjs` | Rust and Slint formatting, 500-line limit, crate dependencies, and Clippy with warnings denied |
-| `node --test scripts/quality/check.test.mjs` | Quality script tests |
+| `node --test scripts/quality/*.test.mjs` | Quality and changed-path classification tests |
+| `node scripts/quality/check.mjs source` | Rust and Slint formatting and handwritten file size |
+| `node scripts/quality/check.mjs dependencies` | Workspace dependency direction |
+| `node scripts/quality/check.mjs lint` | Windows x64 MSVC Clippy with warnings denied |
 | `node scripts/quality/check.mjs core` | Portable core lint and tests |
-| `node scripts/quality/check.mjs build` | Windows x64 MSVC check and release link |
+| `node scripts/quality/check.mjs build` | Windows x64 MSVC Debug link |
+| `node scripts/quality/check.mjs release` | Windows x64 MSVC Release link |
 | `node scripts/quality/check.mjs advisories` | RustSec advisories |
-| `node scripts/quality/check.mjs service` | Windows Service adapter, WSS wire models, and local HTTPS certificate and hostname verification |
+| `node scripts/quality/check.mjs service` | Windows library, pairing confirmation and automated lifecycle tests with default features, plus Service tests with `development-transport` (including local HTTPS certificate and hostname verification) |
 | `cargo run --locked -p windows-app` | Open Welcome on Windows or reactivate the tray instance |
 | `cargo run --locked -p windows-app -- --startup` | Start in the tray without opening Welcome |
 | `cargo test --locked -p windows-app --test lifecycle startup_stays_hidden_and_explicit_launch_reopens_the_same_process -- --ignored --exact` | Check single-instance activation, window size, and hide-to-tray on an interactive Windows desktop using isolated settings |
@@ -191,6 +195,64 @@ The source gates cover handwritten files in `receiver-core` and `windows-app`.
 Generated code is checked through regeneration and compilation when added.
 `rustfmt.toml`, `clippy.toml`, and `Cargo.toml` define the Rust rules.
 The Slint build treats compiler warnings as errors in CI.
+
+### CI execution boundaries
+
+| Event or changed paths | Format | Portable core | Windows | Service contracts |
+| --- | --- | --- | --- | --- |
+| Documentation or unrelated files | Yes | Yes | Skip | Skip |
+| `scripts/release/`, auto-release workflow | + release tests | Yes | Skip | Skip |
+| Receiver crates and Slint sources, generated crates, Clippy/Rustfmt config | Yes | Yes | Debug lint, link, tests | Generated crates only |
+| Packaging, `windows-app/build.rs`, UI assets, development/production packaging workflows | Yes | Yes | + installer, policy and publication tests | Skip |
+| Cargo manifests, lockfile, toolchain, `.cargo/` config | + advisories | Yes | + installer, policy and publication tests | Lockfile or generated manifests only |
+| Quality scripts, CI workflow, shared local actions | + release tests and advisories | Yes | + installer, policy and publication tests | Skip |
+| `deny.toml` | + advisories | Yes | Skip | Skip |
+| Contract scripts or contracts workflow | Yes | Yes | Skip | Yes |
+| Push to main | + release tests and advisories | Yes | Full baseline; installer when applicable | Same path filter as PRs |
+| Weekly advisory schedule | Advisories only | Skip | Skip | Skip |
+
+Format runs the source and dependency gates, quality script tests, and
+Windows version check on every PR and main push. It compares the PR's base
+with the checked-out merge commit, or the previous main revision with the
+new revision. The NUL-delimited Git diff disables rename detection so both
+paths participate in classification, including removed files. An unavailable
+comparison opts into all checks. Service contracts uses GitHub's native path
+filter on `scripts/contracts/**`, `generated/**`, `Cargo.lock`, and its
+workflow, subject to GitHub's changed-file filter limits.
+
+Windows runs Clippy, Debug linking, default and development-transport tests
+on one runner and in a single Cargo target directory. Main also links
+Release unless the packaging checks already link the production-mode
+Receiver. Packaging uses a synthetic HTTPS origin, unsigned
+`packaging/windows/build.ps1` (including actual PE checks), and the isolated
+`installer.test.ps1`. It discards the installer without publishing it.
+Production signing and publication workflows are unchanged.
+
+CI uses Rust Cache for Cargo downloads and compiled dependencies. The
+cache distinguishes OS, Rust toolchain, manifests/lockfile, configuration
+and compiler environment. Windows separates the Debug/default +
+development-transport and optional normal Release cache from the packaging
+cache (static CRT Release, including the rejected development-origin test).
+Workspace crates are rebuilt; Cargo fingerprints distinguish profiles,
+features, and flags within a cache. A miss builds normally. The installer
+is removed before the cache save; the production pipelines use no CI cache.
+
+For timing comparisons, record the Format, Portable core, Windows and
+contracts durations plus the cache restore and post-job save step durations,
+cache hit/miss and size, and Windows lint/build/test/packaging step durations
+on equivalent cold and warm Actions runs. The baseline from PR #53 was
+Format and lint 4m52s (3m32s dependency direction/Clippy),
+Windows MSVC build 11m18s (7m49s check/Release link,
+2m42s Service tests), Portable core 36s, and Service contracts 16s.
+Hosted cold/warm measurements are pending; local build times are not
+comparable with the GitHub-hosted baseline.
+
+Local Windows verification for this change (November 25, 2026): Clippy
+38s, Debug link 2m35s, unsigned Release installer 12m53s, isolated installer
+lifecycle 2m09s. With the same local target directory already populated,
+Clippy took 3s, Debug link 8s, and Windows/default plus development transport
+tests 20s. These measurements demonstrate local output reuse only; they
+exclude GitHub cache transfer and cleanup overhead.
 
 Set `PINGLIDE_SERVICE_URL` to the installation's HTTPS origin before building
 to enable live pairing. Use the same origin in the Sender build.

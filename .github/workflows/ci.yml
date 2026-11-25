@@ -11,58 +11,123 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
   quality:
-    name: Format and lint
+    name: Format
     runs-on: windows-2025
+    outputs:
+      windows: ${{ steps.changes.outputs.windows }}
+      packaging: ${{ steps.changes.outputs.packaging }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: ${{ github.event_name == 'push' && '0' || '2' }}
       - uses: actions/setup-node@v6
         with:
           node-version: "24.18.0"
+      - name: Classify changed paths
+        id: changes
+        if: github.event_name != 'schedule'
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/quality/changes.mjs "$BASE" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
       - name: Test quality scripts
-        run: node --test scripts/quality/check.test.mjs
+        if: github.event_name != 'schedule'
+        run: node --test scripts/quality/*.test.mjs
       - name: Test release proposal automation
+        if: github.event_name == 'push' || steps.changes.outputs.release == 'true'
         run: node --test scripts/release/*.test.mjs
       - name: Check Windows release version
+        if: github.event_name != 'schedule'
         run: node scripts/release/auto-release-pr.mjs check-version
-      - name: Install pinned quality tools
-        run: node scripts/quality/install-tools.mjs
+      - name: Install pinned Slint formatter
+        if: github.event_name != 'schedule'
+        run: node scripts/quality/install-tools.mjs slint-lsp
       - name: Check formatting and file size
+        if: github.event_name != 'schedule'
         run: node scripts/quality/check.mjs source
-      - name: Check dependency direction and lint
-        run: node scripts/quality/check.mjs lint
+      - name: Check dependency direction
+        if: github.event_name != 'schedule'
+        run: node scripts/quality/check.mjs dependencies
+      - name: Install pinned advisory scanner
+        if: github.event_name != 'pull_request' || steps.changes.outputs.advisories == 'true'
+        run: node scripts/quality/install-tools.mjs cargo-deny
       - name: Check dependency advisories
+        if: github.event_name != 'pull_request' || steps.changes.outputs.advisories == 'true'
         run: node scripts/quality/check.mjs advisories
 
   core:
     name: Portable core
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6
         with:
           node-version: "24.18.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: portable-core-debug-${{ hashFiles('Cargo.toml', 'scripts/quality/check.mjs') }}
+          cache-bin: "false"
+          cache-workspace-crates: "false"
       - name: Check and test the core
         run: node scripts/quality/check.mjs core
 
   build:
-    name: Windows MSVC build
+    name: Windows
+    needs: quality
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && needs.quality.outputs.windows == 'true')
     runs-on: windows-2025
+    env:
+      CARGO_INCREMENTAL: "0"
+      SLINT_COMPILER_DENY_WARNINGS: "1"
     steps:
       - uses: actions/checkout@v5
-      - name: Test production packaging policy
-        shell: powershell
-        run: .\packaging\windows\production.test.ps1
       - uses: actions/setup-node@v6
         with:
           node-version: "24.18.0"
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-2025-${{ needs.quality.outputs.packaging == 'true' && 'debug-release-crt-static-default-dev' || 'debug-optional-release-default-dev' }}-${{ hashFiles('Cargo.toml', 'scripts/quality/check.mjs', 'packaging/windows/build.ps1') }}
+          cache-bin: "false"
+          cache-workspace-crates: "false"
+          cache-on-failure: "false"
+      - name: Test production packaging policy
+        if: github.event_name == 'push' || needs.quality.outputs.packaging == 'true'
+        shell: powershell
+        run: .\packaging\windows\production.test.ps1
       - name: Test production publication and recovery
+        if: github.event_name == 'push' || needs.quality.outputs.packaging == 'true'
         run: node --test packaging/windows/production-publication.test.mjs
-      - name: Check and link the Windows application
+      - name: Lint Windows crates
+        run: node scripts/quality/check.mjs lint
+      - name: Link Debug Windows application
         run: node scripts/quality/check.mjs build
-      - name: Test the Service adapter
+      - name: Test Windows and both Service transport modes
         run: node scripts/quality/check.mjs service
+      - name: Link Release Windows application
+        if: github.event_name == 'push' && needs.quality.outputs.packaging != 'true'
+        run: node scripts/quality/check.mjs release
+      - name: Install NSIS
+        if: needs.quality.outputs.packaging == 'true'
+        shell: pwsh
+        run: ./packaging/windows/install-nsis.ps1
+      - name: Build unsigned Release installer and verify PE resources
+        if: needs.quality.outputs.packaging == 'true'
+        shell: powershell
+        env:
+          PINGLIDE_SERVICE_URL: https://service.example.com
+        run: .\packaging\windows\build.ps1 -Unsigned
+      - name: Verify isolated installer lifecycle
+        if: needs.quality.outputs.packaging == 'true'
+        shell: powershell
+        run: |
+          .\packaging\windows\installer.test.ps1 `
+            -Receiver .\target\x86_64-pc-windows-msvc\release\windows-app.exe `
+            -Installer .\target\packaging\windows\Pin-Glide-Setup-x64-unsigned.exe
+          Remove-Item -LiteralPath .\target\packaging\windows\Pin-Glide-Setup-x64-unsigned.exe
