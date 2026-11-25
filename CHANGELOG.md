@@ -1,0 +1,31 @@
+# Changelog
+
+## 0.1.0
+
+- Optimize PR CI with architecture-scoped checks and shared Rust caching (#55)
+- Fix neutral Chinese Windows packaging resources (#53)
+- Localize Windows Receiver packaging and embed the product icon (#52)
+- Maintain human-controlled auto-release proposals (#49)
+- Publish the Windows GitHub Release with safe recovery (#48)
+- Build and retain the verified production release candidate (#47)
+- Build versioned installers through manual development packaging (#46)
+- Package the x64 Windows Receiver for signed distribution (#40)
+- Handle Pairing removal, Receiver revocation and missing R (#39)
+- Copy the latest OTP with a global shortcut (#38)
+- Set the lifetime of newly arriving SMS popups (#37)
+- Choose the interface language and launch-at-login setting (#36)
+- Stack and animate independently dismissible SMS windows (#35)
+- Rename Senders and remove locally unreadable Pairings (#34)
+- Pair another Sender without interrupting delivery (#33)
+- Maintain delivery across Windows session changes (#32)
+- Display and copy authenticated SMS (#31)
+- Name the first Sender and open Main (#30)
+- Redeem the first R and establish delivery (#29)
+- Confirm the peer and commit its protected Pairing key (#28)
+- Add resumable Receiver pairing QR (#27)
+- Create anonymous Receiver sessions from pinned Service contracts (#26)
+- Open Welcome from a single tray instance (#25)
+- Add Windows architecture and static quality gates (#7)
+- Archive compact SMS popups and motion previews (#6)
+- Add the approved Windows UI prototype and screenshots (#5)
+- init
