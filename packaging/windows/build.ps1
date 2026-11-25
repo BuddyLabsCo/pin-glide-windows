@@ -17,16 +17,17 @@ if (!$env:PINGLIDE_SERVICE_URL -or
     throw 'Set PINGLIDE_SERVICE_URL to the HTTPS Service origin (HTTP is allowed only with -DevelopmentTransport).'
 }
 
-$makensis = (Get-Command makensis.exe -CommandType Application).Source
 $signingDefines = @()
 if (!$Unsigned) {
+    . (Join-Path $PSScriptRoot 'production-policy.ps1')
     $thumbprint = $env:PINGLIDE_SIGNING_THUMBPRINT
     $timestamp = $env:PINGLIDE_TIMESTAMP_URL
-    if ($thumbprint -notmatch '^[0-9a-f]{40}$' -or
-        $timestamp -notmatch '^https?://[a-z0-9.-]+(?::[0-9]+)?(?:/[a-z0-9._/-]*)?$') {
+    if ((Get-ProductionSigningMode $thumbprint $timestamp) -ne 'signed') {
         throw 'Set PINGLIDE_SIGNING_THUMBPRINT and PINGLIDE_TIMESTAMP_URL for a signed release.'
     }
     $signer = (Get-Command $SignTool -CommandType Application).Source
+    $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint"
+    if (!$certificate.HasPrivateKey) { throw 'The signing certificate has no accessible private key.' }
     $signArguments = @('sign', '/sha1', $thumbprint, '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256')
     $verifyArguments = @('verify', '/pa', '/tw')
     $signingDefines = @(
@@ -35,6 +36,7 @@ if (!$Unsigned) {
         "/DVERIFY_ARGS=$($verifyArguments -join ' ')"
     )
 }
+$makensis = (Get-Command makensis.exe -CommandType Application).Source
 
 function Sign-Executable([string] $path) {
     & $signer @signArguments $path
