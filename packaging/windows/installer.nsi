@@ -168,9 +168,13 @@ FunctionEnd
 
 !macro RegisterUninstaller
     !insertmacro WriteDisplayMetadata
+    !insertmacro WriteRegistrationMetadata
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
+!macroend
+
+!macro WriteRegistrationMetadata
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
 !macroend
@@ -299,10 +303,7 @@ Section
             !insertmacro ReadDwordMetadata "NoRepair" $PreviousNoRepair $HadNoRepair
             ClearErrors
             StrCpy $IncompleteEntryChanged 1
-            WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
-            WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
-            WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
-            WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+            !insertmacro WriteRegistrationMetadata
             IfErrors failed
         ${EndIf}
         ClearErrors

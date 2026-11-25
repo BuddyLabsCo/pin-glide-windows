@@ -61,7 +61,10 @@ fn embed_windows_resources() {
         env!("CARGO_PKG_VERSION_PATCH")
     );
     let mut script = format!("LANGUAGE 9, 1\n1 ICON \"{icon}\"\n");
-    for (primary, sublanguage, name) in [
+    let english_fallbacks = (1..=0x03ff)
+        .filter(|&primary| primary != 4)
+        .map(|primary| (primary, 0, "Pin Glide"));
+    for (primary, sublanguage, name) in english_fallbacks.chain([
         (9, 1, "Pin Glide"),
         (4, 0, "鹊信"),
         (4, 1, "鹊信"),
@@ -69,7 +72,7 @@ fn embed_windows_resources() {
         (4, 3, "鹊信"),
         (4, 4, "鹊信"),
         (4, 5, "鹊信"),
-    ] {
+    ]) {
         let lang = primary | (sublanguage << 10);
         script.push_str(&format!(
             r#"

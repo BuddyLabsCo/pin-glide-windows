@@ -114,10 +114,27 @@ unsafe extern "system" fn cleanup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ptr::null_mut;
+    use std::{cell::Cell, ptr::null_mut};
     use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToString};
     use windows::Win32::System::Variant::VT_EMPTY;
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
+
+    thread_local! {
+        static CLEANUP_OBSERVED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    struct TestWindow(HWND);
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            // SAFETY: the test owns this window on the current thread.
+            unsafe {
+                if DestroyWindow(self.0.0) == 0 {
+                    RemoveWindowSubclass(self.0.0, Some(observe_cleanup), 0);
+                }
+            }
+        }
+    }
 
     unsafe extern "system" fn observe_cleanup(
         hwnd: windows_sys::Win32::Foundation::HWND,
@@ -125,9 +142,9 @@ mod tests {
         wparam: WPARAM,
         lparam: LPARAM,
         _: usize,
-        observed: usize,
+        _: usize,
     ) -> LRESULT {
-        // SAFETY: the test owns the window and observation flag until destruction.
+        // SAFETY: the callback executes on the thread owning the live window.
         unsafe {
             if message == WM_NCDESTROY {
                 let cleared =
@@ -147,7 +164,7 @@ mod tests {
                             })
                         })
                     });
-                *(observed as *mut bool) = cleared;
+                CLEANUP_OBSERVED.set(cleared);
             }
             DefSubclassProc(hwnd, message, wparam, lparam)
         }
@@ -174,16 +191,9 @@ mod tests {
             );
             assert!(!hwnd.is_null());
             let hwnd = HWND(hwnd);
-            let mut cleared = false;
-            assert_ne!(
-                SetWindowSubclass(
-                    hwnd.0,
-                    Some(observe_cleanup),
-                    0,
-                    (&raw mut cleared) as usize
-                ),
-                0
-            );
+            let window = TestWindow(hwnd);
+            CLEANUP_OBSERVED.set(false);
+            assert_ne!(SetWindowSubclass(hwnd.0, Some(observe_cleanup), 0, 0), 0);
             let path = r"C:\Program Files\Pin Glide\windows-app.exe";
             set_properties(hwnd, OsStr::new(r"C:\Previous Receiver\windows-app.exe")).unwrap();
             set_properties(hwnd, OsStr::new(path)).unwrap();
@@ -205,8 +215,11 @@ mod tests {
                 assert_eq!(String::from_utf16(&text[..length]).unwrap(), expected);
             }
             drop(store);
-            DestroyWindow(hwnd.0);
-            assert!(cleared, "taskbar properties remained on window destruction");
+            drop(window);
+            assert!(
+                CLEANUP_OBSERVED.get(),
+                "taskbar properties remained on window destruction"
+            );
         }
     }
 }

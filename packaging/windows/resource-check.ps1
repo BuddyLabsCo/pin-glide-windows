@@ -118,15 +118,18 @@ public static class BrandResources {
         } finally { FreeLibrary(module); }
     }
 
-    public static string StringResource(string path, int id, ushort language) {
+    public static Dictionary<ushort, string> StringResources(string path, int id) {
         IntPtr module = Open(path);
         try {
             int block = id / 16 + 1;
-            if (!Languages(module, 6, block).Contains(language)) throw new Exception("Missing exact string language " + language);
-            byte[] bytes = Read(module, 6, block, language);
-            int offset = 0;
-            for (int i = 0; i < id % 16; i++) offset += 2 + U16(bytes, offset) * 2;
-            return Encoding.Unicode.GetString(bytes, offset + 2, U16(bytes, offset) * 2);
+            var strings = new Dictionary<ushort, string>();
+            foreach (ushort language in Languages(module, 6, block)) {
+                byte[] bytes = Read(module, 6, block, language);
+                int offset = 0;
+                for (int i = 0; i < id % 16; i++) offset += 2 + U16(bytes, offset) * 2;
+                strings[language] = Encoding.Unicode.GetString(bytes, offset + 2, U16(bytes, offset) * 2);
+            }
+            return strings;
         } finally { FreeLibrary(module); }
     }
 
@@ -178,16 +181,16 @@ public static class BrandResources {
         } finally { Marshal.ReleaseComObject(store); }
     }
 
-    public static string ResolveName(string reference, string languages) {
+    public static string ResolveName(string reference, string language) {
         string result = null;
         Exception failure = null;
         var thread = new System.Threading.Thread(() => {
             try {
                 uint count;
-                if (!SetThreadPreferredUILanguages(4, languages + "\0\0", out count))
+                if (!SetThreadPreferredUILanguages(4, language + "\0\0", out count))
                     throw new System.ComponentModel.Win32Exception();
-                if (count != languages.Split('\0').Length)
-                    throw new Exception("Could not establish the requested UI language fallback list");
+                if (count != 1)
+                    throw new Exception("Could not establish the requested single UI language");
                 var text = new StringBuilder(256);
                 Marshal.ThrowExceptionForHR(SHLoadIndirectString(reference, text, text.Capacity, IntPtr.Zero));
                 result = text.ToString();
@@ -209,26 +212,39 @@ function Assert-BrandResources([string] $path, [string] $kind) {
     [BrandResources]::AssertIcon($path, $icon, $group)
     $english = 'Pin Glide'
     $chinese = [string][char]0x9e4a + [char]0x4fe1
+    $receiverLanguages = @(1..0x03ff) + @(1033, 1028, 2052, 3076, 4100, 5124)
     if ($kind -eq 'Receiver') {
-        foreach ($language in @(1033, 4, 1028, 2052, 3076, 4100, 5124)) {
-            $expected = if ($language -eq 1033) { $english } else { $chinese }
-            if ([BrandResources]::StringResource($path, 101, $language) -cne $expected) {
+        $strings = [BrandResources]::StringResources($path, 101)
+        foreach ($language in $receiverLanguages) {
+            $expected = if (($language -band 0x03ff) -eq 4) { $chinese } else { $english }
+            if ($strings[[uint16]$language] -cne $expected) {
                 throw "Wrong Receiver string resource for language $language"
             }
         }
-        foreach ($language in '0409', "0411`00409", "0407`00409") {
+        foreach ($language in '0409', '0411', '0407', '0412', '0c0c', '0c0a', '0401', '0419', '0809') {
             if ([BrandResources]::ResolveName("@$path,-101", $language) -cne $english) {
                 throw "Native resource lookup did not select English for $language in $path"
             }
         }
-        foreach ($language in '0404', '0804', '0c04', '1004', '1404') {
-            if ([BrandResources]::ResolveName("@$path,-101", "$language`00409") -cne $chinese) {
+        foreach ($language in '0004', '0404', '0804', '0c04', '1004', '1404', '7804', '7c04') {
+            if ([BrandResources]::ResolveName("@$path,-101", $language) -cne $chinese) {
                 throw "Native resource lookup did not select Chinese for $language in $path"
             }
         }
     }
     $versions = [BrandResources]::Versions($path)
-    $languages = if ($kind -eq 'Receiver') { '0409', '0004', '0404', '0804', '0c04', '1004', '1404' } else { '0409', '0804' }
+    if ($kind -eq 'Receiver') {
+        foreach ($language in $receiverLanguages) {
+            $expected = if (($language -band 0x03ff) -eq 4) { $chinese } else { $english }
+            $prefix = '/VS_VERSION_INFO/StringFileInfo/{0:x4}04b0' -f $language
+            if ($versions["$prefix/ProductName"] -cne $expected -or
+                $versions["$prefix/FileDescription"] -cne $expected) {
+                throw "Missing localized Receiver version metadata for $language in $path"
+            }
+        }
+        return
+    }
+    $languages = '0409', '0804'
     foreach ($language in $languages) {
         $prefix = "/VS_VERSION_INFO/StringFileInfo/$language"
         $expected = if ($language -eq '0409') { $english } else { $chinese }

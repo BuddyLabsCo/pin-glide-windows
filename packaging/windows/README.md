@@ -50,16 +50,16 @@ Shell surfaces that ignore indirect resources may retain the install-time
 fallback or cached names after a language change. Actual Windows 10/11
 Shell rendering and refresh behavior still require desktop verification;
 there is no background synchronization.
-The resource checks use explicit language IDs and native indirect-string
-lookup on dedicated threads with controlled preferred UI language lists.
-They verify English fallback for unsupported Japanese and German languages
-and the Chinese variants without requiring installed display-language packs.
-The host process and Shell can have different preferred language lists;
-actual desktop language selection and caching remain outside these checks.
-For example, on the Chinese development runner a Japanese-only preferred
-list fell back to Chinese, while a Japanese-then-English list selected
-English. The explicit lists make the automated check independent of the
-runner's user language.
+The Receiver embeds English string and version resources at each non-Chinese
+primary LANGID with a neutral sublanguage. This lets native lookup fall back
+within the requested language before consulting other user or system language
+preferences. Chinese primary and specific variant resources remain Chinese.
+Without these primary-language resources, a Japanese-only preference on the
+Chinese development runner resolved to Chinese.
+The resource checks verify the embedded language tables and perform native
+indirect-string lookup on dedicated threads with one requested UI language
+at a time, including Japanese and German without an explicit English
+preference. No additional language packs or desktop rendering gate are needed.
 
 ## Build a development package
 
