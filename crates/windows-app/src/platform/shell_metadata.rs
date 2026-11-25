@@ -9,7 +9,7 @@ use slint::{
 };
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, PROPERTYKEY},
         Storage::EnhancedStorage::{
             PKEY_AppUserModel_ID, PKEY_AppUserModel_RelaunchCommand,
             PKEY_AppUserModel_RelaunchDisplayNameResource, PKEY_AppUserModel_RelaunchIconResource,
@@ -30,14 +30,14 @@ use windows_sys::Win32::{
     },
 };
 
-const KEYS: [windows::Win32::Foundation::PROPERTYKEY; 4] = [
-    PKEY_AppUserModel_RelaunchCommand,
-    PKEY_AppUserModel_RelaunchDisplayNameResource,
-    PKEY_AppUserModel_RelaunchIconResource,
-    PKEY_AppUserModel_ID,
+const PROPERTIES: [(PROPERTYKEY, &str, &str); 4] = [
+    (PKEY_AppUserModel_RelaunchCommand, "\"", "\""),
+    (PKEY_AppUserModel_RelaunchDisplayNameResource, "@", ",-101"),
+    (PKEY_AppUserModel_RelaunchIconResource, "", ",-1"),
+    (PKEY_AppUserModel_ID, "BuddyLabsCo.PinGlide", ""),
 ];
 
-pub(super) fn configure(window: &Window) {
+pub(crate) fn configure_taskbar(window: &Window) {
     window.with_winit_window(|native| {
         let Ok(handle) = native.window_handle() else {
             return;
@@ -62,12 +62,7 @@ fn set_properties(hwnd: HWND, executable: &OsStr) -> windows::core::Result<()> {
             return Err(windows::core::Error::from_thread());
         }
         let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd)?;
-        for (key, prefix, suffix) in [
-            (PKEY_AppUserModel_RelaunchCommand, "\"", "\""),
-            (PKEY_AppUserModel_RelaunchDisplayNameResource, "@", ",-101"),
-            (PKEY_AppUserModel_RelaunchIconResource, "", ",-1"),
-            (PKEY_AppUserModel_ID, "BuddyLabsCo.PinGlide", ""),
-        ] {
+        for (key, prefix, suffix) in PROPERTIES {
             let mut value: Vec<u16> = prefix.encode_utf16().collect();
             if key != PKEY_AppUserModel_ID {
                 value.extend(executable.encode_wide());
@@ -106,7 +101,7 @@ unsafe extern "system" fn cleanup(
     unsafe {
         if message == WM_NCDESTROY {
             if let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(HWND(hwnd)) {
-                for key in KEYS {
+                for (key, _, _) in PROPERTIES {
                     let _ = store.SetValue(&key, &PROPVARIANT::default());
                 }
             }
@@ -121,7 +116,42 @@ mod tests {
     use super::*;
     use std::ptr::null_mut;
     use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToString};
+    use windows::Win32::System::Variant::VT_EMPTY;
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
+
+    unsafe extern "system" fn observe_cleanup(
+        hwnd: windows_sys::Win32::Foundation::HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _: usize,
+        observed: usize,
+    ) -> LRESULT {
+        // SAFETY: the test owns the window and observation flag until destruction.
+        unsafe {
+            if message == WM_NCDESTROY {
+                let cleared =
+                    SHGetPropertyStoreForWindow::<IPropertyStore>(HWND(hwnd)).is_ok_and(|store| {
+                        [
+                            PKEY_AppUserModel_RelaunchCommand,
+                            PKEY_AppUserModel_RelaunchDisplayNameResource,
+                            PKEY_AppUserModel_RelaunchIconResource,
+                            PKEY_AppUserModel_ID,
+                        ]
+                        .iter()
+                        .all(|key| {
+                            store.GetValue(key).is_ok_and(|mut value| {
+                                let empty = value.Anonymous.Anonymous.vt == VT_EMPTY;
+                                let _ = PropVariantClear(&mut value);
+                                empty
+                            })
+                        })
+                    });
+                *(observed as *mut bool) = cleared;
+            }
+            DefSubclassProc(hwnd, message, wparam, lparam)
+        }
+    }
 
     #[test]
     fn native_taskbar_properties_reference_receiver_resources() {
@@ -144,8 +174,18 @@ mod tests {
             );
             assert!(!hwnd.is_null());
             let hwnd = HWND(hwnd);
+            let mut cleared = false;
+            assert_ne!(
+                SetWindowSubclass(
+                    hwnd.0,
+                    Some(observe_cleanup),
+                    0,
+                    (&raw mut cleared) as usize
+                ),
+                0
+            );
             let path = r"C:\Program Files\Pin Glide\windows-app.exe";
-            set_properties(hwnd, OsStr::new(path)).unwrap();
+            set_properties(hwnd, OsStr::new(r"C:\Previous Receiver\windows-app.exe")).unwrap();
             set_properties(hwnd, OsStr::new(path)).unwrap();
             let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd).unwrap();
             for (key, expected) in [
@@ -166,6 +206,7 @@ mod tests {
             }
             drop(store);
             DestroyWindow(hwnd.0);
+            assert!(cleared, "taskbar properties remained on window destruction");
         }
     }
 }

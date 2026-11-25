@@ -15,6 +15,7 @@ pub(crate) use popup::{
     position_popup, prepare_popup, prepare_popup_exit,
 };
 pub(crate) use session::popup_epoch;
+pub(crate) use shell_metadata::configure_taskbar;
 pub use tray::Tray;
 pub(crate) use tray::{capture_shortcut, replace_shortcut};
 pub(crate) use tray::{delivery_status, refresh_tooltip, set_delivery_status};
@@ -86,10 +87,6 @@ pub(crate) fn configure_main_chrome(window: &Window) {
     window.with_winit_window(|native| {
         native.set_enabled_buttons(WindowButtons::MINIMIZE | WindowButtons::CLOSE);
     });
-}
-
-pub(crate) fn configure_taskbar(window: &Window) {
-    shell_metadata::configure(window);
 }
 
 fn win32_result(result: i32) -> io::Result<()> {

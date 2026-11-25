@@ -76,8 +76,20 @@ function Invoke-Installer($executable, $arguments = '/S') {
 }
 
 function Invoke-Uninstaller {
+    Clear-UninstallMarkers
     Copy-Item -LiteralPath $uninstaller -Destination $uninstallerCopy -Force
-    Invoke-Installer $uninstallerCopy "/S _?=$installation"
+    $exitCode = Invoke-Installer $uninstallerCopy "/S _?=$installation"
+    Assert (Test-Path -LiteralPath (Join-Path $fixture 'language.txt')) 'Uninstaller did not write a fresh language selection'
+    $exitCode
+}
+
+function Clear-UninstallMarkers {
+    foreach ($name in 'language.txt', 'failure.txt') {
+        $marker = Join-Path $fixture $name
+        if (Test-Path -LiteralPath $marker) {
+            Remove-Item -LiteralPath $marker
+        }
+    }
 }
 
 function Assert-Registered {
@@ -96,6 +108,7 @@ function Assert-LocalizedMetadata($language) {
     $shell = New-Object -ComObject WScript.Shell
     $link = $shell.CreateShortcut($shortcut)
     Assert ($link.TargetPath -eq $binary -and !$link.Arguments) 'Start shortcut does not launch the installed Receiver'
+    Assert ($link.IconLocation -eq "$binary,0") 'Start shortcut does not use the Receiver icon'
     Assert-BrandResources $uninstaller Uninstaller
     Assert-InstallerVersion $uninstaller (Get-ItemPropertyValue -LiteralPath $uninstallKey -Name DisplayVersion)
 }
@@ -110,6 +123,10 @@ function Assert-Uninstalled {
     }
     foreach ($key in $runKey, $approvalKey) {
         Assert ($null -eq (Get-Item -LiteralPath $key).GetValue($product)) "Uninstall left the $product value in $key"
+    }
+    $ini = Join-Path $fixture 'desktop.ini'
+    if (Test-Path -LiteralPath $ini) {
+        Assert (!(Select-String -LiteralPath $ini -SimpleMatch "$product.lnk=")) 'Uninstall left the localized Shell registration'
     }
 }
 
@@ -126,6 +143,17 @@ function Assert-LegacyMetadata {
     Assert ($null -eq (Get-Item -LiteralPath $uninstallKey).GetValue('DisplayIcon')) 'Failed upgrade left an icon reference'
     Assert ($null -eq [BrandResources]::ShortcutResource($shortcut)) 'Failed upgrade left localized shortcut metadata'
     Assert ((Get-FileHash -LiteralPath $shortcut).Hash -eq $legacyShortcutHash) 'Failed upgrade modified the existing shortcut'
+}
+
+function Get-UninstallMetadata {
+    $key = Get-Item -LiteralPath $uninstallKey
+    try {
+        foreach ($name in ($key.GetValueNames() | Sort-Object)) {
+            [pscustomobject]@{ Name = $name; Kind = [string]$key.GetValueKind($name); Value = $key.GetValue($name) }
+        }
+    } finally {
+        $key.Dispose()
+    }
 }
 
 try {
@@ -291,13 +319,51 @@ try {
     Assert-Version $null
     Assert-LegacyMetadata
 
+    New-ItemProperty -LiteralPath $uninstallKey -Name DisplayVersion -Value '1.2.3' | Out-Null
+    New-ItemProperty -LiteralPath $uninstallKey -Name ExtraMetadata -Value 'keep me' | Out-Null
+    Set-ItemProperty -LiteralPath $uninstallKey -Name Publisher -Value 'Previous publisher'
+    Set-ItemProperty -LiteralPath $uninstallKey -Name NoModify -Value 0
+    Remove-ItemProperty -LiteralPath $uninstallKey -Name NoRepair
+    foreach ($command in @($null, '')) {
+        if ($null -eq $command) {
+            Remove-ItemProperty -LiteralPath $uninstallKey -Name UninstallString
+        } else {
+            New-ItemProperty -LiteralPath $uninstallKey -Name UninstallString -Value $command -Force | Out-Null
+        }
+        $previousMetadata = Get-UninstallMetadata | ConvertTo-Json -Compress
+        $locked = [IO.File]::Open($binary, 'Open', 'Read', 'Read')
+        try {
+            Assert ((Invoke-Installer $second) -ne 0) 'Upgrade succeeded with incomplete metadata and a locked Receiver'
+        } finally {
+            $locked.Dispose()
+        }
+        Assert ((Get-UninstallMetadata | ConvertTo-Json -Compress) -ceq $previousMetadata) 'Failed upgrade did not restore incomplete uninstall metadata exactly'
+        Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $firstHash) 'Failed upgrade replaced the Receiver'
+        Assert ((Get-FileHash -LiteralPath $uninstaller).Hash -eq $oldUninstallerHash) 'Failed upgrade replaced the uninstaller'
+        Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq $oldRun) 'Failed upgrade changed startup'
+        Assert-LegacyMetadata
+        Assert-Data
+    }
+
     Assert ((Invoke-Installer $second) -eq 0) 'Upgrade failed'
     Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $secondHash) 'Upgrade did not replace the Receiver'
     Assert ((Get-FileHash -LiteralPath $uninstaller).Hash -ne $oldUninstallerHash) 'Upgrade did not replace the uninstaller'
     Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq "`"$binary`" --startup") 'Upgrade did not migrate startup'
     Assert-Version '2.0.0'
+    Assert-Registered
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name Publisher) -eq 'BuddyLabsCo') 'Upgrade did not repair incomplete publisher metadata'
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name NoModify) -eq 1) 'Upgrade did not repair incomplete NoModify metadata'
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name NoRepair) -eq 1) 'Upgrade did not repair incomplete NoRepair metadata'
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name ExtraMetadata) -eq 'keep me') 'Upgrade lost unrelated metadata'
     Assert-LocalizedMetadata 2052
     Assert-Data
+    $previousIndirect = "@$receiverPath,-101"
+    $previousIcon = "$receiverPath,0"
+    $previousShortcutResource = "$receiverPath,101"
+    Set-ItemProperty -LiteralPath $uninstallKey -Name DisplayName_Localized -Value $previousIndirect
+    Set-ItemProperty -LiteralPath $uninstallKey -Name DisplayIcon -Value $previousIcon
+    Assert ([BrandResources]::SHSetLocalizedName($shortcut, $receiverPath, 101) -eq 0) 'Could not seed a distinct previous localized shortcut'
+    $previousShortcutHash = (Get-FileHash -LiteralPath $shortcut).Hash
     $locked = [IO.File]::Open($binary, 'Open', 'Read', 'Read')
     try {
         Assert ((Invoke-Installer $first) -ne 0) 'Downgrade reported success with a locked Receiver'
@@ -305,9 +371,10 @@ try {
         $locked.Dispose()
     }
     Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name DisplayName) -ceq ([string][char]0x9e4a + [char]0x4fe1)) 'Failed replacement changed localized fallback name'
-    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name DisplayName_Localized) -eq "@$binary,-101") 'Failed replacement changed localized reference'
-    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name DisplayIcon) -eq "$binary,0") 'Failed replacement changed icon reference'
-    Assert ([BrandResources]::ShortcutResource($shortcut) -eq "$binary,101") 'Failed replacement changed localized shortcut'
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name DisplayName_Localized) -eq $previousIndirect) 'Failed replacement changed localized reference'
+    Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name DisplayIcon) -eq $previousIcon) 'Failed replacement changed icon reference'
+    Assert ([BrandResources]::ShortcutResource($shortcut) -eq $previousShortcutResource) 'Failed replacement changed localized shortcut'
+    Assert ((Get-FileHash -LiteralPath $shortcut).Hash -eq $previousShortcutHash) 'Failed replacement changed shortcut bytes'
     Assert-Version '2.0.0'
     Assert-Data
     Remove-ItemProperty -LiteralPath $runKey -Name $product
@@ -315,6 +382,20 @@ try {
     Assert ($null -eq (Get-Item -LiteralPath $runKey).GetValue($product)) 'Upgrade re-enabled startup'
     Assert ([Convert]::ToBase64String((Get-ItemPropertyValue -LiteralPath $approvalKey -Name $product)) -eq
         [Convert]::ToBase64String($approval)) 'Upgrade changed Windows Startup Apps approval'
+    Assert-LocalizedMetadata 2052
+
+    $desktopIni = Join-Path $fixture 'desktop.ini'
+    $locked = [IO.File]::Open($desktopIni, 'Open', 'Read', 'Read')
+    try {
+        Assert ((Invoke-Uninstaller) -ne 0) 'Uninstall succeeded while localized shortcut cleanup was blocked'
+        Assert (Test-Path -LiteralPath $shortcut) 'Blocked localized cleanup removed the shortcut'
+        Assert (Test-Path -LiteralPath $uninstaller) 'Blocked localized cleanup removed the uninstaller'
+        Assert-Registered
+        Assert-Data
+    } finally {
+        $locked.Dispose()
+    }
+    Assert ([BrandResources]::ShortcutResource($shortcut) -eq "$binary,101") 'Blocked localized cleanup lost the original resource'
 
     New-ItemProperty -LiteralPath $runKey -Name $product -Value "`"$binary`" --startup" | Out-Null
     foreach ($name in 'receiver.new', 'uninstall.new', 'uninstall.previous', 'shortcut.previous') {
@@ -338,6 +419,7 @@ try {
         Remove-Item -LiteralPath $registryBlocker -ErrorAction SilentlyContinue
     }
     Assert (!(Test-Path -LiteralPath $shortcut)) 'Blocked uninstall did not exercise a missing shortcut'
+    Assert ($null -eq [BrandResources]::ShortcutResource($shortcut)) 'Uninstall left the localized shortcut registration'
     Assert ((Invoke-Installer $second) -eq 0) 'Setup could not repair the partial uninstall'
     Assert (Test-Path -LiteralPath $shortcut) 'Setup did not restore the Start menu shortcut'
     Assert-Registered
@@ -378,6 +460,7 @@ try {
 
     Assert ((Invoke-Installer $second) -eq 0) 'Reinstall failed'
     Assert (!(Test-Path -LiteralPath $data)) 'Reinstall restored old Receiver data'
+    Assert ([BrandResources]::SHRemoveLocalizedName($shortcut) -eq 0) 'Could not seed a shortcut without a localized name'
     New-ItemProperty -LiteralPath $approvalKey -Name $product -PropertyType Binary -Value $approval | Out-Null
     Remove-Item -LiteralPath $uninstallKey
     Assert ((Invoke-Uninstaller) -eq 0) 'Uninstall failed with an already absent Apps & features entry'
@@ -385,7 +468,9 @@ try {
 
     Assert ((Invoke-Installer $second) -eq 0) 'Install for the registered uninstall command failed'
     $registered = (Get-ItemPropertyValue -LiteralPath $uninstallKey -Name UninstallString).Trim('"')
+    Clear-UninstallMarkers
     Assert ((Invoke-Installer $registered) -eq 0) 'The registered uninstall command failed to launch'
+    Assert ((Get-Content -LiteralPath (Join-Path $fixture 'language.txt') -Raw) -eq '2052') 'Registered uninstaller did not select its language'
     Assert-Uninstalled
     Write-Output 'Passed: origin validation, actual PE brand resources, language selection, localized metadata, install, rollback, upgrade, partial repair, uninstall retry, and clean reinstall.'
 } finally {

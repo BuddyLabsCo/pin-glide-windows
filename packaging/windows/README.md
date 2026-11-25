@@ -50,11 +50,16 @@ Shell surfaces that ignore indirect resources may retain the install-time
 fallback or cached names after a language change. Actual Windows 10/11
 Shell rendering and refresh behavior still require desktop verification;
 there is no background synchronization.
-On the development runner, PowerShell's native indirect-string lookup
-resolved the English resource even with a Chinese user UI language
-(the PowerShell thread initially reported English). The resource checks
-therefore verify explicit language IDs and that indirect references resolve,
-not the language chosen by the host process or Shell.
+The resource checks use explicit language IDs and native indirect-string
+lookup on dedicated threads with controlled preferred UI language lists.
+They verify English fallback for unsupported Japanese and German languages
+and the Chinese variants without requiring installed display-language packs.
+The host process and Shell can have different preferred language lists;
+actual desktop language selection and caching remain outside these checks.
+For example, on the Chinese development runner a Japanese-only preferred
+list fell back to Chinese, while a Japanese-then-English list selected
+English. The explicit lists make the automated check independent of the
+runner's user language.
 
 ## Build a development package
 

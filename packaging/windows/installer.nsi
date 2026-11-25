@@ -31,7 +31,9 @@ CRCCheck force
 !define FILE_DISPOSITION_INFO 4
 !define RRF_RT_REG_SZ 2
 !define RRF_REG_SZ_64KEY_NOEXPAND 0x10010002
+!define RRF_REG_DWORD_64KEY 0x10010
 !define KEY_WOW64_64KEY 0x100
+!define KEY_QUERY_VALUE_64KEY 0x101
 !define MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH 9
 !define BRAND_ICON "..\..\crates\windows-app\ui\assets\app-icon.ico"
 !define PRODUCT_RESOURCE 101
@@ -47,7 +49,6 @@ Var ShortcutCreated
 Var UninstallEntryCreated
 Var PreviousVersion
 Var HadVersion
-Var VersionChanged
 Var PreviousName
 Var HadName
 Var PreviousLocalizedName
@@ -55,6 +56,15 @@ Var HadLocalizedName
 Var PreviousIcon
 Var HadIcon
 Var MetadataChanged
+Var PreviousCommand
+Var HadCommand
+Var PreviousPublisher
+Var HadPublisher
+Var PreviousNoModify
+Var HadNoModify
+Var PreviousNoRepair
+Var HadNoRepair
+Var IncompleteEntryChanged
 Var ShortcutLocalized
 Var PreviousShortcutModule
 Var PreviousShortcutId
@@ -191,6 +201,25 @@ FunctionEnd
     ${EndIf}
 !macroend
 
+!macro ReadDwordMetadata value previous had
+    System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "${value}", i ${RRF_REG_DWORD_64KEY}, p 0, *i .r2, *i 4) i.r0'
+    ${If} $0 == 0
+        StrCpy ${previous} $2
+        StrCpy ${had} 1
+    ${ElseIf} $0 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
+        Goto failed
+    ${EndIf}
+!macroend
+
+!macro RestoreDwordMetadata value previous had
+    ${If} ${had} == 1
+        WriteRegDWORD HKCU "${UNINSTALL_KEY}" "${value}" "${previous}"
+    ${Else}
+        DeleteRegValue HKCU "${UNINSTALL_KEY}" "${value}"
+    ${EndIf}
+!macroend
+
 !macro DeleteStartupValue key
     System::Call 'advapi32::RegDeleteKeyValueW(p ${HKCU_HANDLE}, w "${key}", w "${PRODUCT_NAME}") i.r0'
     ${If} $0 != 0
@@ -249,12 +278,7 @@ Section
     System::Call 'shell32::SHSetLocalizedName(w "${SHORTCUT}", w "$INSTDIR\${RECEIVER_EXE}", i ${PRODUCT_RESOURCE}) i.r0'
     StrCmp $0 0 0 failed
     StrCpy $ShortcutLocalized 1
-    IntOp $1 ${NSIS_MAX_STRLEN} * 2
-    System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "UninstallString", i ${RRF_REG_SZ_64KEY_NOEXPAND}, p 0, w .r2, *i r1) i.r0'
-    ${If} $0 == 0
-    ${AndIf} $2 == ""
-        StrCpy $0 ${ERROR_FILE_NOT_FOUND}
-    ${EndIf}
+    System::Call 'advapi32::RegOpenKeyExW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", i 0, i ${KEY_QUERY_VALUE_64KEY}, *p .r1) i.r0'
     ${If} $0 == ${ERROR_FILE_NOT_FOUND}
     ${OrIf} $0 == ${ERROR_PATH_NOT_FOUND}
         StrCpy $UninstallEntryCreated 1
@@ -263,15 +287,28 @@ Section
     ${ElseIf} $0 != 0
         Goto failed
     ${Else}
+        System::Call 'advapi32::RegCloseKey(p r1)'
+        !insertmacro ReadMetadata "UninstallString" $PreviousCommand $HadCommand
         !insertmacro ReadMetadata "DisplayVersion" $PreviousVersion $HadVersion
         !insertmacro ReadMetadata "DisplayName" $PreviousName $HadName
         !insertmacro ReadMetadata "DisplayName_Localized" $PreviousLocalizedName $HadLocalizedName
         !insertmacro ReadMetadata "DisplayIcon" $PreviousIcon $HadIcon
+        ${If} $PreviousCommand == ""
+            !insertmacro ReadMetadata "Publisher" $PreviousPublisher $HadPublisher
+            !insertmacro ReadDwordMetadata "NoModify" $PreviousNoModify $HadNoModify
+            !insertmacro ReadDwordMetadata "NoRepair" $PreviousNoRepair $HadNoRepair
+            ClearErrors
+            StrCpy $IncompleteEntryChanged 1
+            WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
+            WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
+            WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
+            WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+            IfErrors failed
+        ${EndIf}
         ClearErrors
         StrCpy $MetadataChanged 1
         !insertmacro WriteDisplayMetadata
         IfErrors failed
-        StrCpy $VersionChanged 1
         WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
         IfErrors failed
     ${EndIf}
@@ -291,6 +328,13 @@ failed:
         !insertmacro RestoreMetadata "DisplayName" $PreviousName $HadName
         !insertmacro RestoreMetadata "DisplayName_Localized" $PreviousLocalizedName $HadLocalizedName
         !insertmacro RestoreMetadata "DisplayIcon" $PreviousIcon $HadIcon
+        !insertmacro RestoreMetadata "DisplayVersion" $PreviousVersion $HadVersion
+    ${EndIf}
+    ${If} $IncompleteEntryChanged == 1
+        !insertmacro RestoreMetadata "UninstallString" $PreviousCommand $HadCommand
+        !insertmacro RestoreMetadata "Publisher" $PreviousPublisher $HadPublisher
+        !insertmacro RestoreDwordMetadata "NoModify" $PreviousNoModify $HadNoModify
+        !insertmacro RestoreDwordMetadata "NoRepair" $PreviousNoRepair $HadNoRepair
     ${EndIf}
     ${If} $ShortcutLocalized == 1
         ${If} $PreviousShortcutModule != ""
@@ -306,13 +350,6 @@ failed:
         System::Call 'kernel32::CopyFileW(w "$INSTDIR\${SHORTCUT_BACKUP}", w "${SHORTCUT}", i 0) i.r0'
         ${If} $0 == 0
             StrCpy $RollbackFailed 1
-        ${EndIf}
-    ${EndIf}
-    ${If} $VersionChanged == 1
-        ${If} $HadVersion == 1
-            WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "$PreviousVersion"
-        ${Else}
-            DeleteRegValue HKCU "${UNINSTALL_KEY}" "DisplayVersion"
         ${EndIf}
     ${EndIf}
     ${If} $RunChanged == 1
@@ -409,6 +446,14 @@ FunctionEnd
 
 Section "Uninstall"
     Call un.RequireStopped
+    ${If} ${FileExists} "${SHORTCUT}"
+        ; The Shell returns S_OK when the existing shortcut has no localized name.
+        System::Call 'shell32::SHRemoveLocalizedName(w "${SHORTCUT}") i.r0'
+        StrCmp $0 0 0 failed
+        ClearErrors
+        Delete "${SHORTCUT}"
+        IfErrors failed
+    ${EndIf}
     System::Call 'kernel32::GetFileAttributesW(w "${DATA_DIR}") i.r0 ?e'
     Pop $1
     ${If} $0 == -1
@@ -433,10 +478,6 @@ Section "Uninstall"
     Delete "$INSTDIR\${UNINSTALL_STAGE}"
     Delete "$INSTDIR\${UNINSTALL_BACKUP}"
     Delete "$INSTDIR\${SHORTCUT_BACKUP}"
-    ${If} ${FileExists} "${SHORTCUT}"
-        System::Call 'shell32::SHRemoveLocalizedName(w "${SHORTCUT}") i.r0'
-        Delete "${SHORTCUT}"
-    ${EndIf}
     !insertmacro DeleteStartupValue "${RUN_KEY}"
     !insertmacro DeleteStartupValue "${APPROVAL_KEY}"
     IfErrors failed

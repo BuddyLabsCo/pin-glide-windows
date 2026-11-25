@@ -33,8 +33,12 @@ public static class BrandResources {
     static extern int SHGetLocalizedName(string path, StringBuilder module, int length, out int id);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     public static extern int SHRemoveLocalizedName(string path);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SHSetLocalizedName(string path, string module, int id);
     [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
     static extern int SHLoadIndirectString(string source, StringBuilder text, int length, IntPtr reserved);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool SetThreadPreferredUILanguages(uint flags, string languages, out uint count);
     [StructLayout(LayoutKind.Sequential)]
     struct PropertyKey { public Guid format; public int id; }
     [StructLayout(LayoutKind.Explicit, Size = 24)]
@@ -174,10 +178,25 @@ public static class BrandResources {
         } finally { Marshal.ReleaseComObject(store); }
     }
 
-    public static string ResolveName(string reference) {
-        var text = new StringBuilder(256);
-        Marshal.ThrowExceptionForHR(SHLoadIndirectString(reference, text, text.Capacity, IntPtr.Zero));
-        return text.ToString();
+    public static string ResolveName(string reference, string languages) {
+        string result = null;
+        Exception failure = null;
+        var thread = new System.Threading.Thread(() => {
+            try {
+                uint count;
+                if (!SetThreadPreferredUILanguages(4, languages + "\0\0", out count))
+                    throw new System.ComponentModel.Win32Exception();
+                if (count != languages.Split('\0').Length)
+                    throw new Exception("Could not establish the requested UI language fallback list");
+                var text = new StringBuilder(256);
+                Marshal.ThrowExceptionForHR(SHLoadIndirectString(reference, text, text.Capacity, IntPtr.Zero));
+                result = text.ToString();
+            } catch (Exception error) { failure = error; }
+        });
+        thread.Start();
+        thread.Join();
+        if (failure != null) throw failure;
+        return result;
     }
 }
 '@
@@ -197,8 +216,15 @@ function Assert-BrandResources([string] $path, [string] $kind) {
                 throw "Wrong Receiver string resource for language $language"
             }
         }
-        if ([BrandResources]::ResolveName("@$path,-101") -cnotin $english, $chinese) {
-            throw "Native resource reference did not resolve in $path"
+        foreach ($language in '0409', "0411`00409", "0407`00409") {
+            if ([BrandResources]::ResolveName("@$path,-101", $language) -cne $english) {
+                throw "Native resource lookup did not select English for $language in $path"
+            }
+        }
+        foreach ($language in '0404', '0804', '0c04', '1004', '1404') {
+            if ([BrandResources]::ResolveName("@$path,-101", "$language`00409") -cne $chinese) {
+                throw "Native resource lookup did not select Chinese for $language in $path"
+            }
         }
     }
     $versions = [BrandResources]::Versions($path)
