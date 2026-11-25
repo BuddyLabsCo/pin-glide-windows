@@ -17,6 +17,7 @@ CRCCheck force
 !define RECEIVER_STAGE "receiver.new"
 !define UNINSTALL_STAGE "uninstall.new"
 !define UNINSTALL_BACKUP "uninstall.previous"
+!define SHORTCUT_BACKUP "shortcut.previous"
 !define /ifndef RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define /ifndef APPROVAL_KEY "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
@@ -32,6 +33,8 @@ CRCCheck force
 !define RRF_REG_SZ_64KEY_NOEXPAND 0x10010002
 !define KEY_WOW64_64KEY 0x100
 !define MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH 9
+!define BRAND_ICON "..\..\crates\windows-app\ui\assets\app-icon.ico"
+!define PRODUCT_RESOURCE 101
 
 Var HasReceiver
 Var HasUninstaller
@@ -45,19 +48,38 @@ Var UninstallEntryCreated
 Var PreviousVersion
 Var HadVersion
 Var VersionChanged
+Var PreviousName
+Var HadName
+Var PreviousLocalizedName
+Var HadLocalizedName
+Var PreviousIcon
+Var HadIcon
+Var MetadataChanged
+Var ShortcutLocalized
+Var PreviousShortcutModule
+Var PreviousShortcutId
+Var ShortcutBackedUp
 
-Name "${PRODUCT_NAME}"
+!include /CHARSET=UTF8 "installer-language.nsh"
+Name "$(ProductName)"
 OutFile "${OUTPUT}"
 InstallDir "${INSTALL_DIR}"
+Icon "${BRAND_ICON}"
+UninstallIcon "${BRAND_ICON}"
 VIProductVersion "${FILE_VERSION}"
 VIFileVersion "${FILE_VERSION}"
-VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
-VIAddVersionKey "CompanyName" "BuddyLabsCo"
-VIAddVersionKey "FileDescription" "${PRODUCT_NAME} Setup"
-VIAddVersionKey "LegalCopyright" ""
-VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
-VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
+!macro VersionKeys language name description
+    VIAddVersionKey /LANG=${language} "ProductName" "${name}"
+    VIAddVersionKey /LANG=${language} "CompanyName" "BuddyLabsCo"
+    VIAddVersionKey /LANG=${language} "FileDescription" "${description}"
+    VIAddVersionKey /LANG=${language} "LegalCopyright" ""
+    VIAddVersionKey /LANG=${language} "ProductVersion" "${PRODUCT_VERSION}"
+    VIAddVersionKey /LANG=${language} "FileVersion" "${PRODUCT_VERSION}"
+!macroend
+!insertmacro VersionKeys ${LANG_ENGLISH} "Pin Glide" "Pin Glide Setup"
+!insertmacro LocalizedVersionKeys
 
+!uninstfinalize 'powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File "resource-check.ps1" -Executable "%1" -Kind Uninstaller' = 0
 !ifdef SIGNTOOL
     !uninstfinalize '"${SIGNTOOL}" ${SIGN_ARGS} "%1"' = 0
     !uninstfinalize '"${SIGNTOOL}" ${VERIFY_ARGS} "%1"' = 0
@@ -68,6 +90,11 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 !macro Fail message
+    !ifdef TEST_UI_LANGUAGE
+        FileOpen $9 "${USER_FILES}\failure.txt" w
+        FileWriteUTF16LE $9 "${message}"
+        FileClose $9
+    !endif
     MessageBox MB_OK|MB_ICONSTOP "${message}" /SD IDOK
     SetErrorLevel 2
     Abort
@@ -75,11 +102,12 @@ UninstPage instfiles
 
 !macro Initialize prefix
 Function ${prefix}.onInit
+    !insertmacro SelectLanguage
     SetShellVarContext current
     SetRegView 64
     ${If} "${USER_FILES}" == ""
     ${OrIf} "${MENU_DIR}" == ""
-        !insertmacro Fail "Windows could not locate the current user's folders."
+        !insertmacro Fail "$(MissingFolders)"
     ${EndIf}
     StrCpy $INSTDIR "${INSTALL_DIR}"
 FunctionEnd
@@ -111,13 +139,13 @@ Function ${prefix}RequireStopped
     System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Global\BuddyLabsCo.PinGlide.$0.Instance") p.r1 ?e'
     Pop $2
     ${If} $2 == ${ERROR_ALREADY_EXISTS}
-        !insertmacro Fail "Exit Pin Glide from its tray menu, then try again."
+        !insertmacro Fail "$(ReceiverRunning)"
     ${EndIf}
     ${If} $1 != 0
         Return
     ${EndIf}
 unavailable:
-    !insertmacro Fail "Setup could not check whether Pin Glide is running."
+    !insertmacro Fail "$(InstanceUnavailable)"
 FunctionEnd
 !macroend
 
@@ -129,12 +157,38 @@ FunctionEnd
 !macroend
 
 !macro RegisterUninstaller
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
+    !insertmacro WriteDisplayMetadata
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+!macroend
+
+!macro WriteDisplayMetadata
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "$(ProductName)"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName_Localized" "@$INSTDIR\${RECEIVER_EXE},-${PRODUCT_RESOURCE}"
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${RECEIVER_EXE},0"
+!macroend
+
+!macro ReadMetadata value previous had
+    IntOp $1 ${NSIS_MAX_STRLEN} * 2
+    System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "${value}", i ${RRF_REG_SZ_64KEY_NOEXPAND}, p 0, w .r2, *i r1) i.r0'
+    ${If} $0 == 0
+        StrCpy ${previous} $2
+        StrCpy ${had} 1
+    ${ElseIf} $0 != ${ERROR_FILE_NOT_FOUND}
+    ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
+        Goto failed
+    ${EndIf}
+!macroend
+
+!macro RestoreMetadata value previous had
+    ${If} ${had} == 1
+        WriteRegStr HKCU "${UNINSTALL_KEY}" "${value}" "${previous}"
+    ${Else}
+        DeleteRegValue HKCU "${UNINSTALL_KEY}" "${value}"
+    ${EndIf}
 !macroend
 
 !macro DeleteStartupValue key
@@ -150,7 +204,7 @@ Section
     ${IfNot} ${IsNativeAMD64}
     ${OrIfNot} ${AtLeastWin10}
     ${OrIfNot} ${AtLeastBuild} 19045
-        !insertmacro Fail "Pin Glide requires x64 Windows 10 22H2 or Windows 11."
+        !insertmacro Fail "$(UnsupportedWindows)"
     ${EndIf}
     Call RequireStopped
     ${If} ${FileExists} "$INSTDIR\${RECEIVER_EXE}"
@@ -178,9 +232,23 @@ Section
 
     ${IfNot} ${FileExists} "${SHORTCUT}"
         StrCpy $ShortcutCreated 1
-        CreateShortCut "${SHORTCUT}" "$INSTDIR\${RECEIVER_EXE}"
-        IfErrors failed
+    ${Else}
+        System::Call 'kernel32::CopyFileW(w "${SHORTCUT}", w "$INSTDIR\${SHORTCUT_BACKUP}", i 0) i.r0'
+        StrCmp $0 0 failed
+        StrCpy $ShortcutBackedUp 1
     ${EndIf}
+    System::Call 'shell32::SHGetLocalizedName(w "${SHORTCUT}", w .r2, i ${NSIS_MAX_STRLEN}, *i .r3) i.r0'
+    ${If} $0 == 0
+        StrCpy $PreviousShortcutModule $2
+        StrCpy $PreviousShortcutId $3
+    ${EndIf}
+    CreateShortCut "${SHORTCUT}" "$INSTDIR\${RECEIVER_EXE}" "" "$INSTDIR\${RECEIVER_EXE}" 0
+    IfErrors failed
+    Call SetShortcutIdentity
+    IfErrors failed
+    System::Call 'shell32::SHSetLocalizedName(w "${SHORTCUT}", w "$INSTDIR\${RECEIVER_EXE}", i ${PRODUCT_RESOURCE}) i.r0'
+    StrCmp $0 0 0 failed
+    StrCpy $ShortcutLocalized 1
     IntOp $1 ${NSIS_MAX_STRLEN} * 2
     System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "UninstallString", i ${RRF_REG_SZ_64KEY_NOEXPAND}, p 0, w .r2, *i r1) i.r0'
     ${If} $0 == 0
@@ -195,19 +263,17 @@ Section
     ${ElseIf} $0 != 0
         Goto failed
     ${Else}
-        IntOp $1 ${NSIS_MAX_STRLEN} * 2
-        System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "DisplayVersion", i ${RRF_REG_SZ_64KEY_NOEXPAND}, p 0, w .r2, *i r1) i.r0'
-        ${If} $0 == 0
-            StrCpy $PreviousVersion $2
-            StrCpy $HadVersion 1
-        ${ElseIf} $0 != ${ERROR_FILE_NOT_FOUND}
-        ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
-            Goto failed
-        ${EndIf}
+        !insertmacro ReadMetadata "DisplayVersion" $PreviousVersion $HadVersion
+        !insertmacro ReadMetadata "DisplayName" $PreviousName $HadName
+        !insertmacro ReadMetadata "DisplayName_Localized" $PreviousLocalizedName $HadLocalizedName
+        !insertmacro ReadMetadata "DisplayIcon" $PreviousIcon $HadIcon
         ClearErrors
-        WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
+        StrCpy $MetadataChanged 1
+        !insertmacro WriteDisplayMetadata
         IfErrors failed
         StrCpy $VersionChanged 1
+        WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
+        IfErrors failed
     ${EndIf}
 
     !insertmacro Move "${UNINSTALL_STAGE}" "${UNINSTALL_EXE}"
@@ -216,10 +282,32 @@ Section
     !insertmacro Move "${RECEIVER_STAGE}" "${RECEIVER_EXE}"
     StrCmp $0 0 failed
     Delete "$INSTDIR\${UNINSTALL_BACKUP}"
+    Delete "$INSTDIR\${SHORTCUT_BACKUP}"
     Goto done
 
 failed:
     ClearErrors
+    ${If} $MetadataChanged == 1
+        !insertmacro RestoreMetadata "DisplayName" $PreviousName $HadName
+        !insertmacro RestoreMetadata "DisplayName_Localized" $PreviousLocalizedName $HadLocalizedName
+        !insertmacro RestoreMetadata "DisplayIcon" $PreviousIcon $HadIcon
+    ${EndIf}
+    ${If} $ShortcutLocalized == 1
+        ${If} $PreviousShortcutModule != ""
+            System::Call 'shell32::SHSetLocalizedName(w "${SHORTCUT}", w "$PreviousShortcutModule", i $PreviousShortcutId) i.r0'
+        ${Else}
+            System::Call 'shell32::SHRemoveLocalizedName(w "${SHORTCUT}") i.r0'
+        ${EndIf}
+        ${If} $0 != 0
+            StrCpy $RollbackFailed 1
+        ${EndIf}
+    ${EndIf}
+    ${If} $ShortcutBackedUp == 1
+        System::Call 'kernel32::CopyFileW(w "$INSTDIR\${SHORTCUT_BACKUP}", w "${SHORTCUT}", i 0) i.r0'
+        ${If} $0 == 0
+            StrCpy $RollbackFailed 1
+        ${EndIf}
+    ${EndIf}
     ${If} $VersionChanged == 1
         ${If} $HadVersion == 1
             WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "$PreviousVersion"
@@ -251,6 +339,7 @@ failed:
     Delete "$INSTDIR\${UNINSTALL_STAGE}"
     ${If} $RollbackFailed != 1
         Delete "$INSTDIR\${UNINSTALL_BACKUP}"
+        Delete "$INSTDIR\${SHORTCUT_BACKUP}"
     ${EndIf}
     ${If} $UninstallEntryCreated == 1
         DeleteRegKey HKCU "${UNINSTALL_KEY}"
@@ -264,11 +353,33 @@ failed:
         RMDir "$INSTDIR"
     ${EndIf}
     ${If} $RollbackFailed == 1
-        !insertmacro Fail "Pin Glide could not be installed and setup could not restore the previous installation completely."
+        !insertmacro Fail "$(RollbackFailure)"
     ${EndIf}
-    !insertmacro Fail "Pin Glide could not be installed. Close programs using the installation files and try again."
+    !insertmacro Fail "$(InstallFailure)"
 done:
 SectionEnd
+
+Function SetShortcutIdentity
+    System::Call 'shell32::SHGetPropertyStoreFromParsingName(w "${SHORTCUT}", p 0, i 2, g "{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}", *p .r1) i.r0'
+    ${If} $0 != 0
+        SetErrors
+        Return
+    ${EndIf}
+    System::Call '*(&g16 "{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", i 5) p.r2'
+    System::Call '*(&w32 "BuddyLabsCo.PinGlide") p.r3'
+    System::Call '*(i 31, i 0, p r3, i 0) p.r4'
+    System::Call '$1->6(p r2, p r4) i.r0'
+    ${If} $0 == 0
+        System::Call '$1->7() i.r0'
+    ${EndIf}
+    System::Call '$1->2()'
+    System::Free $4
+    System::Free $3
+    System::Free $2
+    ${If} $0 != 0
+        SetErrors
+    ${EndIf}
+FunctionEnd
 
 Function UpdateStartup
     IntOp $1 ${NSIS_MAX_STRLEN} * 2
@@ -321,7 +432,11 @@ Section "Uninstall"
     Delete "$INSTDIR\${RECEIVER_STAGE}"
     Delete "$INSTDIR\${UNINSTALL_STAGE}"
     Delete "$INSTDIR\${UNINSTALL_BACKUP}"
-    Delete "${SHORTCUT}"
+    Delete "$INSTDIR\${SHORTCUT_BACKUP}"
+    ${If} ${FileExists} "${SHORTCUT}"
+        System::Call 'shell32::SHRemoveLocalizedName(w "${SHORTCUT}") i.r0'
+        Delete "${SHORTCUT}"
+    ${EndIf}
     !insertmacro DeleteStartupValue "${RUN_KEY}"
     !insertmacro DeleteStartupValue "${APPROVAL_KEY}"
     IfErrors failed
@@ -332,7 +447,7 @@ Section "Uninstall"
     Goto done
 
 failed:
-    !insertmacro Fail "Pin Glide could not be completely removed. Close programs using its files and try again."
+    !insertmacro Fail "$(UninstallFailure)"
 done:
 SectionEnd
 
@@ -347,6 +462,8 @@ Function un.RemoveEntryAndExecutable
         Return
     ${EndIf}
 
+    ReadRegStr $PreviousName HKCU "${UNINSTALL_KEY}" "DisplayName"
+    ClearErrors
     System::Call 'advapi32::RegDeleteKeyExW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", i ${KEY_WOW64_64KEY}, i 0) i.r2'
     ${If} $2 != 0
     ${AndIf} $2 != ${ERROR_FILE_NOT_FOUND}
@@ -357,6 +474,9 @@ Function un.RemoveEntryAndExecutable
         ${If} $0 == 0
             ${If} $2 == 0
                 !insertmacro RegisterUninstaller
+                ${If} $PreviousName != ""
+                    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "$PreviousName"
+                ${EndIf}
             ${EndIf}
             SetErrors
         ${EndIf}

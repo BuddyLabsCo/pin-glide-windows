@@ -81,9 +81,11 @@ $receiver = Join-Path $stage 'windows-app.exe'
 $installer = Join-Path $stage $name
 try {
     Copy-Item -LiteralPath (Join-Path $target "$architecture/release/windows-app.exe") -Destination $receiver
+    & (Join-Path $PSScriptRoot 'resource-check.ps1') -Executable $receiver -Kind Receiver
     if (!$Unsigned) { Sign-Executable $receiver }
     & $makensis /V2 /WX "/DRECEIVER=$receiver" "/DOUTPUT=$installer" "/DPRODUCT_VERSION=$version" "/DFILE_VERSION=$fileVersion" @signingDefines (Join-Path $PSScriptRoot 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'MakeNSIS failed.' }
+    & (Join-Path $PSScriptRoot 'resource-check.ps1') -Executable $installer -Kind Setup
     if (!$Unsigned) { Sign-Executable $installer }
     Move-Item -LiteralPath $installer -Destination $artifact -Force
     Write-Output $artifact

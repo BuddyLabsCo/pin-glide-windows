@@ -33,6 +33,29 @@ displayed version from the `windows-app` Cargo package version. The numeric
 Windows version resource uses the major, minor and patch numbers followed by
 zero; the displayed version retains the full Cargo version.
 
+The Receiver, setup and embedded uninstaller use the multi-size
+`crates/windows-app/ui/assets/app-icon.ico`, derived from the existing PNG.
+Run `packaging/windows/generate-icon.ps1` when the brand PNG changes.
+The Windows SDK resource compiler embeds the Receiver icon and bilingual
+version and string resources on every Windows build. Packaging checks the
+actual PE icon images and version resources before publishing the artifact.
+
+Setup and uninstall select Simplified Chinese for all Chinese Windows UI
+languages, and English otherwise. The same localized product name is exposed
+through the Receiver's string resource 101, the Start shortcut's localized
+name, `DisplayName_Localized` and the taskbar relaunch metadata. The shortcut,
+uninstall entry and taskbar share the product's stable identity; installation
+paths, startup names, filenames and Receiver settings remain unchanged.
+Shell surfaces that ignore indirect resources may retain the install-time
+fallback or cached names after a language change. Actual Windows 10/11
+Shell rendering and refresh behavior still require desktop verification;
+there is no background synchronization.
+On the development runner, PowerShell's native indirect-string lookup
+resolved the English resource even with a Chinese user UI language
+(the PowerShell thread initially reported English). The resource checks
+therefore verify explicit language IDs and that indirect references resolve,
+not the language chosen by the host process or Shell.
+
 ## Build a development package
 
 Create a GitHub Environment named `development` in the repository settings.
@@ -221,7 +244,11 @@ metadata, then uses synthetic state and unique file paths and registry names.
 It exercises rejected packaging origins, version metadata, first install, a
 running Receiver's instance guard, rollback after a blocked binary replacement
 or unreadable registry metadata, startup migration, uninstall retry, and clean
-reinstall.
+reinstall. It also verifies the brand icon resources in the three executable
+types, both localized version strings, all Chinese language variants and
+English fallback using deterministic installer fixtures, and the native
+shortcut and uninstall metadata before and after legacy upgrade and rollback.
+Both development and production workflows run this test.
 
 ### Packaged first use
 

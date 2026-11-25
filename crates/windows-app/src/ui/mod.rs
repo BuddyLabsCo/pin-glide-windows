@@ -437,6 +437,7 @@ fn show_welcome() -> Result<(), PlatformError> {
 }
 
 fn focus(window: &Window) {
+    platform::configure_taskbar(window);
     window.with_winit_window(|native| {
         if native.is_minimized() == Some(true) {
             native.set_minimized(false);

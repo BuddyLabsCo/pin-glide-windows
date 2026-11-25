@@ -3,6 +3,7 @@ mod instance;
 pub(crate) mod launch_at_login;
 mod popup;
 mod session;
+mod shell_metadata;
 pub(crate) mod shortcut;
 mod tray;
 
@@ -85,6 +86,10 @@ pub(crate) fn configure_main_chrome(window: &Window) {
     window.with_winit_window(|native| {
         native.set_enabled_buttons(WindowButtons::MINIMIZE | WindowButtons::CLOSE);
     });
+}
+
+pub(crate) fn configure_taskbar(window: &Window) {
+    shell_metadata::configure(window);
 }
 
 fn win32_result(result: i32) -> io::Result<()> {
