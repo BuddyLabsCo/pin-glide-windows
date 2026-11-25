@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -110,20 +110,25 @@ async function inspect(api, identity, candidate) {
 export async function preparePublication(api, identity, directory, runId, download) {
   const state = await inspect(api, identity);
   if (state.release && !state.release.draft) return "complete";
-  if (state.uploaded) return "publish";
   const candidate = await recoverCandidate(api, directory, identity, runId, download);
   if (candidate) {
     await inspect(api, identity, candidate.manifest);
     return "publish";
   }
+  if (state.uploaded) return "publish";
   if (state.release) throw new Error("Original verified candidate is required to recover this draft");
   return "build";
 }
 
-export async function publishRelease(api, identity, directory) {
+export async function publishRelease(api, identity, directory, runId, download) {
   let state = await inspect(api, identity);
   if (state.release && !state.release.draft) return;
-  if (state.uploaded) return finalizeRelease(api, identity);
+  if (state.uploaded) {
+    const verified = existsSync(join(directory, manifestName))
+      ? readCandidate(directory, identity)
+      : await recoverCandidate(api, directory, identity, runId, download);
+    return finalizeRelease(api, identity, verified?.manifest);
+  }
   const { manifest: candidate, bytes } = readCandidate(directory, identity);
   state = await inspect(api, identity, candidate);
   if (!state.tag) {
@@ -200,7 +205,7 @@ export async function runPublication(command, { env, commit, packageInfo, change
     appendFileSync(env.GITHUB_OUTPUT, `plan=${plan}\n`);
     console.log(`Release ${identity.tag}: ${plan}`);
   } else if (command === "publish") {
-    await publishRelease(api, identity, directory);
+    await publishRelease(api, identity, directory, env.GITHUB_RUN_ID, download);
     console.log(`Release ${identity.tag} published`);
   } else {
     throw new Error("Expected prepare or publish");

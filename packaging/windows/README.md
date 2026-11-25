@@ -119,10 +119,11 @@ publication runs one at a time without cancelling an active release.
    succeeds. A retry validates and reuses this artifact, without rebuilding
    or resigning the installer.
 3. A matching lightweight or annotated tag, draft and uploaded installer
-   can be resumed. An empty failed-upload placeholder in a matching draft
-   can be retried. An already
-   complete Release is a no-op without accessing Actions artifacts, even
-   after the artifact expires.
+   can be resumed. Compare an uploaded draft with the original verified
+   candidate whenever that artifact is available; otherwise its recorded
+   identity and uploaded digest must agree. An empty failed-upload placeholder
+   in a matching draft can be retried. An already complete Release is a no-op
+   without accessing Actions artifacts, even after the artifact expires.
 4. If the candidate is unavailable before any draft exists, the original
    run can build and verify again. If an incomplete draft records a candidate
    but lacks the uploaded installer and the artifact is unavailable, stop:

@@ -102,7 +102,10 @@ test("publication package metadata comes from the Windows packaging helpers", ()
     "-NoProfile", "-NonInteractive", "-File", "packaging/windows/production-package-info.ps1",
   ], { encoding: "utf8" });
   const info = JSON.parse(output);
-  assert.match(info.version, /^\d+\.\d+\.\d+$/);
+  const metadata = JSON.parse(execFileSync("cargo", [
+    "metadata", "--locked", "--no-deps", "--format-version", "1",
+  ], { encoding: "utf8" }));
+  assert.equal(info.version, metadata.packages.find(pkg => pkg.name === "windows-app").version);
   assert.deepEqual(info.filenames, packageInfo.filenames);
 });
 
@@ -191,11 +194,58 @@ test("an uploaded draft can publish after the original artifact expires", async 
     if (args[0] === "PATCH") throw new Error("publication interrupted");
     return api(...args);
   }, identity, directory), /interrupted/);
+  state.artifacts = [{ name: "production-release-candidate", expired: true }];
   rmSync(join(directory, "release-candidate.json"));
   assert.equal(await preparePublication(api, identity, directory, "123", unexpectedDownload), "publish");
-  await publishRelease(api, identity, directory);
+  await publishRelease(api, identity, directory, "123", unexpectedDownload);
   assert.equal(state.release.draft, false);
   assert.equal(state.writes.filter(([method]) => method === "UPLOAD").length, 1);
+});
+
+test("an internally consistent uploaded draft cannot override the available original candidate", async (t) => {
+  const directory = fixture(t);
+  const { api, state } = repository();
+  await assert.rejects(publishRelease(async (...args) => {
+    if (args[0] === "PATCH") throw new Error("publication interrupted");
+    return api(...args);
+  }, identity, directory), /interrupted/);
+  const differentDigest = createHash("sha256").update("different installer").digest("hex");
+  state.release.body = state.release.body.replace(candidate.sha256, differentDigest);
+  state.assets[0].digest = `sha256:${differentDigest}`;
+  state.artifacts = [{ name: "production-release-candidate", expired: false }];
+  state.writes.length = 0;
+  let downloads = 0;
+  const download = (runId, name, destination) => {
+    assert.equal(runId, "123");
+    assert.equal(name, "production-release-candidate");
+    downloads++;
+    writeCandidate(destination);
+  };
+  await assert.rejects(preparePublication(api, identity, directory, "123", download), /candidate/i);
+  await assert.rejects(publishRelease(api, identity, directory, "123", download), /candidate/i);
+  rmSync(join(directory, "release-candidate.json"));
+  await assert.rejects(publishRelease(api, identity, directory, "123", download), /candidate/i);
+  assert.equal(downloads, 2);
+  assert.equal(state.release.draft, true);
+  assert.deepEqual(state.writes, []);
+});
+
+test("an uploaded draft matching the available original candidate resumes without uploading again", async (t) => {
+  const directory = fixture(t);
+  const { api, state } = repository();
+  await assert.rejects(publishRelease(async (...args) => {
+    if (args[0] === "PATCH") throw new Error("publication interrupted");
+    return api(...args);
+  }, identity, directory), /interrupted/);
+  state.artifacts = [{ name: "production-release-candidate", expired: false }];
+  state.writes.length = 0;
+  const download = (runId, name, destination) => {
+    writeCandidate(destination);
+  };
+  assert.equal(await preparePublication(api, identity, directory, "123", download), "publish");
+  await publishRelease(api, identity, directory, "123", unexpectedDownload);
+  assert.equal(state.release.draft, false);
+  assert.deepEqual(state.writes, [["PATCH", "/releases/1"]]);
 });
 
 test("conflicting tags and existing asset digests never cause mutations", async (t) => {
@@ -250,9 +300,12 @@ test("retry an empty starter asset only while the release is a matching draft", 
 });
 
 test("reject a release claiming the version under another tag before any mutation", async (t) => {
+  const directory = fixture(t);
   const { api, state } = repository();
-  state.release = { id: 1, name: "v0.1.0", tag_name: "v0.2.0", draft: false };
-  await assert.rejects(publishRelease(api, identity, fixture(t)), /release/i);
+  await publishRelease(api, identity, directory);
+  state.release.tag_name = "v0.2.0";
+  state.writes.length = 0;
+  await assert.rejects(publishRelease(api, identity, directory), /release/i);
   assert.equal(state.writes.length, 0);
 });
 
@@ -269,7 +322,7 @@ test("reject a version's conflicting notes or extra assets without modifying its
   assert.equal(state.writes.length, 4);
 });
 
-test("workflow commands recover the original authorized checkout, not advanced main, and reject corrupt bytes", async (t) => {
+test("script orchestration rejects a mismatched checkout and corrupt bytes, then recovers the original candidate", async (t) => {
   const directory = fixture(t);
   const { api, state } = repository();
   state.artifacts = [{ name: "production-release-candidate", expired: false }];
@@ -298,4 +351,40 @@ test("workflow commands recover the original authorized checkout, not advanced m
   await runPublication("publish", context);
   assert.deepEqual(state.tag, tag);
   assert.equal(state.release.draft, false);
+});
+
+test("production workflow checks out the authorized commit and gates publication on successful verification", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/production-release.yml", import.meta.url), "utf8");
+  const [configuration, packaging] = workflow.replace(/\r\n/g, "\n").split(/^  package:\n/m);
+  assert.ok(packaging, "Missing production package job");
+  assert.match(configuration, /- uses: actions\/checkout@v\d+\n\s+with:\n\s+ref: \$\{\{ github\.event\.pull_request\.merge_commit_sha \}\}/);
+  assert.match(configuration, /^      eligible: \$\{\{ steps\.release\.outputs\.eligible \}\}$/m);
+  assert.match(configuration, /^      commit: \$\{\{ steps\.release\.outputs\.commit \}\}$/m);
+  assert.match(configuration, /id: release\n\s+shell: pwsh\n\s+run: \.\/packaging\/windows\/production-eligibility\.ps1/);
+  assert.match(packaging, /^    needs: configuration\n    if: \$\{\{ needs\.configuration\.outputs\.eligible == 'true' \}\}$/m);
+  assert.match(packaging, /^      AUTHORIZED_COMMIT: \$\{\{ needs\.configuration\.outputs\.commit \}\}$/m);
+  assert.match(packaging, /- uses: actions\/checkout@v\d+\n\s+with:\n\s+ref: \$\{\{ needs\.configuration\.outputs\.commit \}\}/);
+  assert.doesNotMatch(packaging, /^\s+continue-on-error:/m);
+
+  const steps = packaging.split(/^      - /m).slice(1);
+  const prepare = steps.findIndex(step => step.includes("run: node packaging/windows/production-publication.mjs prepare"));
+  const verify = steps.findIndex(step => step.includes("run: .\\packaging\\windows\\production-candidate.ps1"));
+  const retain = steps.findIndex(step => step.startsWith("uses: actions/upload-artifact@"));
+  const publish = steps.findIndex(step => step.includes("run: node packaging/windows/production-publication.mjs publish"));
+  assert.ok(prepare >= 0 && prepare < verify && verify < retain && retain < publish);
+  assert.match(steps[prepare], /^        id: publication$/m);
+  assert.match(steps[verify], /^        id: candidate$/m);
+  assert.match(steps[verify], /^        if: steps\.publication\.outputs\.plan == 'build'$/m);
+  assert.match(steps[retain], /^        if: steps\.publication\.outputs\.plan == 'build'$/m);
+  const condition = /^        if: \$\{\{ success\(\) && \(steps\.publication\.outputs\.plan == '([^']+)' \|\| steps\.candidate\.outcome == '([^']+)'\) \}\}$/m.exec(steps[publish]);
+  assert.ok(condition, "Publication must require success and a recovered or verified candidate");
+  const [, recoveredPlan, verifiedOutcome] = condition;
+  const allowed = (priorStepsSucceeded, plan, candidateOutcome) =>
+    priorStepsSucceeded && (plan === recoveredPlan || candidateOutcome === verifiedOutcome);
+  assert.equal(allowed(false, "build", "failure"), false);
+  assert.equal(allowed(true, "build", "failure"), false);
+  assert.equal(allowed(false, "build", "success"), false);
+  assert.equal(allowed(true, "build", "success"), true);
+  assert.equal(allowed(true, "publish", "skipped"), true);
+  assert.equal(allowed(true, "complete", "skipped"), false);
 });

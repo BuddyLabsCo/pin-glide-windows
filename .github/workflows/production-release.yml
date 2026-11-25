@@ -85,7 +85,7 @@ jobs:
             target/packaging/windows/release-candidate.json
           if-no-files-found: error
       - name: Publish the verified installer
-        if: steps.publication.outputs.plan != 'complete'
+        if: ${{ success() && (steps.publication.outputs.plan == 'publish' || steps.candidate.outcome == 'success') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: node packaging/windows/production-publication.mjs publish
