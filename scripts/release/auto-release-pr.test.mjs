@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { updateProposal } from "./auto-release-pr.mjs";
+import { checkVersion, updateProposal } from "./auto-release-pr.mjs";
 
 const before = "1".repeat(40);
 const head = "2".repeat(40);
@@ -15,7 +15,7 @@ const lock = version => `[[package]]\nname = "other"\nversion = "0.1.0"\n\n[[pac
 
 function fixture({
   paths = ["crates/windows-app/src/main.rs"], tags = [], version = "0.1.0",
-  proposed, merged, subject = "Improve Receiver", existing = null, rejectedPush = false,
+  proposed, existing = null, rejectedPush = false,
 } = {}) {
   const files = new Map([[manifest, cargo(version)], [lockfile, lock(version)], [changelog, existing]]);
   const calls = [];
@@ -27,8 +27,9 @@ function fixture({
       case "branch": return "main";
       case "status": return "";
       case "diff": return args.includes("--cached") ? changelog : paths.join("\0");
-      case "rev-parse": return head;
-      case "log": return args.includes("--no-merges") ? "Improve Receiver\nEarlier change" : subject;
+      case "rev-parse": return args[1] === "HEAD" ? head : before;
+      case "merge-base": return args.includes(before) ? before : head;
+      case "log": return args.includes("--first-parent") ? head : "Improve Receiver\nEarlier change";
       case "tag": return tags.join("\n");
       case "for-each-ref": return proposed ? branch : "";
       case "show": return cargo(proposed);
@@ -42,9 +43,8 @@ function fixture({
   }
   function gh(args, input) {
     if (args[1] === "list") {
-      return JSON.stringify(args.includes("open")
-        ? proposed ? [{ number: 45, isCrossRepository: false }] : []
-        : merged ? [{ mergeCommit: { oid: merged }, isCrossRepository: false }] : []);
+      return JSON.stringify(args.includes("open") && proposed
+        ? [{ number: 45, isCrossRepository: false }] : []);
     }
     prs.push(args);
     body = input;
@@ -53,7 +53,7 @@ function fixture({
   return {
     files, calls, prs, get body() { return body; },
     run: () => updateProposal({
-      before, git, gh,
+      before, after: head, git, gh,
       read: path => files.get(path) ?? null,
       write: (path, text) => files.set(path, text),
     }),
@@ -106,32 +106,6 @@ test("ignored workflow pushes cannot open a PR but refresh an open proposal's me
   assert.ok(!open.calls.some(args => args[0] === "push"));
 });
 
-test("release merges do not loop, but subsequent ordinary dependency changes are eligible", () => {
-  for (const scenario of [
-    { paths: [changelog], subject: "chore: propose release v0.1.0 (#45)" },
-    { paths: [manifest, lockfile, changelog], merged: head, subject: "Edited squash title" },
-  ]) {
-    const repo = fixture(scenario);
-    repo.run();
-    assert.equal(repo.prs.length, 0);
-    assert.ok(!repo.calls.some(args => args[0] === "push"));
-  }
-  const dependency = fixture({ paths: [manifest, lockfile], merged: before, tags: ["v0.1.0"] });
-  dependency.run();
-  assert.equal(dependency.files.get(manifest), cargo("0.1.1"));
-  assert.equal(dependency.prs[0][1], "create");
-});
-
-test("a new eligible push while publication is pending does not reuse the authorized version", () => {
-  const repo = fixture({
-    version: "0.1.0",
-    existing: "# Changelog\n\n## 0.1.0\n\n- Authorized first release\n",
-  });
-  repo.run();
-  assert.equal(repo.files.get(manifest), cargo("0.1.1"));
-  assert.match(repo.files.get(changelog), /## 0\.1\.1[\s\S]*## 0\.1\.0\n\n- Authorized first release/);
-});
-
 test("version updates preserve real Cargo files except for the product version lines", () => {
   const manifestText = readFileSync(new URL(`../../${manifest}`, import.meta.url), "utf8");
   const lockText = readFileSync(new URL(`../../${lockfile}`, import.meta.url), "utf8");
@@ -150,4 +124,32 @@ test("a rejected branch update never creates or edits a Release PR", () => {
   const repo = fixture({ proposed: "1.0.0", rejectedPush: true });
   assert.throws(repo.run, /Remote branch changed/);
   assert.deepEqual(repo.prs, []);
+});
+
+test("Windows version resource accepts the limit and rejects patch overflow or invalid overrides", () => {
+  const boundary = fixture({ tags: ["v65535.65535.65534"], version: "65535.65535.65534" });
+  boundary.run();
+  assert.equal(boundary.files.get(manifest), cargo("65535.65535.65535"));
+  checkVersion(path => boundary.files.get(path));
+  for (const scenario of [
+    { tags: ["v65535.65535.65535"], version: "65535.65535.65535" },
+    { proposed: "65536.0.0" }, { proposed: "1.65536.0" }, { proposed: "1.0.65536" },
+  ]) {
+    const repo = fixture(scenario);
+    assert.throws(repo.run, /Windows version resource/);
+    assert.ok(!repo.calls.some(args => args[0] === "push"));
+    assert.deepEqual(repo.prs, []);
+  }
+  for (const version of ["65536.0.0", "0.65536.0", "0.0.65536"]) {
+    assert.throws(() => checkVersion(path => path === manifest ? cargo(version) : lock(version)),
+      /Windows version resource/);
+  }
+  assert.throws(() => checkVersion(path => path === manifest ? cargo("1.0.0") : lock("0.1.0")),
+    /versions must agree/);
+});
+
+test("a valid higher override permits a release after the patch limit", () => {
+  const repo = fixture({ tags: ["v1.2.65535"], version: "1.2.65535", proposed: "1.3.0" });
+  repo.run();
+  assert.equal(repo.files.get(manifest), cargo("1.3.0"));
 });

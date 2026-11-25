@@ -10,10 +10,12 @@ const releaseBranch = "auto-release";
 const releaseRef = `refs/heads/${releaseBranch}`;
 const trackingRef = `refs/remotes/origin/${releaseBranch}`;
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const releaseSubject = /^chore: propose release v\d+\.\d+\.\d+(?: \(#\d+\))?$/;
 
 function requireVersion(version) {
   if (!stableVersion.test(version)) throw new Error(`Expected stable Cargo version, found ${version}`);
+  if (version.split(".").some(part => BigInt(part) > 65535n)) {
+    throw new Error(`Version ${version} must fit the Windows version resource (0–65535 per component)`);
+  }
   return version;
 }
 
@@ -61,31 +63,62 @@ function patchAfter(version) {
   return version.replace(/\d+$/, patch => String(BigInt(patch) + 1n));
 }
 
-function selectVersion(latest, current, history) {
+function selectVersion(latest, current) {
   const minimum = latest ? patchAfter(latest) : "0.1.0";
   if (compareVersions(current, minimum) < 0) return minimum;
-  // A merged proposal already owns its version even before publication creates the tag.
-  if ((history ?? "").split(/\r?\n/).includes(`## ${current}`)) return patchAfter(current);
   return current;
 }
 
-function releaseEligible(paths, git, gh) {
-  if (!paths.some(path => !path.startsWith(".github/"))) return false;
-  if (!paths.every(path => releasePaths.has(path))) return true;
-  const head = git("rev-parse", "HEAD");
-  return !releaseSubject.test(git("log", "-1", "--pretty=%s", "HEAD")) &&
-    !releasePulls(gh, "merged").some(pr => pr.mergeCommit?.oid === head);
+function releaseBaseline(git, merged, head) {
+  const tags = git("tag", "--list", "v*").split("\n").map(tag => tag.slice(1))
+    .filter(version => stableVersion.test(version)).sort(compareVersions);
+  const latest = tags.at(-1);
+  const base = latest ? `v${latest}` : null;
+  const commit = base ? git("rev-parse", `${base}^{commit}`) : null;
+  if (commit && git("merge-base", commit, head) !== commit) {
+    throw new Error("Latest stable release is not an ancestor of main");
+  }
+  const pending = git("log", "--first-parent", "--format=%H", base ? `${base}..HEAD` : "HEAD")
+    .split("\n").find(sha => merged.has(sha));
+  if (!pending) return { base, commit, version: latest };
+  const version = packageSection(git("show", `${pending}:${manifest}`), manifest).version;
+  if (latest && compareVersions(version, latest) <= 0) {
+    throw new Error("Authorized release version must exceed the latest stable tag");
+  }
+  return { base: pending, commit: pending, version };
 }
 
-export function updateProposal({ before, git, gh, read, write }) {
-  if (!/^[0-9a-f]{40}$/.test(before ?? "")) throw new Error("PUSH_BEFORE must be the push event before SHA");
+export function checkVersion(read) {
+  const product = packageSection(read(manifest), manifest).version;
+  if (packageSection(read(lockfile), lockfile).version !== product) {
+    throw new Error("windows-app manifest and lockfile versions must agree");
+  }
+}
+
+function pushEvent(git, before, after) {
+  if (![before, after].every(sha => /^[0-9a-f]{40}$/.test(sha ?? ""))) {
+    throw new Error("PUSH_BEFORE and PUSH_AFTER must be the push event SHAs");
+  }
   if (git("branch", "--show-current") !== "main" || git("status", "--porcelain")) {
     throw new Error("Release proposals require a clean main checkout");
   }
+  const head = git("rev-parse", "HEAD");
+  if (git("merge-base", after, head) !== after) {
+    throw new Error("Push event is not an ancestor of the current main checkout");
+  }
   const paths = (/^0+$/.test(before)
-    ? git("ls-tree", "-r", "--name-only", "-z", "HEAD")
-    : git("diff", "--no-renames", "--name-only", "-z", before, "HEAD")).split("\0").filter(Boolean);
-  const eligible = releaseEligible(paths, git, gh);
+    ? git("ls-tree", "-r", "--name-only", "-z", after)
+    : git("diff", "--no-renames", "--name-only", "-z", before, after)).split("\0").filter(Boolean);
+  return { head, paths };
+}
+
+export function updateProposal({ before, after, git, gh, read, write }) {
+  const { head, paths } = pushEvent(git, before, after);
+  const merged = new Set(releasePulls(gh, "merged").map(pr => pr.mergeCommit?.oid).filter(Boolean));
+  const baseline = releaseBaseline(git, merged, head);
+  const alreadyAuthorized = baseline.commit && git("merge-base", after, baseline.commit) === after;
+  const eligible = !alreadyAuthorized && paths.some(path => !path.startsWith(".github/")) &&
+    !(paths.every(path => releasePaths.has(path)) && merged.has(after));
   const open = releasePulls(gh, "open");
   if (open.length > 1) throw new Error("Expected at most one open Release PR");
   if (!eligible && !open.length) {
@@ -93,19 +126,17 @@ export function updateProposal({ before, git, gh, read, write }) {
     return;
   }
 
-  const tags = git("tag", "--list", "v*").split("\n").map(tag => tag.slice(1))
-    .filter(version => stableVersion.test(version)).sort(compareVersions);
-  const latest = tags.at(-1);
-  const base = latest ? `v${latest}` : null;
+  const { base } = baseline;
   const current = packageSection(read(manifest), manifest).version;
   const history = read(changelog);
-  let version = selectVersion(latest, current, history);
+  let version = selectVersion(baseline.version, current);
   const previousHead = git("for-each-ref", "--format=%(objectname)", trackingRef);
   if (open.length) {
     if (!previousHead) throw new Error("Open Release PR has no checked-out branch reference");
     const proposed = packageSection(git("show", `${previousHead}:${manifest}`), manifest).version;
     if (compareVersions(proposed, version) > 0) version = proposed;
   }
+  requireVersion(version);
   const entries = git("log", "--no-merges", "--pretty=format:%s", base ? `${base}..HEAD` : "HEAD")
     .split("\n").filter(Boolean);
   if (!entries.length) throw new Error("No commits to include in the release notes");
@@ -147,18 +178,21 @@ function run(command, args, input) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    updateProposal({
+    const read = file => {
+      try {
+        return readFileSync(file, "utf8");
+      } catch (error) {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }
+    };
+    if (process.argv[2] === "check-version") checkVersion(read);
+    else updateProposal({
       before: process.env.PUSH_BEFORE,
+      after: process.env.PUSH_AFTER,
       git: (...args) => run("git", args),
       gh: (args, body) => run("gh", args, body),
-      read: file => {
-        try {
-          return readFileSync(file, "utf8");
-        } catch (error) {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        }
-      },
+      read,
       write: writeFileSync,
     });
   } catch (error) {

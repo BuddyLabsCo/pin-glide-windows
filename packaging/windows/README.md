@@ -83,12 +83,18 @@ trigger the independent CI workflows. Allow that App to update the
 On pushes to `main`, the workflow opens or refreshes one Release PR from
 `auto-release` to `main`. With no stable `v<version>` tag, the initial
 proposal is `0.1.0`; otherwise the highest stable tag determines the next
-patch. Pre-release tags are ignored. Code, documentation, tests and
-dependency changes are eligible; changes confined to `.github/` and the
+patch. Pre-release tags are ignored. Each version component must be at most
+65,535 to fit the Windows version resource; independent CI checks the
+manifest and lockfile, and patch overflow requires a valid higher version.
+Code, documentation, tests and dependency changes are eligible; changes
+confined to `.github/` and the
 release proposal's own version/changelog-only merge do not start a new
-proposal. An already merged version recorded in the changelog is not reused
-while its production publication is still pending. As in Herdr, an ignored
-push refreshes an open PR's description without rebuilding its branch.
+proposal. An already merged Release PR is the version and changelog
+baseline while its production tag is still pending, preventing repeated
+versions or notes. The workflow evaluates the original push's changes but
+prepares proposals from current `main`, so delayed runs cannot roll back
+newer proposals. As in Herdr, an ignored push refreshes an open PR's
+description without rebuilding its branch.
 An eligible push rebuilds the proposal from `main`, retaining higher versions
 selected by a maintainer.
 
@@ -110,7 +116,8 @@ To release:
 Run the proposal tests without contacting GitHub:
 
 ```powershell
-node --test scripts/release/auto-release-pr.test.mjs
+node --test scripts/release/*.test.mjs
+node scripts/release/auto-release-pr.mjs check-version
 ```
 
 ## Production release
