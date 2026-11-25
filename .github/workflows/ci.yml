@@ -56,6 +56,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24.18.0"
+      - name: Test production publication and recovery
+        run: node --test packaging/windows/production-publication.test.mjs
       - name: Check and link the Windows application
         run: node scripts/quality/check.mjs build
       - name: Test the Service adapter

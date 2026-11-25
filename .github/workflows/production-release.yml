@@ -1,4 +1,4 @@
-name: Production release candidate
+name: Production release
 
 on:
   pull_request:
@@ -42,15 +42,33 @@ jobs:
     if: ${{ needs.configuration.outputs.eligible == 'true' }}
     runs-on: windows-2025
     environment: production
+    concurrency:
+      group: production-release
+      queue: max
+    permissions:
+      contents: write
+      actions: read
+    env:
+      AUTHORIZED_COMMIT: ${{ needs.configuration.outputs.commit }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.configuration.outputs.commit }}
           persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.18.0"
+      - name: Inspect publication and recover the original verified candidate
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packaging/windows/production-publication.mjs prepare
       - name: Install NSIS
+        if: steps.publication.outputs.plan == 'build'
         shell: pwsh
         run: ./packaging/windows/install-nsis.ps1
       - name: Build and verify the authorized candidate
+        if: steps.publication.outputs.plan == 'build'
         id: candidate
         shell: powershell
         env:
@@ -59,9 +77,15 @@ jobs:
           PINGLIDE_TIMESTAMP_URL: ${{ vars.PINGLIDE_TIMESTAMP_URL }}
         run: .\packaging\windows\production-candidate.ps1
       - uses: actions/upload-artifact@v4
+        if: steps.publication.outputs.plan == 'build'
         with:
           name: production-release-candidate
           path: |
             target/packaging/windows/${{ steps.candidate.outputs.filename }}
             target/packaging/windows/release-candidate.json
           if-no-files-found: error
+      - name: Publish the verified installer
+        if: steps.publication.outputs.plan != 'complete'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node packaging/windows/production-publication.mjs publish

@@ -70,7 +70,7 @@ application identity, installation and persistent state; use separate
 Windows profiles or VMs to avoid replacing a production installation or
 reusing its credentials.
 
-## Production release candidate
+## Production release
 
 Create a GitHub Environment named `production`, restricted to `main` with
 no additional required reviewer gate. Set its Environment Variable
@@ -84,7 +84,7 @@ The workflow does not provision signing credentials or fall back to unsigned
 on signing failure.
 
 Merging a same-repository `auto-release` PR into `main` authorizes the
-**Production release candidate** workflow. It checks out the exact merge SHA,
+**Production release** workflow. It checks out the exact merge SHA,
 builds with development transport explicitly disabled, and verifies the
 distributable's version and signature status and the isolated installer
 lifecycle. The lifecycle test builds isolated installers from the Receiver;
@@ -92,14 +92,49 @@ it does not install the actual distributable or contact the live Service.
 The signed build additionally verifies the signed Receiver, embedded
 uninstaller and outer installer during packaging.
 
-Download the `production-release-candidate` Actions artifact after success.
-It contains the installer and `release-candidate.json` with the authorized
-commit, Cargo product version, signing mode, filename and SHA-256 digest.
-The workflow does not create tags or GitHub Releases.
-Rerunning it uses the original merge commit, not the current `main` head.
+The authorized commit must contain a stable `windows-app` Cargo package
+version and a matching nonempty `## <version>` section in `CHANGELOG.md`
+(the Herdr convention). The workflow publishes that section as Release Notes,
+creates `v<version>` at the authorized merge SHA, and uploads the verified
+standalone installer to a draft Release of the same name. It makes the
+Release public only after checking the uploaded asset's SHA-256 digest.
+The Release Notes also carry a hidden verified-candidate identity for recovery;
+do not edit this record or move the tag.
 
-Run the production policy tests locally with
-`.\packaging\windows\production.test.ps1`.
+The configuration job needs `contents: read`; the production job needs
+`contents: write` for tags and Releases and `actions: read` for downloading
+the original candidate. It uses the scoped `GITHUB_TOKEN`, not a separate
+PAT or GitHub App token. Repository tag rules must permit the authorized job
+to create the release tag. Production jobs share a concurrency queue, so
+publication runs one at a time without cancelling an active release.
+
+### Recover a failed production release
+
+1. In Actions, open the original **Production release** run and rerun its
+   failed jobs. Do not merge another Release PR just to retry. The rerun
+   uses the original merge commit and run ID, not the current `main` head.
+2. The `production-release-candidate` artifact contains the installer and
+   `release-candidate.json` with the authorized commit, Cargo version,
+   signing mode, filename and SHA-256 digest. Retain it until publication
+   succeeds. A retry validates and reuses this artifact, without rebuilding
+   or resigning the installer.
+3. A matching tag, draft and uploaded installer can be resumed. An empty
+   failed-upload placeholder in a matching draft can be retried. An already
+   complete Release is a no-op, even after the artifact expires.
+4. If the candidate is unavailable before any draft exists, the original
+   run can build and verify again. If an incomplete draft records a candidate
+   but lacks the uploaded installer and the artifact is unavailable, stop:
+   recover the original verified artifact or resolve the draft deliberately.
+   Conflicting tags, notes, manifests or asset names/digests fail without
+   overwriting them. Investigate the conflict before retrying; never move a
+   published tag or replace its published installer.
+
+Run the release policy and publication tests locally:
+
+```powershell
+.\packaging\windows\production.test.ps1
+node --test packaging/windows/production-publication.test.mjs
+```
 
 ## Maintenance and verification
 
