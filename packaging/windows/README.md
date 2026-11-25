@@ -118,16 +118,18 @@ publication runs one at a time without cancelling an active release.
    signing mode, filename and SHA-256 digest. Retain it until publication
    succeeds. A retry validates and reuses this artifact, without rebuilding
    or resigning the installer.
-3. A matching tag, draft and uploaded installer can be resumed. An empty
-   failed-upload placeholder in a matching draft can be retried. An already
-   complete Release is a no-op, even after the artifact expires.
+3. A matching lightweight or annotated tag, draft and uploaded installer
+   can be resumed. An empty failed-upload placeholder in a matching draft
+   can be retried. An already
+   complete Release is a no-op without accessing Actions artifacts, even
+   after the artifact expires.
 4. If the candidate is unavailable before any draft exists, the original
    run can build and verify again. If an incomplete draft records a candidate
    but lacks the uploaded installer and the artifact is unavailable, stop:
    recover the original verified artifact or resolve the draft deliberately.
-   Conflicting tags, notes, manifests or asset names/digests fail without
-   overwriting them. Investigate the conflict before retrying; never move a
-   published tag or replace its published installer.
+   Conflicting tags, Release names, notes, manifests or asset names/digests
+   fail without overwriting them. Investigate the conflict before retrying;
+   never move a published tag or replace its published installer.
 
 Run the release policy and publication tests locally:
 

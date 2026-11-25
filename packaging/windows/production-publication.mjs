@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -9,7 +9,7 @@ const manifestName = "release-candidate.json";
 const marker = "\n\n<!-- verified-candidate: ";
 const root = fileURLToPath(new URL("../..", import.meta.url));
 
-export function releaseIdentity(commit, version, changelog) {
+export function releaseIdentity(commit, { version, filenames }, changelog) {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("Invalid authorized commit");
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
     throw new Error("Expected a stable Cargo product version");
@@ -20,13 +20,12 @@ export function releaseIdentity(commit, version, changelog) {
   if (matching.length !== 1 || !notes || notes.includes(marker)) {
     throw new Error(`Expected one nonempty changelog section for ${version}`);
   }
-  return { commit, version, tag: `v${version}`, notes };
+  return { commit, version, tag: `v${version}`, notes, filenames };
 }
 
 function validateManifest(manifest, identity) {
   const { commit, version, signing_mode, filename, sha256 } = manifest;
-  const expectedFilename = signing_mode === "unsigned"
-    ? "Pin-Glide-Setup-x64-unsigned.exe" : "Pin-Glide-Setup-x64.exe";
+  const expectedFilename = identity.filenames[signing_mode];
   if (commit !== identity.commit || version !== identity.version ||
       !["signed", "unsigned"].includes(signing_mode) || filename !== expectedFilename ||
       typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256)) {
@@ -41,7 +40,7 @@ export function readCandidate(directory, identity) {
   if (createHash("sha256").update(bytes).digest("hex") !== manifest.sha256) {
     throw new Error("Verified candidate digest mismatch");
   }
-  return manifest;
+  return { manifest, bytes };
 }
 
 function releaseBody(identity, candidate) {
@@ -58,16 +57,32 @@ async function list(api, path, collection) {
   }
 }
 
-async function inspect(api, identity, candidate) {
+async function inspectTag(api, identity) {
   const tag = await api("GET", `/git/ref/tags/${identity.tag}`);
-  if (tag && (tag.object.type !== "commit" || tag.object.sha !== identity.commit)) {
+  if (!tag) return null;
+  let object = tag.object;
+  const visited = new Set();
+  while (object.type === "tag") {
+    if (!/^[a-f0-9]{40}$/.test(object.sha) || visited.has(object.sha)) {
+      throw new Error(`Invalid annotated tag ${identity.tag}`);
+    }
+    visited.add(object.sha);
+    object = (await api("GET", `/git/tags/${object.sha}`)).object;
+  }
+  if (object.type !== "commit" || object.sha !== identity.commit) {
     throw new Error(`Conflicting tag ${identity.tag}`);
   }
-  const releases = (await list(api, "/releases")).filter(release => release.tag_name === identity.tag);
+  return tag;
+}
+
+async function inspect(api, identity, candidate) {
+  const tag = await inspectTag(api, identity);
+  const releases = (await list(api, "/releases")).filter(release =>
+    release.tag_name === identity.tag || release.name === identity.tag);
   if (releases.length > 1) throw new Error("Conflicting releases for version");
   const release = releases[0];
-  if (!release) return { tag, candidate };
-  if (!tag || release.name !== identity.tag ||
+  if (!release) return { tag };
+  if (!tag || release.name !== identity.tag || release.tag_name !== identity.tag ||
       release.prerelease !== false || typeof release.draft !== "boolean") {
     throw new Error("Conflicting Release identity");
   }
@@ -89,20 +104,28 @@ async function inspect(api, identity, candidate) {
   if ((asset && !uploaded && !starter) || (!release.draft && !uploaded)) {
     throw new Error("Conflicting Release asset digest or state");
   }
-  if (!uploaded && !candidate) throw new Error("Original verified candidate is required to recover this draft");
-  return { tag, release, candidate: recorded, uploaded, starter: starter ? asset : null };
+  return { tag, release, uploaded, starter: starter ? asset : null };
 }
 
-export async function publicationPlan(api, identity, candidate) {
-  const state = await inspect(api, identity, candidate);
+export async function preparePublication(api, identity, directory, runId, download) {
+  const state = await inspect(api, identity);
   if (state.release && !state.release.draft) return "complete";
-  return state.uploaded || candidate ? "publish" : "build";
+  if (state.uploaded) return "publish";
+  const candidate = await recoverCandidate(api, directory, identity, runId, download);
+  if (candidate) {
+    await inspect(api, identity, candidate.manifest);
+    return "publish";
+  }
+  if (state.release) throw new Error("Original verified candidate is required to recover this draft");
+  return "build";
 }
 
-export async function publishRelease(api, identity, candidate, installer) {
-  let state = await inspect(api, identity, candidate);
+export async function publishRelease(api, identity, directory) {
+  let state = await inspect(api, identity);
   if (state.release && !state.release.draft) return;
-  if (!state.uploaded && (!candidate || !installer)) throw new Error("Verified candidate required for publication");
+  if (state.uploaded) return finalizeRelease(api, identity);
+  const { manifest: candidate, bytes } = readCandidate(directory, identity);
+  state = await inspect(api, identity, candidate);
   if (!state.tag) {
     await api("POST", "/git/refs", { ref: `refs/tags/${identity.tag}`, sha: identity.commit });
   }
@@ -116,9 +139,13 @@ export async function publishRelease(api, identity, candidate, installer) {
   if (state.release && !state.release.draft) return;
   if (!state.uploaded) {
     if (state.starter) await api("DELETE", `/releases/assets/${state.starter.id}`);
-    await api("UPLOAD", `/releases/${state.release.id}/assets`, { filename: candidate.filename, installer });
+    await api("UPLOAD", `/releases/${state.release.id}/assets`, { filename: candidate.filename, bytes });
   }
-  state = await inspect(api, identity, candidate);
+  await finalizeRelease(api, identity, candidate);
+}
+
+async function finalizeRelease(api, identity, candidate) {
+  const state = await inspect(api, identity, candidate);
   if (!state.uploaded) throw new Error("Installer upload was not verified");
   if (state.release.draft) {
     await api("PATCH", `/releases/${state.release.id}`, { draft: false });
@@ -143,7 +170,7 @@ function githubApi(repository, token) {
         "X-GitHub-Api-Version": "2022-11-28",
         ...(body ? { "Content-Type": upload ? "application/octet-stream" : "application/json" } : {}),
       },
-      ...(body ? { body: upload ? readFileSync(body.installer) : JSON.stringify(body) } : {}),
+      ...(body ? { body: upload ? body.bytes : JSON.stringify(body) } : {}),
       redirect: "error",
     });
     if (method === "GET" && path.startsWith("/git/ref/tags/") && response.status === 404) return null;
@@ -162,37 +189,40 @@ export async function recoverCandidate(api, directory, identity, runId, download
   return readCandidate(directory, identity);
 }
 
-async function main() {
-  const env = process.env;
-  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+export async function runPublication(command, { env, commit, packageInfo, changelog, api, directory, download }) {
   if (env.GITHUB_EVENT_NAME !== "pull_request" ||
       commit !== env.AUTHORIZED_COMMIT || commit !== env.GITHUB_SHA) {
     throw new Error("Unauthorized release event or checkout");
   }
-  const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], {
-    cwd: root, encoding: "utf8",
-  }));
-  const version = metadata.packages.find(pkg => pkg.name === "windows-app").version;
-  const identity = releaseIdentity(commit, version, readFileSync(join(root, "CHANGELOG.md"), "utf8"));
-  const api = githubApi(env.GITHUB_REPOSITORY, env.GH_TOKEN);
-  const directory = join(root, "target/packaging/windows");
-  if (process.argv[2] === "prepare") {
-    const candidate = await recoverCandidate(api, directory, identity, env.GITHUB_RUN_ID,
-      (runId, name, destination) => execFileSync("gh", [
-        "run", "download", runId, "--repo", env.GITHUB_REPOSITORY, "--name", name, "--dir", destination,
-      ], { stdio: "inherit" }));
-    const plan = await publicationPlan(api, identity, candidate);
+  const identity = releaseIdentity(commit, packageInfo, changelog);
+  if (command === "prepare") {
+    const plan = await preparePublication(api, identity, directory, env.GITHUB_RUN_ID, download);
     appendFileSync(env.GITHUB_OUTPUT, `plan=${plan}\n`);
     console.log(`Release ${identity.tag}: ${plan}`);
-  } else if (process.argv[2] === "publish") {
-    const candidate = existsSync(join(directory, manifestName)) ? readCandidate(directory, identity) : null;
-    await publishRelease(api, identity, candidate, candidate && join(directory, candidate.filename));
+  } else if (command === "publish") {
+    await publishRelease(api, identity, directory);
     console.log(`Release ${identity.tag} published`);
   } else {
     throw new Error("Expected prepare or publish");
   }
 }
 
+async function main() {
+  const env = process.env;
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const packageInfo = JSON.parse(execFileSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-File", join(root, "packaging/windows/production-package-info.ps1"),
+  ], { cwd: root, encoding: "utf8" }));
+  await runPublication(process.argv[2], {
+    env, commit, packageInfo,
+    changelog: readFileSync(join(root, "CHANGELOG.md"), "utf8"),
+    api: githubApi(env.GITHUB_REPOSITORY, env.GH_TOKEN),
+    directory: join(root, "target/packaging/windows"),
+    download: (runId, name, destination) => execFileSync("gh", [
+      "run", "download", runId, "--repo", env.GITHUB_REPOSITORY, "--name", name, "--dir", destination,
+    ], { stdio: "inherit" }),
+  });
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }
