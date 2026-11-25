@@ -1,18 +1,14 @@
 name: Service contracts
 
 on:
-  pull_request:
-  push:
-    branches: [main]
-  schedule:
-    - cron: "17 7 * * 1"
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   regenerate:
-    name: Check generated Service crates
+    name: Service contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

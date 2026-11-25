@@ -114,19 +114,21 @@ function checkDependencies() {
 
 function main(mode) {
   if (mode === "source" || mode === "quality") checkSource();
+  if (mode === "dependencies" || mode === "quality") checkDependencies();
   if (mode === "lint" || mode === "quality") {
-    checkDependencies();
     run("cargo", [
       "clippy", "--locked", ...packages, "--all-targets",
       "--target", windowsTarget, "--no-deps", "--", "-D", "warnings",
     ]);
   }
   if (mode === "build") {
-    run("cargo", ["check", "--locked", "--workspace", "--all-targets", "--target", windowsTarget]);
+    run("cargo", ["build", "--locked", "-p", "windows-app", "--target", windowsTarget]);
+  }
+  if (mode === "release") {
     run("cargo", ["build", "--locked", "-p", "windows-app", "--release", "--target", windowsTarget]);
   }
   if (mode === "service") {
-    run("cargo", ["test", "--locked", "-p", "windows-app", "--lib", "--test", "pairing_confirmation", "--target", windowsTarget]);
+    run("cargo", ["test", "--locked", "-p", "windows-app", "--lib", "--test", "pairing_confirmation", "--test", "lifecycle", "--target", windowsTarget]);
     run("cargo", ["test", "--locked", "-p", "windows-app", "--lib", "--features", "development-transport", "--target", windowsTarget, "service::tests::"]);
   }
   if (mode === "core") {
@@ -138,7 +140,7 @@ function main(mode) {
     run("cargo", ["test", "--locked", "-p", "receiver-core"]);
   }
   if (mode === "advisories") run("cargo", ["deny", "--locked", "check", "advisories"]);
-  if (!["source", "lint", "quality", "build", "service", "core", "advisories"].includes(mode)) {
+  if (!["source", "dependencies", "lint", "quality", "build", "release", "service", "core", "advisories"].includes(mode)) {
     throw new Error(`Unknown quality check: ${mode}`);
   }
 }

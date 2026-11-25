@@ -1,0 +1,139 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { classifyChanges, classifyRange } from "./changes.mjs";
+
+test("documentation and unrelated release automation do not compile Windows", () => {
+  assert.deepEqual(classifyChanges(["docs/guide.md", "docs/examples/Cargo.toml", "code-architecture.md", "packaging/windows/README.md"]), {
+    windows: false, packaging: false, release: false, advisories: false, contracts: false,
+  });
+  for (const path of ["scripts/release/auto-release-pr.mjs", ".github/workflows/auto-release-pr.yml"]) {
+    assert.deepEqual(classifyChanges([path]), {
+      windows: false, packaging: false, release: true, advisories: false, contracts: false,
+    }, path);
+  }
+});
+
+test("application and generated sources require Windows without packaging", () => {
+  for (const path of [
+    "crates/receiver-core/src/lib.rs",
+    "crates/windows-app/src/service/mod.rs",
+    "crates/windows-app/ui/app.slint",
+    "generated/wss-models/src/lib.rs",
+    "generated/http-client/src/lib.rs",
+    "clippy.toml",
+    "rustfmt.toml",
+    "docs/prototypes/ui-tool/data/messages.js",
+  ]) {
+    assert.deepEqual(classifyChanges([path]), {
+      windows: true, packaging: false, release: false, advisories: false, contracts: path.startsWith("generated/"),
+    }, path);
+  }
+});
+
+test("the publication helper also selects its release-proposal consumers", () => {
+  assert.deepEqual(classifyChanges(["packaging/windows/production-publication.mjs"]), {
+    windows: true, packaging: true, release: true, advisories: false, contracts: false,
+  });
+});
+
+test("packaging inputs and shared build configuration require the real installer", () => {
+  for (const path of [
+    "packaging/windows/installer.nsi",
+    "packaging/windows/production-policy.ps1",
+    "crates/windows-app/build.rs",
+    "crates/windows-app/ui/assets/app-icon.ico",
+    "crates/windows-app/ui/assets/app-icon.png",
+    ".github/workflows/development-packaging.yml",
+    ".github/workflows/production-release.yml",
+  ]) {
+    assert.deepEqual(classifyChanges([path]), {
+      windows: true, packaging: true, release: false, advisories: false, contracts: false,
+    }, path);
+  }
+  for (const path of [
+    "Cargo.toml", "Cargo.lock", "crates/receiver-core/Cargo.toml",
+    "crates/windows-app/Cargo.toml", "generated/http-client/Cargo.toml",
+    "rust-toolchain.toml", "rust-toolchain", ".cargo/config.toml",
+  ]) {
+    assert.deepEqual(classifyChanges([path]), {
+      windows: true, packaging: true, release: false, advisories: true,
+      contracts: ["Cargo.lock", "generated/http-client/Cargo.toml"].includes(path),
+    }, path);
+  }
+  for (const path of ["scripts/quality/check.mjs", ".github/workflows/ci.yml", ".github/actions/quality/action.yml"]) {
+    assert.deepEqual(classifyChanges([path]), {
+      windows: true, packaging: true, release: true, advisories: true, contracts: false,
+    }, path);
+  }
+});
+
+test("advisory policy and contract tooling need no Windows compilation", () => {
+  assert.deepEqual(classifyChanges(["deny.toml"]), {
+    windows: false, packaging: false, release: false, advisories: true, contracts: false,
+  });
+  for (const path of ["scripts/contracts/service.lock.json", ".github/workflows/contracts.yml"]) {
+    assert.deepEqual(classifyChanges([path]), {
+      windows: false, packaging: false, release: false, advisories: false, contracts: true,
+    }, path);
+  }
+});
+
+test("selected contract checks survive Format failures but not cancellation or scheduled runs", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = workflow.match(/^  contracts:\r?\n(?:    .*\r?\n)+/m)?.[0];
+  assert.ok(job, "Missing Service contracts job");
+  assert.match(job, /^    if: \$\{\{ !cancelled\(\) && github\.event_name != 'schedule' && needs\.quality\.outputs\.contracts == 'true' \}\}$/m);
+});
+
+test("range classification includes removed files and both ends of renames", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pin-glide-changes-"));
+  const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8" }).trim();
+  const add = (path) => {
+    mkdirSync(join(directory, path, ".."), { recursive: true });
+    writeFileSync(join(directory, path), path);
+  };
+  const commit = (message) => {
+    git("add", "-A");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", message);
+    return git("rev-parse", "HEAD");
+  };
+  try {
+    git("init", "-q");
+    add("docs/guide.md");
+    add("packaging/windows/old installer.nsi");
+    add("crates/receiver-core/src/old.rs");
+    const base = commit("base");
+    renameSync(join(directory, "packaging/windows/old installer.nsi"), join(directory, "docs/renamed.nsi"));
+    const renamed = commit("rename");
+    assert.deepEqual(classifyRange(base, renamed, directory), {
+      windows: true, packaging: true, release: false, advisories: false, contracts: false,
+    });
+    rmSync(join(directory, "crates/receiver-core/src/old.rs"));
+    const deleted = commit("remove core");
+    assert.deepEqual(classifyRange(renamed, deleted, directory), {
+      windows: true, packaging: false, release: false, advisories: false, contracts: false,
+    });
+    mkdirSync(join(directory, "crates/windows-app/ui"), { recursive: true });
+    renameSync(join(directory, "docs/guide.md"), join(directory, "crates/windows-app/ui/new.slint"));
+    const moved = commit("move into app");
+    assert.equal(classifyRange(deleted, moved, directory).windows, true);
+    for (let index = 0; index < 301; index++) add(`docs/extra-${index}.md`);
+    const docs = commit("large docs-only change");
+    assert.equal(classifyRange(moved, docs, directory).contracts, false);
+    add("scripts/contracts/service.lock.json");
+    const contract = commit("contract input after more than 300 paths");
+    assert.equal(classifyRange(moved, contract, directory).contracts, true);
+    renameSync(join(directory, "scripts/contracts/service.lock.json"), join(directory, "docs/old-contract.json"));
+    const archived = commit("archive contract input");
+    assert.equal(classifyRange(contract, archived, directory).contracts, true);
+    assert.deepEqual(classifyRange("missing-base", moved, directory), {
+      windows: true, packaging: true, release: true, advisories: true, contracts: true,
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -23,7 +23,11 @@ const tools = [
 ];
 
 const directory = join(root, "target", "quality-tools");
-for (const tool of tools) {
+const selected = process.argv.slice(2);
+if (selected.some((name) => !tools.some((tool) => tool.executable === `${name}.exe`))) {
+  throw new Error(`Unknown quality tool: ${selected.join(", ")}`);
+}
+for (const tool of tools.filter((tool) => !selected.length || selected.includes(tool.executable.slice(0, -4)))) {
   const destination = join(directory, `${tool.executable}-${tool.tag}`);
   mkdirSync(destination, { recursive: true });
   const url = `https://github.com/${tool.repository}/releases/download/${tool.tag}/${tool.asset}`;
