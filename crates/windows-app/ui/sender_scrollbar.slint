@@ -32,6 +32,7 @@ export component SenderScrollbar inherits Rectangle {
         height: root.thumb-height;
         border-radius: 3px;
         background: #8da99e;
+
         TouchArea {
             property <length> drag-start;
             property <length> start-offset;
@@ -54,6 +55,7 @@ export component SenderScrollbar inherits Rectangle {
     for down in [false, true]: Rectangle {
         y: down ? parent.height - 12px : 0px;
         height: 12px;
+
         Path {
             width: 6px;
             height: 5px;

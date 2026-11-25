@@ -27,17 +27,21 @@ component SettingCard inherits Rectangle {
     content := VerticalLayout {
         padding-left: 14px;
         padding-right: 14px;
+
         HorizontalLayout {
             height: 52px;
             padding-top: 10px;
             padding-bottom: 10px;
             spacing: 8px;
+
             VerticalLayout {
                 horizontal-stretch: 1;
                 min-width: 0px;
                 alignment: center;
+
                 Rectangle {
                     height: caption.preferred-height;
+
                     caption := Text {
                         width: parent.width;
                         text: root.label;
@@ -69,6 +73,7 @@ component SettingCard inherits Rectangle {
 
         if root.error != "" || root.hint != "": VerticalLayout {
             padding-bottom: 10px;
+
             Text {
                 text: root.error != "" ? root.error : root.hint;
                 color: root.error != "" ? #903d34 : #65716e;
@@ -134,9 +139,11 @@ export component SettingsWindow inherits Window {
     VerticalLayout {
         padding: 20px;
         spacing: 12px;
+
         HorizontalLayout {
             height: 32px;
             spacing: 10px;
+
             BackButton {
                 label: root.chinese ? "返回主窗口" : "Back to Main";
                 clicked => { root.back(); }
@@ -155,13 +162,16 @@ export component SettingsWindow inherits Window {
 
         ScrollView {
             vertical-stretch: 1;
+
             VerticalLayout {
                 width: parent.width;
                 alignment: start;
                 spacing: 8px;
+
                 SettingCard {
                     label: root.chinese ? "界面语言" : "Interface language";
                     error: root.language-error;
+
                     ComboBox {
                         width: 128px;
                         model: [root.chinese ? "跟随系统" : "Follow system", "中文", "English"];
@@ -174,6 +184,7 @@ export component SettingsWindow inherits Window {
                 SettingCard {
                     label: root.chinese ? "开机启动" : "Launch at login";
                     error: root.startup-error;
+
                     Switch {
                         width: 40px;
                         checked <=> root.startup;
@@ -193,6 +204,7 @@ export component SettingsWindow inherits Window {
                     hint: root.capturing-shortcut
                         ? (root.chinese ? "按下快捷键组合，Enter 应用，Esc 取消。" : "Press the shortcut, Enter to apply, Esc to cancel.")
                         : "";
+
                     ShortcutField {
                         viewport-width: root.width;
                         value: root.capturing-shortcut ? (root.chinese ? "等待输入…" : "Waiting for input…")
@@ -228,6 +240,7 @@ export component SettingsWindow inherits Window {
                         duration.select-all();
                         duration.clear-selection();
                     }
+
                     Rectangle {
                         width: 56px;
                         height: 32px;
@@ -245,6 +258,7 @@ export component SettingsWindow inherits Window {
                             x: 11px;
                             width: parent.width - 22px;
                             height: parent.height;
+
                             duration := SingleLineInput {
                                 viewport-width: parent.width;
                                 text <=> root.popup-duration;

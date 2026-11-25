@@ -73,6 +73,7 @@ export component SenderNameForm inherits Rectangle {
         SingleLineViewport {
             x: root.compact ? 10px : 11px;
             width: parent.width - 2 * self.x;
+
             ContextMenuArea {
                 Menu {
                     MenuItem {
@@ -222,6 +223,7 @@ component QrLoading inherits Rectangle {
         border-radius: 7px;
         border-width: 2px;
         border-color: #deebe5;
+
         Rectangle {
             border-radius: 7px;
             border-width: 2px;
@@ -234,6 +236,7 @@ component QrLoading inherits Rectangle {
             height: 16px;
             border-radius: 4px;
             background: #e1efe9;
+
             Rectangle {
                 background: #52a68e;
                 border-radius: 4px;
@@ -268,6 +271,7 @@ component QrLoading inherits Rectangle {
         height: 8px;
         border-radius: 2px;
         background: #eaf2ee;
+
         Rectangle {
             border-radius: 2px;
             background: #8ec6b4;
@@ -345,6 +349,7 @@ export component PairingWindow inherits Window {
     VerticalLayout {
         padding: 24px;
         spacing: 16px;
+
         HorizontalLayout {
             height: 32px;
             spacing: 10px;
@@ -366,6 +371,7 @@ export component PairingWindow inherits Window {
 
         HorizontalLayout {
             padding-top: 16px;
+
             Rectangle {
                 horizontal-stretch: 1;
             }
@@ -382,6 +388,7 @@ export component PairingWindow inherits Window {
                     height: 64px;
                     border-radius: 32px;
                     background: #e3f3ec;
+
                     Path {
                         width: 28px;
                         height: 28px;
@@ -400,6 +407,7 @@ export component PairingWindow inherits Window {
                         duration: root.motion-enabled && root.completed ? 180ms : 0ms;
                         easing: linear;
                     }
+
                     QrLoading {
                         width: 160px;
                         height: 160px;
@@ -417,6 +425,7 @@ export component PairingWindow inherits Window {
                     height: 72px;
                     border-radius: 36px;
                     background: #fbede7;
+
                     Text {
                         text: "!";
                         font-size: 32px;
