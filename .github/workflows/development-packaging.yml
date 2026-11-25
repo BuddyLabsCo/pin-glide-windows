@@ -1,0 +1,39 @@
+name: Development packaging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configuration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject repository or organization origin
+        if: ${{ vars.PINGLIDE_SERVICE_URL != '' }}
+        run: |
+          echo 'Define PINGLIDE_SERVICE_URL only in the development Environment.'
+          exit 1
+  package:
+    needs: configuration
+    runs-on: windows-2025
+    environment: development
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --version=3.13 --yes --no-progress --allow-downgrade
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          "${env:ProgramFiles(x86)}\NSIS" >> $env:GITHUB_PATH
+      - name: Build unsigned development installer
+        shell: powershell
+        env:
+          PINGLIDE_SERVICE_URL: ${{ vars.PINGLIDE_SERVICE_URL }}
+        run: .\packaging\windows\build.ps1 -Unsigned -DevelopmentTransport
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pin-Glide-Setup-x64-unsigned
+          path: target/packaging/windows/Pin-Glide-Setup-x64-unsigned.exe
+          if-no-files-found: error

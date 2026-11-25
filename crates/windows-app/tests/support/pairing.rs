@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufReader, Write},
     net::{TcpListener, TcpStream},
     time::Duration,
 };
@@ -19,6 +19,7 @@ use windows_app::service::Service;
 
 mod socket;
 use socket::accept_socket;
+pub use socket::read_request_parts;
 
 #[path = "sender.rs"]
 mod sender;
@@ -90,28 +91,6 @@ pub fn trusted_service(origin: &str) -> Service {
 
 pub fn accept(acceptor: &TlsAcceptor, listener: &TcpListener) -> Connection {
     acceptor.accept(tls::accept_loopback(listener)).unwrap()
-}
-
-pub fn read_request_parts(stream: &mut impl BufRead) -> (String, Vec<String>, Vec<u8>) {
-    let mut request = String::new();
-    stream.read_line(&mut request).unwrap();
-    let mut size = 0;
-    let mut headers = Vec::new();
-    loop {
-        let mut header = String::new();
-        assert_ne!(stream.read_line(&mut header).unwrap(), 0);
-        if header == "\r\n" {
-            break;
-        }
-        let (name, value) = header.split_once(':').unwrap();
-        if name.eq_ignore_ascii_case("content-length") {
-            size = value.trim().parse().unwrap();
-        }
-        headers.push(header);
-    }
-    let mut body = vec![0; size];
-    stream.read_exact(&mut body).unwrap();
-    (request, headers, body)
 }
 
 pub fn assert_bearer(headers: &[String]) {

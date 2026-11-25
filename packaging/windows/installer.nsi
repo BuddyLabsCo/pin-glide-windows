@@ -29,6 +29,7 @@ CRCCheck force
 !define OPEN_EXISTING 3
 !define FILE_DISPOSITION_INFO 4
 !define RRF_RT_REG_SZ 2
+!define RRF_REG_SZ_64KEY_NOEXPAND 0x10010002
 !define KEY_WOW64_64KEY 0x100
 !define MOVEFILE_REPLACE_EXISTING_WRITE_THROUGH 9
 
@@ -41,10 +42,21 @@ Var RunChanged
 Var RollbackFailed
 Var ShortcutCreated
 Var UninstallEntryCreated
+Var PreviousVersion
+Var HadVersion
+Var VersionChanged
 
 Name "${PRODUCT_NAME}"
 OutFile "${OUTPUT}"
 InstallDir "${INSTALL_DIR}"
+VIProductVersion "${FILE_VERSION}"
+VIFileVersion "${FILE_VERSION}"
+VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
+VIAddVersionKey "CompanyName" "BuddyLabsCo"
+VIAddVersionKey "FileDescription" "${PRODUCT_NAME} Setup"
+VIAddVersionKey "LegalCopyright" ""
+VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
+VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
 
 !ifdef SIGNTOOL
     !uninstfinalize '"${SIGNTOOL}" ${SIGN_ARGS} "%1"' = 0
@@ -120,6 +132,7 @@ FunctionEnd
     WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "BuddyLabsCo"
     WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\${UNINSTALL_EXE}"'
+    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
     WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
 !macroend
@@ -168,13 +181,33 @@ Section
         CreateShortCut "${SHORTCUT}" "$INSTDIR\${RECEIVER_EXE}"
         IfErrors failed
     ${EndIf}
-    ClearErrors
-    ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "UninstallString"
-    ClearErrors
-    ${If} $0 == ""
+    IntOp $1 ${NSIS_MAX_STRLEN} * 2
+    System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "UninstallString", i ${RRF_REG_SZ_64KEY_NOEXPAND}, p 0, w .r2, *i r1) i.r0'
+    ${If} $0 == 0
+    ${AndIf} $2 == ""
+        StrCpy $0 ${ERROR_FILE_NOT_FOUND}
+    ${EndIf}
+    ${If} $0 == ${ERROR_FILE_NOT_FOUND}
+    ${OrIf} $0 == ${ERROR_PATH_NOT_FOUND}
         StrCpy $UninstallEntryCreated 1
         !insertmacro RegisterUninstaller
         IfErrors failed
+    ${ElseIf} $0 != 0
+        Goto failed
+    ${Else}
+        IntOp $1 ${NSIS_MAX_STRLEN} * 2
+        System::Call 'advapi32::RegGetValueW(p ${HKCU_HANDLE}, w "${UNINSTALL_KEY}", w "DisplayVersion", i ${RRF_REG_SZ_64KEY_NOEXPAND}, p 0, w .r2, *i r1) i.r0'
+        ${If} $0 == 0
+            StrCpy $PreviousVersion $2
+            StrCpy $HadVersion 1
+        ${ElseIf} $0 != ${ERROR_FILE_NOT_FOUND}
+        ${AndIf} $0 != ${ERROR_PATH_NOT_FOUND}
+            Goto failed
+        ${EndIf}
+        ClearErrors
+        WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
+        IfErrors failed
+        StrCpy $VersionChanged 1
     ${EndIf}
 
     !insertmacro Move "${UNINSTALL_STAGE}" "${UNINSTALL_EXE}"
@@ -187,6 +220,13 @@ Section
 
 failed:
     ClearErrors
+    ${If} $VersionChanged == 1
+        ${If} $HadVersion == 1
+            WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "$PreviousVersion"
+        ${Else}
+            DeleteRegValue HKCU "${UNINSTALL_KEY}" "DisplayVersion"
+        ${EndIf}
+    ${EndIf}
     ${If} $RunChanged == 1
         ${If} $HadRunValue == 1
             WriteRegStr HKCU "${RUN_KEY}" "${PRODUCT_NAME}" "$PreviousRun"

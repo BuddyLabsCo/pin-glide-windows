@@ -149,10 +149,14 @@ With Node, Java, and authenticated GitHub CLI available, run
 crates against a clean regeneration. Use `--write` to update the crates and
 commit them with the workspace lockfile. CI runs the same drift check.
 
-The app owns WSS transport and checks message type and version. Preserve
+The app owns WebSocket transport and checks message type and version. Preserve
 optional wire fields and the required empty-OTP value. The Service adapter
 creates `new_receiver` sessions using the installation's HTTPS origin and
-native certificate and hostname verification.
+native certificate and hostname verification. The explicit compile-time Cargo
+feature `development-transport` additionally permits HTTP origins and WS
+upgrades for development only. HTTPS origins continue to use HTTPS/WSS and
+native verification in both modes. Redirects are disabled in both modes.
+Unsigned packaging does not enable development transport by itself.
 
 ## 6. Tests
 

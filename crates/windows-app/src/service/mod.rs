@@ -19,6 +19,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod delivery;
 mod enrollment;
+mod origin;
 mod pairing_events;
 pub(crate) mod pairing_operation;
 mod pairing_snapshot;
@@ -55,7 +56,7 @@ pub struct PairingSession {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
-    #[error("expected an HTTPS Service origin")]
+    #[error("expected a valid Service origin (HTTPS, or HTTP in a development build)")]
     InvalidOrigin,
     #[error("Service transport failed")]
     Transport(#[from] reqwest::Error),
@@ -89,21 +90,12 @@ impl Service {
     }
 
     fn with_builder(origin: &str, builder: ClientBuilder) -> Result<Self, CreateError> {
-        let origin = Url::parse(origin).map_err(|_| CreateError::InvalidOrigin)?;
-        if origin.scheme() != "https"
-            || !origin.username().is_empty()
-            || origin.password().is_some()
-            || origin.path() != "/"
-            || origin.query().is_some()
-            || origin.fragment().is_some()
-        {
-            return Err(CreateError::InvalidOrigin);
-        }
+        let origin = origin::parse(origin).ok_or(CreateError::InvalidOrigin)?;
 
         Ok(Self {
             config: Configuration {
                 base_path: origin.origin().ascii_serialization(),
-                client: builder.build()?,
+                client: builder.https_only(origin.scheme() == "https").build()?,
                 user_agent: None,
                 basic_auth: None,
                 oauth_access_token: None,
@@ -310,7 +302,6 @@ fn create_error(error: Error<PostPairingSessionsError>) -> CreateError {
 fn client_builder() -> ClientBuilder {
     Client::builder()
         .tls_backend_native()
-        .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(15))
