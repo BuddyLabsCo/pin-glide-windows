@@ -31,6 +31,8 @@ fn accepts_http_only_in_development_builds() {
         "",
         "http://",
         "https://",
+        "http://256.256.256.256",
+        "https://256.256.256.256",
         "ftp://localhost",
         "http://user:password@localhost",
         "http://localhost/path",
@@ -51,9 +53,6 @@ fn accepts_http_only_in_development_builds() {
 #[cfg(feature = "development-transport")]
 #[tokio::test]
 async fn development_origin_supports_http_and_both_websocket_routes() {
-    use futures_util::StreamExt;
-    use tokio_tungstenite::tungstenite::Message;
-
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let service = Service::new(&origin).unwrap();
@@ -64,13 +63,18 @@ async fn development_origin_supports_http_and_both_websocket_routes() {
             .get_mut()
             .write_all(b"HTTP/1.1 307 Temporary Redirect\r\nLocation: /unexpected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .unwrap();
-        for (route, token) in [
-            ("/v1/pairing-sessions/session-1/events", "fixture-pairing-b"),
-            ("/v1/receiver/events", "fixture-receiver-r"),
-        ] {
-            let mut socket = socket::accept_socket(accept_loopback(&listener), route, token);
-            socket.send(Message::Text("fixture".into())).unwrap();
-        }
+        let pairing = socket::accept_socket(
+            accept_loopback(&listener),
+            "/v1/pairing-sessions/session-1/events",
+            "fixture-pairing-b",
+        );
+        drop(pairing);
+        let delivery = socket::accept_socket(
+            accept_loopback(&listener),
+            "/v1/receiver/events",
+            "fixture-receiver-r",
+        );
+        drop(delivery);
     });
     assert!(matches!(
         service.new_receiver().await,
@@ -78,16 +82,24 @@ async fn development_origin_supports_http_and_both_websocket_routes() {
             status: StatusCode::TEMPORARY_REDIRECT
         })
     ));
-    for (route, token) in [
-        ("/v1/pairing-sessions/session-1/events", "fixture-pairing-b"),
-        ("/v1/receiver/events", "fixture-receiver-r"),
-    ] {
-        let mut socket = service.websocket(route, token).await.unwrap();
-        assert_eq!(
-            socket.next().await.unwrap().unwrap(),
-            Message::Text("fixture".into())
-        );
-    }
+    let deadline = time::OffsetDateTime::now_utc() + Duration::from_secs(300);
+    let session = PairingSession {
+        mode: super::pairing_session_view::Mode::NewReceiver,
+        session_id: "session-1".into(),
+        receiver_id: "receiver-1".into(),
+        pairing_id: None,
+        sender_id: None,
+        state: SessionState::AwaitingAuthorization,
+        receiver_confirmed: false,
+        sender_confirmed: false,
+        expires_at: deadline,
+        pairing_token: "fixture-pairing-b".into(),
+        pairing_token_expires_at: deadline,
+    };
+    service.pairing_events(&session).await.unwrap();
+    super::delivery::DeliveryConnection::open(&service, "fixture-receiver-r")
+        .await
+        .unwrap();
     server.join().unwrap();
 }
 
@@ -96,15 +108,13 @@ pub(crate) fn local_service(
     origin: &str,
     trust_fixture_ca: bool,
 ) -> Service {
-    let mut service = Service::new(origin).unwrap();
     let mut client = client_builder()
         .no_proxy()
         .resolve("localhost", listener.local_addr().unwrap());
     if trust_fixture_ca {
         client = client.tls_certs_only([reqwest::Certificate::from_pem(TEST_CA).unwrap()]);
     }
-    service.config.client = client.build().unwrap();
-    service
+    Service::with_builder(origin, client).unwrap()
 }
 
 fn respond(

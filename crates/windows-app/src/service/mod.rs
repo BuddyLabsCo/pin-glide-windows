@@ -19,6 +19,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 mod delivery;
 mod enrollment;
+mod origin;
 mod pairing_events;
 pub(crate) mod pairing_operation;
 mod pairing_snapshot;
@@ -89,17 +90,7 @@ impl Service {
     }
 
     fn with_builder(origin: &str, builder: ClientBuilder) -> Result<Self, CreateError> {
-        let origin = Url::parse(origin).map_err(|_| CreateError::InvalidOrigin)?;
-        if (origin.scheme() != "https"
-            && !(cfg!(feature = "development-transport") && origin.scheme() == "http"))
-            || !origin.username().is_empty()
-            || origin.password().is_some()
-            || origin.path() != "/"
-            || origin.query().is_some()
-            || origin.fragment().is_some()
-        {
-            return Err(CreateError::InvalidOrigin);
-        }
+        let origin = origin::parse(origin).ok_or(CreateError::InvalidOrigin)?;
 
         Ok(Self {
             config: Configuration {
@@ -311,7 +302,6 @@ fn create_error(error: Error<PostPairingSessionsError>) -> CreateError {
 fn client_builder() -> ClientBuilder {
     Client::builder()
         .tls_backend_native()
-        .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(15))

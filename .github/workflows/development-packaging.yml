@@ -7,7 +7,16 @@ permissions:
   contents: read
 
 jobs:
+  configuration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject repository or organization origin
+        if: ${{ vars.PINGLIDE_SERVICE_URL != '' }}
+        run: |
+          echo 'Define PINGLIDE_SERVICE_URL only in the development Environment.'
+          exit 1
   package:
+    needs: configuration
     runs-on: windows-2025
     environment: development
     steps:

@@ -64,6 +64,7 @@ try {
     $features = @()
     if ($DevelopmentTransport) { $features = @('--features', 'development-transport') }
     $env:CARGO_ENCODED_RUSTFLAGS = @('-C', 'target-feature=+crt-static') -join [char]31
+    # The build script also validates the origin with the Receiver's URL parser.
     & cargo build --locked -p windows-app --release --target $architecture --target-dir $target --no-default-features @features
     if ($LASTEXITCODE -ne 0) { throw 'Cargo release build failed.' }
 } finally {

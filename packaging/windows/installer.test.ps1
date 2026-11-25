@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)]
-    [string] $Receiver
+    [string] $Receiver,
+    [string] $Installer = (Join-Path $PSScriptRoot '../../target/packaging/windows/Pin-Glide-Setup-x64-unsigned.exe')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,11 +47,17 @@ function Build-Installer($payload, $output, $version) {
         "/DPRODUCT_VERSION=$version" "/DFILE_VERSION=$version.0" `
         "/DRECEIVER=$payload" "/DOUTPUT=$output" (Join-Path $PSScriptRoot 'installer.nsi')
     Assert ($LASTEXITCODE -eq 0) 'MakeNSIS failed'
+    Assert-InstallerVersion $output $version
+}
+
+function Assert-InstallerVersion($output, $version) {
     $metadata = (Get-Item -LiteralPath $output).VersionInfo
+    $numeric = [version]($version -split '[-+]', 2)[0]
+    $fixed = "$($numeric.Major).$($numeric.Minor).$($numeric.Build).0"
     Assert ($metadata.ProductVersion -eq $version) 'Wrong installer product version'
     Assert ($metadata.FileVersion -eq $version) 'Wrong installer file version'
-    Assert ("$($metadata.FileMajorPart).$($metadata.FileMinorPart).$($metadata.FileBuildPart).$($metadata.FilePrivatePart)" -eq "$version.0") 'Wrong fixed file version'
-    Assert ("$($metadata.ProductMajorPart).$($metadata.ProductMinorPart).$($metadata.ProductBuildPart).$($metadata.ProductPrivatePart)" -eq "$version.0") 'Wrong fixed product version'
+    Assert ("$($metadata.FileMajorPart).$($metadata.FileMinorPart).$($metadata.FileBuildPart).$($metadata.FilePrivatePart)" -eq $fixed) 'Wrong fixed file version'
+    Assert ("$($metadata.ProductMajorPart).$($metadata.ProductMinorPart).$($metadata.ProductBuildPart).$($metadata.ProductPrivatePart)" -eq $fixed) 'Wrong fixed product version'
 }
 
 function Invoke-Installer($executable, $arguments = '/S') {
@@ -87,6 +94,11 @@ function Assert-Data {
 }
 
 try {
+    $metadata = & cargo metadata --locked --no-deps --format-version 1 --manifest-path (Join-Path $PSScriptRoot '../../Cargo.toml')
+    Assert ($LASTEXITCODE -eq 0) 'Cargo metadata failed'
+    $cargoVersion = ($metadata | ConvertFrom-Json).packages | Where-Object { $_.name -eq 'windows-app' } | Select-Object -ExpandProperty version
+    Assert-InstallerVersion $Installer $cargoVersion
+    $artifactHash = (Get-FileHash -LiteralPath $Installer).Hash
     Assert-RejectedOrigin 'http://localhost'
     Assert-RejectedOrigin 'http://localhost' -Unsigned
     Assert-RejectedOrigin 'http://localhost' -DevelopmentTransport -ExpectedError 'Development transport is only available*'
@@ -95,6 +107,8 @@ try {
         'https://localhost/path')) {
         Assert-RejectedOrigin $origin -Unsigned -DevelopmentTransport
     }
+    Assert-RejectedOrigin 'http://256.256.256.256' -Unsigned -DevelopmentTransport -ExpectedError 'Cargo release build failed.'
+    Assert ((Get-FileHash -LiteralPath $Installer).Hash -eq $artifactHash) 'Rejected origin changed the installer'
 
     $first = Join-Path $fixture 'first.exe'
     $second = Join-Path $fixture 'second.exe'
@@ -146,6 +160,19 @@ try {
     New-ItemProperty -LiteralPath $runKey -Name $product -Value $oldRun | Out-Null
     [IO.File]::AppendAllText($uninstaller, 'synthetic previous uninstaller marker')
     $oldUninstallerHash = (Get-FileHash -LiteralPath $uninstaller).Hash
+
+    foreach ($value in 'DisplayVersion', 'UninstallString') {
+        $previous = Get-ItemPropertyValue -LiteralPath $uninstallKey -Name $value
+        New-ItemProperty -LiteralPath $uninstallKey -Name $value -PropertyType DWord -Value 123 -Force | Out-Null
+        Assert ((Invoke-Installer $second) -ne 0) "Upgrade accepted unreadable $value"
+        Assert ((Get-Item -LiteralPath $uninstallKey).GetValueKind($value) -eq 'DWord') "Failed upgrade changed $value type"
+        Assert ((Get-ItemPropertyValue -LiteralPath $uninstallKey -Name $value) -eq 123) "Failed upgrade changed $value"
+        Assert ((Get-FileHash -LiteralPath $binary).Hash -eq $firstHash) 'Unreadable metadata replaced the Receiver'
+        Assert ((Get-FileHash -LiteralPath $uninstaller).Hash -eq $oldUninstallerHash) 'Unreadable metadata replaced the uninstaller'
+        Assert ((Get-ItemPropertyValue -LiteralPath $runKey -Name $product) -eq $oldRun) 'Unreadable metadata changed startup'
+        Assert-Data
+        New-ItemProperty -LiteralPath $uninstallKey -Name $value -PropertyType String -Value $previous -Force | Out-Null
+    }
 
     $runAccess = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
         "$testRegistry\Run", 'ReadWriteSubTree', 'ReadPermissions, ChangePermissions')
