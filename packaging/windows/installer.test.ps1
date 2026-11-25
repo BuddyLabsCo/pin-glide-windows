@@ -26,17 +26,26 @@ function Assert($condition, [string] $message) {
 }
 
 function Assert-RejectedOrigin($origin, [switch] $DevelopmentTransport, [switch] $Unsigned,
-    [string] $ExpectedError = 'Set PINGLIDE_SERVICE_URL*') {
+    [string] $ExpectedError = 'Set PINGLIDE_SERVICE_URL',
+    [string] $ExpectedDiagnostic) {
     $previous = $env:PINGLIDE_SERVICE_URL
+    $previousErrorPreference = $ErrorActionPreference
     try {
         $env:PINGLIDE_SERVICE_URL = $origin
-        try {
-            & (Join-Path $PSScriptRoot 'build.ps1') -Unsigned:$Unsigned -DevelopmentTransport:$DevelopmentTransport
-            throw 'Packaging accepted a forbidden Service origin.'
-        } catch {
-            if ($_.Exception.Message -notlike $ExpectedError) { throw }
+        $arguments = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'build.ps1'))
+        if ($Unsigned) { $arguments += '-Unsigned' }
+        if ($DevelopmentTransport) { $arguments += '-DevelopmentTransport' }
+        $ErrorActionPreference = 'Continue'
+        $output = & powershell.exe @arguments 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorPreference
+        Assert ($exitCode -ne 0) 'Packaging accepted a forbidden Service origin.'
+        Assert ($output.Contains($ExpectedError)) "Unexpected packaging failure: $output"
+        if ($ExpectedDiagnostic) {
+            Assert ($output -match "(?m)^\s*$([regex]::Escape($ExpectedDiagnostic))\s*$") "Missing origin-validation diagnostic: $output"
         }
     } finally {
+        $ErrorActionPreference = $previousErrorPreference
         $env:PINGLIDE_SERVICE_URL = $previous
     }
 }
@@ -98,17 +107,25 @@ try {
     Assert ($LASTEXITCODE -eq 0) 'Cargo metadata failed'
     $cargoVersion = ($metadata | ConvertFrom-Json).packages | Where-Object { $_.name -eq 'windows-app' } | Select-Object -ExpandProperty version
     Assert-InstallerVersion $Installer $cargoVersion
-    $artifactHash = (Get-FileHash -LiteralPath $Installer).Hash
+    $canonicalInstaller = Join-Path $target 'packaging/windows/Pin-Glide-Setup-x64-unsigned.exe'
+    $artifactHash = if (Test-Path -LiteralPath $canonicalInstaller) {
+        (Get-FileHash -LiteralPath $canonicalInstaller).Hash
+    }
     Assert-RejectedOrigin 'http://localhost'
     Assert-RejectedOrigin 'http://localhost' -Unsigned
-    Assert-RejectedOrigin 'http://localhost' -DevelopmentTransport -ExpectedError 'Development transport is only available*'
+    Assert-RejectedOrigin 'http://localhost' -DevelopmentTransport -ExpectedError 'Development transport is only available'
     foreach ($origin in @('', 'ftp://localhost', 'http://user@localhost',
         'http://localhost/path', 'http://localhost?query', 'http://localhost#fragment',
         'https://localhost/path')) {
         Assert-RejectedOrigin $origin -Unsigned -DevelopmentTransport
     }
-    Assert-RejectedOrigin 'http://256.256.256.256' -Unsigned -DevelopmentTransport -ExpectedError 'Cargo release build failed.'
-    Assert ((Get-FileHash -LiteralPath $Installer).Hash -eq $artifactHash) 'Rejected origin changed the installer'
+    Assert-RejectedOrigin 'http://256.256.256.256' -Unsigned -DevelopmentTransport `
+        -ExpectedError 'Cargo release build failed.' `
+        -ExpectedDiagnostic 'Set PINGLIDE_SERVICE_URL to a valid Service origin for this transport mode.'
+    $currentHash = if (Test-Path -LiteralPath $canonicalInstaller) {
+        (Get-FileHash -LiteralPath $canonicalInstaller).Hash
+    }
+    Assert ($currentHash -eq $artifactHash) 'Rejected origin changed the canonical installer'
 
     $first = Join-Path $fixture 'first.exe'
     $second = Join-Path $fixture 'second.exe'
