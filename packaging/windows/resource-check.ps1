@@ -212,7 +212,7 @@ function Assert-BrandResources([string] $path, [string] $kind) {
     [BrandResources]::AssertIcon($path, $icon, $group)
     $english = 'Pin Glide'
     $chinese = [string][char]0x9e4a + [char]0x4fe1
-    $receiverLanguages = @(1..0x03ff) + @(1033, 1028, 2052, 3076, 4100, 5124)
+    $receiverLanguages = @(1..0x03ff) + @(1033, 1028, 2052, 3076, 4100, 5124, 0x7804, 0x7c04)
     if ($kind -eq 'Receiver') {
         $strings = [BrandResources]::StringResources($path, 101)
         foreach ($language in $receiverLanguages) {
