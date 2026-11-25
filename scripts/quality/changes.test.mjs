@@ -7,12 +7,12 @@ import { test } from "node:test";
 import { classifyChanges, classifyRange } from "./changes.mjs";
 
 test("documentation and unrelated release automation do not compile Windows", () => {
-  assert.deepEqual(classifyChanges(["docs/guide.md", "docs/examples/Cargo.toml", "code-architecture.md"]), {
-    windows: false, packaging: false, release: false, advisories: false,
+  assert.deepEqual(classifyChanges(["docs/guide.md", "docs/examples/Cargo.toml", "code-architecture.md", "packaging/windows/README.md"]), {
+    windows: false, packaging: false, release: false, advisories: false, contracts: false,
   });
   for (const path of ["scripts/release/auto-release-pr.mjs", ".github/workflows/auto-release-pr.yml"]) {
     assert.deepEqual(classifyChanges([path]), {
-      windows: false, packaging: false, release: true, advisories: false,
+      windows: false, packaging: false, release: true, advisories: false, contracts: false,
     }, path);
   }
 });
@@ -26,11 +26,18 @@ test("application and generated sources require Windows without packaging", () =
     "generated/http-client/src/lib.rs",
     "clippy.toml",
     "rustfmt.toml",
+    "docs/prototypes/ui-tool/data/messages.js",
   ]) {
     assert.deepEqual(classifyChanges([path]), {
-      windows: true, packaging: false, release: false, advisories: false,
+      windows: true, packaging: false, release: false, advisories: false, contracts: path.startsWith("generated/"),
     }, path);
   }
+});
+
+test("the publication helper also selects its release-proposal consumers", () => {
+  assert.deepEqual(classifyChanges(["packaging/windows/production-publication.mjs"]), {
+    windows: true, packaging: true, release: true, advisories: false, contracts: false,
+  });
 });
 
 test("packaging inputs and shared build configuration require the real installer", () => {
@@ -44,7 +51,7 @@ test("packaging inputs and shared build configuration require the real installer
     ".github/workflows/production-release.yml",
   ]) {
     assert.deepEqual(classifyChanges([path]), {
-      windows: true, packaging: true, release: false, advisories: false,
+      windows: true, packaging: true, release: false, advisories: false, contracts: false,
     }, path);
   }
   for (const path of [
@@ -54,22 +61,23 @@ test("packaging inputs and shared build configuration require the real installer
   ]) {
     assert.deepEqual(classifyChanges([path]), {
       windows: true, packaging: true, release: false, advisories: true,
+      contracts: ["Cargo.lock", "generated/http-client/Cargo.toml"].includes(path),
     }, path);
   }
   for (const path of ["scripts/quality/check.mjs", ".github/workflows/ci.yml", ".github/actions/quality/action.yml"]) {
     assert.deepEqual(classifyChanges([path]), {
-      windows: true, packaging: true, release: true, advisories: true,
+      windows: true, packaging: true, release: true, advisories: true, contracts: false,
     }, path);
   }
 });
 
 test("advisory policy and contract tooling need no Windows compilation", () => {
   assert.deepEqual(classifyChanges(["deny.toml"]), {
-    windows: false, packaging: false, release: false, advisories: true,
+    windows: false, packaging: false, release: false, advisories: true, contracts: false,
   });
   for (const path of ["scripts/contracts/service.lock.json", ".github/workflows/contracts.yml"]) {
     assert.deepEqual(classifyChanges([path]), {
-      windows: false, packaging: false, release: false, advisories: false,
+      windows: false, packaging: false, release: false, advisories: false, contracts: true,
     }, path);
   }
 });
@@ -95,19 +103,28 @@ test("range classification includes removed files and both ends of renames", () 
     renameSync(join(directory, "packaging/windows/old installer.nsi"), join(directory, "docs/renamed.nsi"));
     const renamed = commit("rename");
     assert.deepEqual(classifyRange(base, renamed, directory), {
-      windows: true, packaging: true, release: false, advisories: false,
+      windows: true, packaging: true, release: false, advisories: false, contracts: false,
     });
     rmSync(join(directory, "crates/receiver-core/src/old.rs"));
     const deleted = commit("remove core");
     assert.deepEqual(classifyRange(renamed, deleted, directory), {
-      windows: true, packaging: false, release: false, advisories: false,
+      windows: true, packaging: false, release: false, advisories: false, contracts: false,
     });
     mkdirSync(join(directory, "crates/windows-app/ui"), { recursive: true });
     renameSync(join(directory, "docs/guide.md"), join(directory, "crates/windows-app/ui/new.slint"));
     const moved = commit("move into app");
     assert.equal(classifyRange(deleted, moved, directory).windows, true);
+    for (let index = 0; index < 301; index++) add(`docs/extra-${index}.md`);
+    const docs = commit("large docs-only change");
+    assert.equal(classifyRange(moved, docs, directory).contracts, false);
+    add("scripts/contracts/service.lock.json");
+    const contract = commit("contract input after more than 300 paths");
+    assert.equal(classifyRange(moved, contract, directory).contracts, true);
+    renameSync(join(directory, "scripts/contracts/service.lock.json"), join(directory, "docs/old-contract.json"));
+    const archived = commit("archive contract input");
+    assert.equal(classifyRange(contract, archived, directory).contracts, true);
     assert.deepEqual(classifyRange("missing-base", moved, directory), {
-      windows: true, packaging: true, release: true, advisories: true,
+      windows: true, packaging: true, release: true, advisories: true, contracts: true,
     });
   } finally {
     rmSync(directory, { recursive: true, force: true });

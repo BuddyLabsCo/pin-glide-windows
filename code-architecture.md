@@ -200,15 +200,17 @@ The Slint build treats compiler warnings as errors in CI.
 
 | Event or changed paths | Format | Portable core | Windows | Service contracts |
 | --- | --- | --- | --- | --- |
-| Documentation or unrelated files | Yes | Yes | Skip | Skip |
+| Documentation or unrelated files (including packaging Markdown) | Yes | Yes | Skip | Skip |
 | `scripts/release/`, auto-release workflow | + release tests | Yes | Skip | Skip |
 | Receiver crates and Slint sources, generated crates, Clippy/Rustfmt config | Yes | Yes | Debug lint, link, tests | Generated crates only |
+| `docs/prototypes/ui-tool/data/messages.js` (compile-time SMS test fixture) | Yes | Yes | Debug lint, link, tests | Skip |
 | Packaging, `windows-app/build.rs`, UI assets, development/production packaging workflows | Yes | Yes | + installer, policy and publication tests | Skip |
+| `packaging/windows/production-publication.mjs` | + release tests | Yes | + installer, policy and publication tests | Skip |
 | Cargo manifests, lockfile, toolchain, `.cargo/` config | + advisories | Yes | + installer, policy and publication tests | Lockfile or generated manifests only |
 | Quality scripts, CI workflow, shared local actions | + release tests and advisories | Yes | + installer, policy and publication tests | Skip |
 | `deny.toml` | + advisories | Yes | Skip | Skip |
 | Contract scripts or contracts workflow | Yes | Yes | Skip | Yes |
-| Push to main | + release tests and advisories | Yes | Full baseline; installer when applicable | Same path filter as PRs |
+| Push to main | + release tests and advisories | Yes | Full baseline; installer when applicable | Same classification as PRs |
 | Weekly advisory schedule | Advisories only | Skip | Skip | Skip |
 
 Format runs the source and dependency gates, quality script tests, and
@@ -216,9 +218,15 @@ Windows version check on every PR and main push. It compares the PR's base
 with the checked-out merge commit, or the previous main revision with the
 new revision. The NUL-delimited Git diff disables rename detection so both
 paths participate in classification, including removed files. An unavailable
-comparison opts into all checks. Service contracts uses GitHub's native path
-filter on `scripts/contracts/**`, `generated/**`, `Cargo.lock`, and its
-workflow, subject to GitHub's changed-file filter limits.
+comparison opts into all checks. The SMS prototype message fixture is an
+explicit exception to the documentation-only rule because Receiver tests
+include its contents at compile time. Packaging Markdown has no build
+consumers. The production publication helper supplies `releaseIdentity`
+to the release-proposal tests, so its changes select both test groups.
+Service contracts uses the same complete Git comparison on
+`scripts/contracts/**`, `generated/**`, `Cargo.lock`, and its workflow.
+CI calls the reusable contracts workflow only when selected, avoiding
+GitHub's native changed-file filter limit.
 
 Windows runs Clippy, Debug linking, default and development-transport tests
 on one runner and in a single Cargo target directory. Main also links
