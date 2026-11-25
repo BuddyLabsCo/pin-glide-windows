@@ -3,6 +3,7 @@ mod instance;
 pub(crate) mod launch_at_login;
 mod popup;
 mod session;
+mod shell_metadata;
 pub(crate) mod shortcut;
 mod tray;
 
@@ -14,6 +15,7 @@ pub(crate) use popup::{
     position_popup, prepare_popup, prepare_popup_exit,
 };
 pub(crate) use session::popup_epoch;
+pub(crate) use shell_metadata::configure_taskbar;
 pub use tray::Tray;
 pub(crate) use tray::{capture_shortcut, replace_shortcut};
 pub(crate) use tray::{delivery_status, refresh_tooltip, set_delivery_status};

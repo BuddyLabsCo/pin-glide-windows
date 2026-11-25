@@ -6548,6 +6548,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "base64",
+ "find-msvc-tools",
  "futures-util",
  "getrandom 0.4.3",
  "hpke",

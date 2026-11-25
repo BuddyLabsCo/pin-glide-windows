@@ -29,6 +29,12 @@ jobs:
         env:
           PINGLIDE_SERVICE_URL: ${{ vars.PINGLIDE_SERVICE_URL }}
         run: .\packaging\windows\build.ps1 -Unsigned -DevelopmentTransport
+      - name: Verify isolated installer lifecycle
+        shell: powershell
+        run: |
+          .\packaging\windows\installer.test.ps1 `
+            -Receiver .\target\x86_64-pc-windows-msvc\release\windows-app.exe `
+            -Installer .\target\packaging\windows\Pin-Glide-Setup-x64-unsigned.exe
       - uses: actions/upload-artifact@v4
         with:
           name: Pin-Glide-Setup-x64-unsigned
